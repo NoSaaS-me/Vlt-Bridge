@@ -1,0 +1,581 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "MCP Tools for Obsidian-Like Docs Viewer",
+  "description": "FastMCP tool definitions for multi-tenant documentation viewer with JSON Schema validation (Pydantic)",
+  "tools": [
+    {
+      "name": "list_notes",
+      "title": "List Notes",
+      "description": "List all notes in the authenticated user's vault with optional folder filtering. Returns lightweight summaries with path, title, and last modified timestamp.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Optional folder path to filter notes (e.g., 'api' or 'guides/tutorials'). If omitted, returns all notes in the vault.",
+            "maxLength": 256,
+            "examples": ["api", "guides/tutorials", ""]
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "array",
+        "description": "Array of note summaries, sorted by most recently updated first",
+        "items": {
+          "type": "object",
+          "required": ["path", "title", "last_modified"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path to vault root (includes .md extension)",
+              "examples": ["api/design.md", "README.md"]
+            },
+            "title": {
+              "type": "string",
+              "description": "Display title (from frontmatter, H1, or filename)",
+              "examples": ["API Design", "README"]
+            },
+            "last_modified": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Last modification timestamp (ISO 8601)",
+              "examples": ["2025-01-15T14:30:00Z"]
+            }
+          }
+        },
+        "examples": [
+          [
+            {
+              "path": "api/design.md",
+              "title": "API Design",
+              "last_modified": "2025-01-15T14:30:00Z"
+            },
+            {
+              "path": "api/endpoints.md",
+              "title": "API Endpoints",
+              "last_modified": "2025-01-14T09:15:00Z"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "read_note",
+      "title": "Read Note",
+      "description": "Retrieve full note content including metadata (frontmatter), body (markdown), and system-managed fields (version, timestamps). Use this to access existing documentation.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Relative path to vault root (includes .md extension, e.g., 'api/design.md')",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^/].*\\.md$",
+            "examples": ["api/design.md", "README.md", "guides/setup.md"]
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["path", "title", "metadata", "body"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Note path (echo of input)",
+            "examples": ["api/design.md"]
+          },
+          "title": {
+            "type": "string",
+            "description": "Display title",
+            "examples": ["API Design"]
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Frontmatter key-value pairs (arbitrary structure)",
+            "properties": {
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "project": {
+                "type": "string"
+              },
+              "created": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "additionalProperties": true,
+            "examples": [
+              {
+                "tags": ["backend", "api"],
+                "project": "auth-service"
+              }
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown content (excluding frontmatter YAML)",
+            "examples": ["# API Design\n\nThis document describes the API architecture...\n\n## Endpoints\n\nSee [[Endpoints]] for details."]
+          }
+        },
+        "examples": [
+          {
+            "path": "api/design.md",
+            "title": "API Design",
+            "metadata": {
+              "tags": ["backend", "api"],
+              "project": "auth-service"
+            },
+            "body": "# API Design\n\nThis document describes the API architecture..."
+          }
+        ]
+      }
+    },
+    {
+      "name": "write_note",
+      "title": "Write Note",
+      "description": "Create a new note or update an existing note. Automatically manages version, created/updated timestamps, and index updates. Uses last-write-wins strategy (no version conflict detection for MCP writes).",
+      "inputSchema": {
+        "type": "object",
+        "required": ["path", "body"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Relative path to vault root (includes .md extension). Must not contain '..', use Unix separators (/), and be relative (no leading /).",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^/].*\\.md$",
+            "examples": ["api/design.md", "README.md", "guides/new-feature.md"]
+          },
+          "title": {
+            "type": "string",
+            "description": "Optional title override (if omitted, will be extracted from frontmatter or first H1 heading in body)",
+            "examples": ["API Design", "New Feature Guide"]
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Optional frontmatter metadata (arbitrary key-value pairs). Common fields: tags (array), project (string), etc.",
+            "properties": {
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Tag names for categorization"
+              },
+              "project": {
+                "type": "string",
+                "description": "Project identifier"
+              }
+            },
+            "additionalProperties": true,
+            "examples": [
+              {
+                "tags": ["backend", "api"],
+                "project": "auth-service"
+              }
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown content (max 1 MiB UTF-8). Can contain wikilinks using [[link text]] syntax.",
+            "maxLength": 1048576,
+            "examples": ["# API Design\n\nThis document describes the API architecture...\n\n## Related\n\nSee [[Endpoints]] for endpoint details."]
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["status", "path"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["ok"],
+            "description": "Operation status"
+          },
+          "path": {
+            "type": "string",
+            "description": "Path of the created/updated note",
+            "examples": ["api/design.md"]
+          }
+        },
+        "examples": [
+          {
+            "status": "ok",
+            "path": "api/design.md"
+          }
+        ]
+      }
+    },
+    {
+      "name": "delete_note",
+      "title": "Delete Note",
+      "description": "Permanently delete a note from the vault and remove it from all indices (full-text, tags, links). Any wikilinks referencing this note will become unresolved.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Relative path to vault root (includes .md extension)",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^/].*\\.md$",
+            "examples": ["api/design.md", "obsolete/old-doc.md"]
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["ok"],
+            "description": "Operation status"
+          }
+        },
+        "examples": [
+          {
+            "status": "ok"
+          }
+        ]
+      }
+    },
+    {
+      "name": "search_notes",
+      "title": "Search Notes",
+      "description": "Full-text search across all notes in the user's vault. Results are ranked using: (3 * title_matches) + (1 * body_matches) + recency_bonus. Returns snippets with highlighted matches.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search query (tokenized, case-insensitive). Supports simple keyword search with automatic stemming (e.g., 'running' matches 'run').",
+            "minLength": 1,
+            "maxLength": 256,
+            "examples": ["authentication", "API design", "database schema"]
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "array",
+        "description": "Search results sorted by relevance score (descending). Limited to top 50 results.",
+        "maxItems": 50,
+        "items": {
+          "type": "object",
+          "required": ["path", "title", "snippet"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Note path",
+              "examples": ["api/auth.md"]
+            },
+            "title": {
+              "type": "string",
+              "description": "Note title",
+              "examples": ["Authentication Flow"]
+            },
+            "snippet": {
+              "type": "string",
+              "description": "Highlighted excerpt from body (max ~200 chars, with <mark> tags around matches)",
+              "examples": ["...describes the <mark>authentication</mark> process using JWT tokens..."]
+            }
+          }
+        },
+        "examples": [
+          [
+            {
+              "path": "api/auth.md",
+              "title": "Authentication Flow",
+              "snippet": "...describes the <mark>authentication</mark> process using JWT tokens..."
+            },
+            {
+              "path": "guides/setup.md",
+              "title": "Setup Guide",
+              "snippet": "...configure <mark>authentication</mark> settings in the config file..."
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "get_backlinks",
+      "title": "Get Backlinks",
+      "description": "Get all notes that reference the specified note via wikilinks (e.g., [[Note Name]]). Useful for discovering related documentation and navigation.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Relative path to vault root (includes .md extension)",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^/].*\\.md$",
+            "examples": ["api/design.md", "README.md"]
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "array",
+        "description": "Array of notes that link to the target note, sorted by most recently updated first",
+        "items": {
+          "type": "object",
+          "required": ["path", "title"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Path of the linking note",
+              "examples": ["guides/architecture.md"]
+            },
+            "title": {
+              "type": "string",
+              "description": "Title of the linking note",
+              "examples": ["Architecture Overview"]
+            }
+          }
+        },
+        "examples": [
+          [
+            {
+              "path": "guides/architecture.md",
+              "title": "Architecture Overview"
+            },
+            {
+              "path": "api/endpoints.md",
+              "title": "API Endpoints"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "get_tags",
+      "title": "Get Tags",
+      "description": "List all tags used across the user's vault with note counts. Tags are extracted from frontmatter 'tags' field and normalized (lowercase).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "array",
+        "description": "Array of tags sorted by count (descending)",
+        "items": {
+          "type": "object",
+          "required": ["tag", "count"],
+          "properties": {
+            "tag": {
+              "type": "string",
+              "description": "Tag name (lowercase, normalized)",
+              "examples": ["backend", "api", "frontend"]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of notes with this tag",
+              "examples": [15, 12, 8]
+            }
+          }
+        },
+        "examples": [
+          [
+            {
+              "tag": "backend",
+              "count": 15
+            },
+            {
+              "tag": "api",
+              "count": 12
+            },
+            {
+              "tag": "frontend",
+              "count": 8
+            }
+          ]
+        ]
+      }
+    }
+  ],
+  "authentication": {
+    "type": "bearer",
+    "description": "MCP HTTP transport requires Bearer JWT token via 'auth' parameter. STDIO transport (local mode) does not require authentication.",
+    "tokenSource": "POST /api/tokens",
+    "tokenExpiration": "90 days"
+  },
+  "errors": {
+    "description": "All MCP tools follow FastMCP error handling conventions. Common error scenarios:",
+    "errorCodes": [
+      {
+        "code": "AUTHENTICATION_REQUIRED",
+        "description": "Missing or invalid JWT token (HTTP transport only)",
+        "httpStatus": 401
+      },
+      {
+        "code": "PERMISSION_DENIED",
+        "description": "Vault note limit exceeded (5,000 notes) or path traversal attempt",
+        "httpStatus": 403
+      },
+      {
+        "code": "NOT_FOUND",
+        "description": "Note path does not exist in vault",
+        "httpStatus": 404
+      },
+      {
+        "code": "VALIDATION_ERROR",
+        "description": "Invalid input parameters (e.g., path format, content size)",
+        "httpStatus": 400,
+        "details": {
+          "invalidPath": "Path must end with .md, not contain '..' or '\\', and be relative",
+          "payloadTooLarge": "Note body exceeds 1 MiB UTF-8 text limit",
+          "emptyQuery": "Search query must be at least 1 character"
+        }
+      },
+      {
+        "code": "INTERNAL_ERROR",
+        "description": "Unexpected server error (filesystem, database, etc.)",
+        "httpStatus": 500
+      }
+    ]
+  },
+  "examples": {
+    "description": "Common usage patterns for AI agents via MCP",
+    "scenarios": [
+      {
+        "name": "Create documentation structure",
+        "description": "AI agent creates initial project documentation with organized folders",
+        "steps": [
+          {
+            "tool": "write_note",
+            "input": {
+              "path": "README.md",
+              "title": "Project Overview",
+              "metadata": {
+                "tags": ["overview", "documentation"]
+              },
+              "body": "# Project Overview\n\nWelcome to the project.\n\n## Structure\n\n- [[API Documentation]] - API design and endpoints\n- [[Guides]] - User guides and tutorials"
+            }
+          },
+          {
+            "tool": "write_note",
+            "input": {
+              "path": "api/README.md",
+              "title": "API Documentation",
+              "metadata": {
+                "tags": ["api", "backend"]
+              },
+              "body": "# API Documentation\n\nSee:\n- [[Authentication]] for auth flows\n- [[Endpoints]] for endpoint specs"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Update documentation with search",
+        "description": "AI agent searches for existing docs before updating",
+        "steps": [
+          {
+            "tool": "search_notes",
+            "input": {
+              "query": "authentication"
+            },
+            "output": [
+              {
+                "path": "api/auth.md",
+                "title": "Authentication Flow",
+                "snippet": "...JWT token-based authentication..."
+              }
+            ]
+          },
+          {
+            "tool": "read_note",
+            "input": {
+              "path": "api/auth.md"
+            }
+          },
+          {
+            "tool": "write_note",
+            "input": {
+              "path": "api/auth.md",
+              "body": "# Authentication Flow\n\n[Updated content with new OAuth section...]"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Discover related documentation",
+        "description": "AI agent uses backlinks to find related docs",
+        "steps": [
+          {
+            "tool": "get_backlinks",
+            "input": {
+              "path": "api/design.md"
+            },
+            "output": [
+              {
+                "path": "guides/architecture.md",
+                "title": "Architecture Overview"
+              },
+              {
+                "path": "api/endpoints.md",
+                "title": "API Endpoints"
+              }
+            ]
+          },
+          {
+            "tool": "read_note",
+            "input": {
+              "path": "guides/architecture.md"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "validation": {
+    "description": "Input validation rules enforced by FastMCP/Pydantic",
+    "rules": {
+      "notePath": {
+        "pattern": "^[^/].*\\.md$",
+        "minLength": 1,
+        "maxLength": 256,
+        "mustNotContain": ["..", "\\"],
+        "mustEndWith": ".md",
+        "invalidChars": ["<", ">", ":", "\"", "|", "?", "*"]
+      },
+      "noteBody": {
+        "maxLength": 1048576,
+        "encoding": "UTF-8"
+      },
+      "searchQuery": {
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "folder": {
+        "maxLength": 256,
+        "optional": true
+      },
+      "metadata": {
+        "type": "object",
+        "reservedFields": ["version"],
+        "tagsFormat": "array of strings"
+      }
+    }
+  }
+}

@@ -186,4 +186,60 @@ README.md                # Setup instructions, MCP client config examples
 
 ---
 
-**Plan Status**: Phase 0 and Phase 1 execution in progress below...
+## Execution Summary
+
+### Phase 0: Research & Technical Decisions ✅ COMPLETE
+
+**Generated**: `research.md` (1,407 lines)
+
+**Researched and Resolved**:
+1. ✅ FastMCP HTTP transport authentication patterns → Bearer token with `BearerAuth`, JWT validation
+2. ✅ Hugging Face Space OAuth integration → `attach_huggingface_oauth` + `parse_huggingface_oauth` helpers
+3. ✅ SQLite schema design → FTS5 contentless + separate tags/links tables with per-user isolation
+4. ✅ Wikilink normalization → Case-insensitive normalized slug matching, same-folder preference
+5. ✅ React + shadcn/ui directory tree → shadcn-extension Tree View with TanStack Virtual virtualization
+6. ✅ Optimistic concurrency → Version counter in SQLite + `if_version` parameter, 409 on mismatch
+7. ✅ Markdown frontmatter parsing → `python-frontmatter` with try-except fallback for malformed YAML
+8. ✅ JWT token management → Memory storage (MVP) or memory + HttpOnly cookie (production)
+
+**Key Decisions**:
+- FTS5 with porter tokenizer and `prefix='2 3'` for autocomplete
+- shadcn-extension tree handles 5,000+ notes with <200ms render
+- Version counter is simpler and faster than content hashing
+- Hybrid JWT approach (memory + HttpOnly) is 2025 security best practice
+
+### Phase 1: Data Model & Contracts ✅ COMPLETE
+
+**Generated**:
+- `data-model.md` - Complete entity definitions, Pydantic models, TypeScript types, SQLite schema, validation rules, state transitions
+- `contracts/http-api.yaml` - OpenAPI 3.1 spec with 11 endpoints, auth, all error responses, examples
+- `contracts/mcp-tools.json` - 7 MCP tool schemas with JSON Schema validation, usage examples
+- `quickstart.md` - Complete setup, run, test, deploy guide for local PoC and HF Space
+
+**Data Model Highlights**:
+- 7 core entities (User, Vault, Note, Wikilink, Tag, Index, Token)
+- Complete Pydantic models with validators
+- TypeScript types for frontend
+- SQLite DDL with 5 tables (metadata, FTS, tags, links, health)
+- State machines for note lifecycle and index updates
+
+**API Contract Highlights**:
+- HTTP API: 11 endpoints (auth, CRUD, search, navigation, index)
+- MCP Tools: 7 tools (list, read, write, delete, search, backlinks, tags)
+- All error codes documented (400, 401, 403, 409, 413, 500)
+- Request/response examples for all operations
+
+**Agent Context Updated**:
+- ✅ Updated `/home/wolfe/Projects/Document-MCP/CLAUDE.md` with Python 3.11+, FastAPI, FastMCP, SQLite tech stack
+
+### Constitution Re-Check ✅ N/A
+
+**Status**: No project constitution exists. Design decisions documented in research.md can form future constitution baseline.
+
+---
+
+## Next Steps
+
+Run `/speckit.tasks` to generate dependency-ordered implementation tasks based on this plan, data model, and contracts.
+
+**Planning Phase Complete**: 2025-11-15
