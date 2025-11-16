@@ -12,7 +12,14 @@ from ..services import IndexerService, VaultNote, VaultService
 
 mcp = FastMCP(
     "obsidian-docs-viewer",
-    instructions="Interact with a multi-tenant Obsidian-like documentation vault.",
+    instructions=(
+        "Multi-tenant vault tools. STDIO uses user_id 'local-dev'; HTTP mode must validate each "
+        "request with JWT.sub. Note paths must be relative '.md' ≤256 chars without '..' or '\\'. "
+        "Frontmatter is YAML: tags are string arrays and 'version' is reserved. Notes must be ≤1 MiB; "
+        "writes refresh created/updated timestamps and synchronously update the search index; deletes "
+        "clear index rows and backlinks. Wikilinks use [[...]] slug matching (prefer same folder, else "
+        "lexicographic). Search ranking = bm25(title*3, body*1) + recency bonus (+1 ≤7d, +0.5 ≤30d)."
+    ),
 )
 
 vault_service = VaultService()
@@ -37,7 +44,7 @@ def _note_to_response(note: VaultNote) -> Dict[str, Any]:
 def list_notes(
     folder: Optional[str] = Field(
         default=None,
-        description="Optional folder path (relative) to filter results. Example: 'api'.",
+        description="Optional relative folder (trim '/' ; no '..' or '\\').",
     ),
 ) -> List[Dict[str, Any]]:
     user_id = _current_user_id()
@@ -54,7 +61,7 @@ def list_notes(
 
 @mcp.tool(name="read_note", description="Read a Markdown note with metadata and body.")
 def read_note(
-    path: str = Field(..., description="Relative path to the note (must include .md)"),
+    path: str = Field(..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."),
 ) -> Dict[str, Any]:
     user_id = _current_user_id()
     note = vault_service.read_note(user_id, path)
@@ -66,15 +73,15 @@ def read_note(
     description="Create or update a note. Automatically updates frontmatter timestamps and search index.",
 )
 def write_note(
-    path: str = Field(..., description="Relative note path (includes .md)"),
-    body: str = Field(..., description="Markdown body content"),
+    path: str = Field(..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."),
+    body: str = Field(..., description="Markdown body ≤1 MiB."),
     title: Optional[str] = Field(
         default=None,
-        description="Optional title override. Defaults to frontmatter title or first heading.",
+        description="Optional title override; otherwise frontmatter/H1/filename is used.",
     ),
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Optional frontmatter metadata dictionary (tags, project, etc.).",
+        description="Optional frontmatter dict (tags arrays of strings; 'version' reserved).",
     ),
 ) -> Dict[str, Any]:
     user_id = _current_user_id()
@@ -91,7 +98,7 @@ def write_note(
 
 @mcp.tool(name="delete_note", description="Delete a note and remove it from the index.")
 def delete_note(
-    path: str = Field(..., description="Relative note path (includes .md)"),
+    path: str = Field(..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."),
 ) -> Dict[str, str]:
     user_id = _current_user_id()
     vault_service.delete_note(user_id, path)
@@ -104,8 +111,8 @@ def delete_note(
     description="Full-text search with snippets and recency-aware scoring.",
 )
 def search_notes(
-    query: str = Field(..., description="Search query (minimum 1 character)"),
-    limit: int = Field(50, ge=1, le=100, description="Maximum number of results to return."),
+    query: str = Field(..., description="Non-empty search query (bm25 + recency)."),
+    limit: int = Field(50, ge=1, le=100, description="Result cap between 1 and 100."),
 ) -> List[Dict[str, Any]]:
     user_id = _current_user_id()
     results = indexer_service.search_notes(user_id, query, limit=limit)
@@ -121,7 +128,7 @@ def search_notes(
 
 @mcp.tool(name="get_backlinks", description="List notes that reference the target note.")
 def get_backlinks(
-    path: str = Field(..., description="Target note path (includes .md)"),
+    path: str = Field(..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."),
 ) -> List[Dict[str, Any]]:
     user_id = _current_user_id()
     backlinks = indexer_service.get_backlinks(user_id, path)

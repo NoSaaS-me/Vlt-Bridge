@@ -18,35 +18,40 @@ The MVP delivers immediate value:
 - User Story 4: Multi-tenant HF OAuth for production deployment
 - User Story 5: Advanced search ranking and index health monitoring
 
+**Progress Update (2025-11-16)**:
+- Phase 1 setup complete except T017 (create `data/vaults/`) and T021 (`.env.example`); T024 remains as an outstanding run-step (schema init script prepared but not executed).
+- Phase 2 foundational backend/models/types complete.
+- Phase 3 MCP backend + prompt tightening complete; see `backend/src/mcp/server.py` for the updated tool contracts.
+
 ---
 
 ## Phase 1: Setup
 
 **Goal**: Initialize project structure, dependencies, and database schema.
 
-- [ ] [T001] Create project directory structure at /home/wolfe/Projects/Document-MCP
-- [ ] [T002] [P] Create backend/src/models/ directory and __init__.py
-- [ ] [T003] [P] Create backend/src/services/ directory and __init__.py
-- [ ] [T004] [P] Create backend/src/api/routes/ directory and __init__.py
-- [ ] [T005] [P] Create backend/src/api/middleware/ directory and __init__.py
-- [ ] [T006] [P] Create backend/src/mcp/ directory and __init__.py
-- [ ] [T007] [P] Create backend/tests/unit/ directory and __init__.py
-- [ ] [T008] [P] Create backend/tests/integration/ directory and __init__.py
-- [ ] [T009] [P] Create backend/tests/contract/ directory and __init__.py
-- [ ] [T010] [P] Create frontend/src/components/ui/ directory
-- [ ] [T011] [P] Create frontend/src/pages/ directory
-- [ ] [T012] [P] Create frontend/src/services/ directory
-- [ ] [T013] [P] Create frontend/src/lib/ directory
-- [ ] [T014] [P] Create frontend/src/types/ directory
-- [ ] [T015] [P] Create frontend/tests/unit/ directory
-- [ ] [T016] [P] Create frontend/tests/e2e/ directory
+- [x] [T001] Create project directory structure at /home/wolfe/Projects/Document-MCP
+- [x] [T002] [P] Create backend/src/models/ directory and __init__.py
+- [x] [T003] [P] Create backend/src/services/ directory and __init__.py
+- [x] [T004] [P] Create backend/src/api/routes/ directory and __init__.py
+- [x] [T005] [P] Create backend/src/api/middleware/ directory and __init__.py
+- [x] [T006] [P] Create backend/src/mcp/ directory and __init__.py
+- [x] [T007] [P] Create backend/tests/unit/ directory and __init__.py
+- [x] [T008] [P] Create backend/tests/integration/ directory and __init__.py
+- [x] [T009] [P] Create backend/tests/contract/ directory and __init__.py
+- [x] [T010] [P] Create frontend/src/components/ui/ directory
+- [x] [T011] [P] Create frontend/src/pages/ directory
+- [x] [T012] [P] Create frontend/src/services/ directory
+- [x] [T013] [P] Create frontend/src/lib/ directory
+- [x] [T014] [P] Create frontend/src/types/ directory
+- [x] [T015] [P] Create frontend/tests/unit/ directory
+- [x] [T016] [P] Create frontend/tests/e2e/ directory
 - [ ] [T017] [P] Create data/vaults/ directory for runtime vault storage
-- [ ] [T018] Create backend/pyproject.toml with dependencies: fastapi, fastmcp, python-frontmatter, pyjwt, huggingface_hub, uvicorn
-- [ ] [T019] Create frontend/package.json with dependencies: react, vite, typescript, shadcn/ui, react-markdown
-- [ ] [T020] Create frontend/vite.config.ts with proxy to backend API
+- [x] [T018] Create backend/pyproject.toml with dependencies: fastapi, fastmcp, python-frontmatter, pyjwt, huggingface_hub, uvicorn
+- [x] [T019] Create frontend/package.json with dependencies: react, vite, typescript, shadcn/ui, react-markdown
+- [x] [T020] Create frontend/vite.config.ts with proxy to backend API
 - [ ] [T021] Create .env.example with JWT_SECRET_KEY, HF_OAUTH_CLIENT_ID, HF_OAUTH_CLIENT_SECRET, VAULT_BASE_PATH
-- [ ] [T022] Create .gitignore to exclude data/, .env, node_modules/, __pycache__, dist/
-- [ ] [T023] Create backend/src/services/database.py with SQLite initialization DDL from data-model.md
+- [x] [T022] Create .gitignore to exclude data/, .env, node_modules/, __pycache__, dist/
+- [x] [T023] Create backend/src/services/database.py with SQLite initialization DDL from data-model.md
 - [ ] [T024] Execute SQLite schema initialization (note_metadata, note_fts, note_tags, note_links, index_health tables)
 
 ---
@@ -55,20 +60,20 @@ The MVP delivers immediate value:
 
 **Goal**: Build core infrastructure required by all user stories.
 
-- [ ] [T025] Create backend/src/services/config.py to load env vars: JWT_SECRET_KEY, VAULT_BASE_PATH, HF_OAUTH_CLIENT_ID, HF_OAUTH_CLIENT_SECRET
-- [ ] [T026] [P] Create backend/src/models/user.py with User and HFProfile Pydantic models from data-model.md
-- [ ] [T027] [P] Create backend/src/models/note.py with Note, NoteMetadata, NoteCreate, NoteUpdate, NoteSummary Pydantic models from data-model.md
-- [ ] [T028] [P] Create backend/src/models/index.py with Wikilink, Tag, IndexHealth Pydantic models from data-model.md
-- [ ] [T029] [P] Create backend/src/models/search.py with SearchResult, SearchRequest Pydantic models from data-model.md
-- [ ] [T030] [P] Create backend/src/models/auth.py with TokenResponse, JWTPayload Pydantic models from data-model.md
-- [ ] [T031] [P] Create frontend/src/types/user.ts with User and HFProfile TypeScript types from data-model.md
-- [ ] [T032] [P] Create frontend/src/types/note.ts with Note, NoteMetadata, NoteSummary, NoteCreateRequest, NoteUpdateRequest TypeScript types from data-model.md
-- [ ] [T033] [P] Create frontend/src/types/search.ts with SearchResult, Tag, IndexHealth TypeScript types from data-model.md
-- [ ] [T034] [P] Create frontend/src/types/auth.ts with TokenResponse, APIError TypeScript types from data-model.md
-- [ ] [T035] Create backend/src/services/vault.py with VaultService class: path validation, sanitization (sanitize_path function from data-model.md), vault directory initialization
-- [ ] [T036] Create backend/src/services/auth.py with AuthService class: JWT creation (create_jwt), validation (validate_jwt), placeholder for HF OAuth
-- [ ] [T037] Create backend/src/api/middleware/auth_middleware.py with extract_user_id_from_jwt function to validate Authorization: Bearer header
-- [ ] [T038] Create backend/src/api/middleware/error_handlers.py with FastAPI exception handlers for 400, 401, 403, 404, 409, 413, 500 from http-api.yaml
+- [x] [T025] Create backend/src/services/config.py to load env vars: JWT_SECRET_KEY, VAULT_BASE_PATH, HF_OAUTH_CLIENT_ID, HF_OAUTH_CLIENT_SECRET
+- [x] [T026] [P] Create backend/src/models/user.py with User and HFProfile Pydantic models from data-model.md
+- [x] [T027] [P] Create backend/src/models/note.py with Note, NoteMetadata, NoteCreate, NoteUpdate, NoteSummary Pydantic models from data-model.md
+- [x] [T028] [P] Create backend/src/models/index.py with Wikilink, Tag, IndexHealth Pydantic models from data-model.md
+- [x] [T029] [P] Create backend/src/models/search.py with SearchResult, SearchRequest Pydantic models from data-model.md
+- [x] [T030] [P] Create backend/src/models/auth.py with TokenResponse, JWTPayload Pydantic models from data-model.md
+- [x] [T031] [P] Create frontend/src/types/user.ts with User and HFProfile TypeScript types from data-model.md
+- [x] [T032] [P] Create frontend/src/types/note.ts with Note, NoteMetadata, NoteSummary, NoteCreateRequest, NoteUpdateRequest TypeScript types from data-model.md
+- [x] [T033] [P] Create frontend/src/types/search.ts with SearchResult, Tag, IndexHealth TypeScript types from data-model.md
+- [x] [T034] [P] Create frontend/src/types/auth.ts with TokenResponse, APIError TypeScript types from data-model.md
+- [x] [T035] Create backend/src/services/vault.py with VaultService class: path validation, sanitization (sanitize_path function from data-model.md), vault directory initialization
+- [x] [T036] Create backend/src/services/auth.py with AuthService class: JWT creation (create_jwt), validation (validate_jwt), placeholder for HF OAuth
+- [x] [T037] Create backend/src/api/middleware/auth_middleware.py with extract_user_id_from_jwt function to validate Authorization: Bearer header
+- [x] [T038] Create backend/src/api/middleware/error_handlers.py with FastAPI exception handlers for 400, 401, 403, 404, 409, 413, 500 from http-api.yaml
 
 ---
 
@@ -76,27 +81,27 @@ The MVP delivers immediate value:
 
 **Goal**: Enable AI agents to write/update docs via MCP STDIO, with automatic indexing.
 
-- [ ] [T039] [US1] Create backend/src/services/vault.py VaultService.read_note method: read file, parse frontmatter with python-frontmatter, extract title (priority: frontmatter > H1 > filename stem)
-- [ ] [T040] [US1] Create backend/src/services/vault.py VaultService.write_note method: validate path/content, create parent dirs, write frontmatter + body, return absolute path
-- [ ] [T041] [US1] Create backend/src/services/vault.py VaultService.delete_note method: validate path, remove file, handle FileNotFoundError
-- [ ] [T042] [US1] Create backend/src/services/vault.py VaultService.list_notes method: walk vault tree, filter by folder param, return paths and titles
-- [ ] [T043] [US1] Create backend/src/services/indexer.py IndexerService class with db connection management
-- [ ] [T044] [US1] Create backend/src/services/indexer.py IndexerService.index_note method: delete old rows for (user_id, note_path), insert into note_metadata, note_fts, note_tags, note_links
-- [ ] [T045] [US1] Create backend/src/services/indexer.py IndexerService.extract_wikilinks method: regex pattern \[\[([^\]]+)\]\] to extract link_text from body
-- [ ] [T046] [US1] Create backend/src/services/indexer.py IndexerService.resolve_wikilinks method: normalize slug (data-model.md algorithm), match against normalized_title_slug and normalized_path_slug, prefer same-folder, update is_resolved
-- [ ] [T047] [US1] Create backend/src/services/indexer.py IndexerService.increment_version method: get current version or default to 1, increment, return new version
-- [ ] [T048] [US1] Create backend/src/services/indexer.py IndexerService.update_index_health method: update note_count, last_incremental_update timestamp
-- [ ] [T049] [US1] Create backend/src/services/indexer.py IndexerService.delete_note_index method: delete rows from all index tables, update backlinks to set is_resolved=false
-- [ ] [T050] [US1] Create backend/src/mcp/server.py FastMCP server initialization with name="obsidian-docs-viewer"
-- [ ] [T051] [US1] Create backend/src/mcp/server.py list_notes MCP tool: call VaultService.list_notes, return [{path, title, last_modified}]
-- [ ] [T052] [US1] Create backend/src/mcp/server.py read_note MCP tool: call VaultService.read_note, return {path, title, metadata, body}
-- [ ] [T053] [US1] Create backend/src/mcp/server.py write_note MCP tool: call VaultService.write_note, then IndexerService.index_note, return {status: "ok", path}
-- [ ] [T054] [US1] Create backend/src/mcp/server.py delete_note MCP tool: call VaultService.delete_note, then IndexerService.delete_note_index, return {status: "ok"}
-- [ ] [T055] [US1] Create backend/src/mcp/server.py search_notes MCP tool: query note_fts with bm25 ranking (3.0 title weight, 1.0 body weight), add recency bonus, return [{path, title, snippet}]
-- [ ] [T056] [US1] Create backend/src/mcp/server.py get_backlinks MCP tool: query note_links WHERE target_path=?, join note_metadata, return [{path, title}]
-- [ ] [T057] [US1] Create backend/src/mcp/server.py get_tags MCP tool: query note_tags GROUP BY tag, return [{tag, count}]
-- [ ] [T058] [US1] Create backend/src/mcp/server.py STDIO transport mode: if __name__ == "__main__", run FastMCP with stdio transport for local development
-- [ ] [T059] [US1] Add recency bonus calculation to search_notes: +1.0 for updated in last 7 days, +0.5 for last 30 days, 0 otherwise
+- [x] [T039] [US1] Create backend/src/services/vault.py VaultService.read_note method: read file, parse frontmatter with python-frontmatter, extract title (priority: frontmatter > H1 > filename stem)
+- [x] [T040] [US1] Create backend/src/services/vault.py VaultService.write_note method: validate path/content, create parent dirs, write frontmatter + body, return absolute path
+- [x] [T041] [US1] Create backend/src/services/vault.py VaultService.delete_note method: validate path, remove file, handle FileNotFoundError
+- [x] [T042] [US1] Create backend/src/services/vault.py VaultService.list_notes method: walk vault tree, filter by folder param, return paths and titles
+- [x] [T043] [US1] Create backend/src/services/indexer.py IndexerService class with db connection management
+- [x] [T044] [US1] Create backend/src/services/indexer.py IndexerService.index_note method: delete old rows for (user_id, note_path), insert into note_metadata, note_fts, note_tags, note_links
+- [x] [T045] [US1] Create backend/src/services/indexer.py IndexerService.extract_wikilinks method: regex pattern \[\[([^\]]+)\]\] to extract link_text from body
+- [x] [T046] [US1] Create backend/src/services/indexer.py IndexerService.resolve_wikilinks method: normalize slug (data-model.md algorithm), match against normalized_title_slug and normalized_path_slug, prefer same-folder, update is_resolved
+- [x] [T047] [US1] Create backend/src/services/indexer.py IndexerService.increment_version method: get current version or default to 1, increment, return new version
+- [x] [T048] [US1] Create backend/src/services/indexer.py IndexerService.update_index_health method: update note_count, last_incremental_update timestamp
+- [x] [T049] [US1] Create backend/src/services/indexer.py IndexerService.delete_note_index method: delete rows from all index tables, update backlinks to set is_resolved=false
+- [x] [T050] [US1] Create backend/src/mcp/server.py FastMCP server initialization with name="obsidian-docs-viewer"
+- [x] [T051] [US1] Create backend/src/mcp/server.py list_notes MCP tool: call VaultService.list_notes, return [{path, title, last_modified}]
+- [x] [T052] [US1] Create backend/src/mcp/server.py read_note MCP tool: call VaultService.read_note, return {path, title, metadata, body}
+- [x] [T053] [US1] Create backend/src/mcp/server.py write_note MCP tool: call VaultService.write_note, then IndexerService.index_note, return {status: "ok", path}
+- [x] [T054] [US1] Create backend/src/mcp/server.py delete_note MCP tool: call VaultService.delete_note, then IndexerService.delete_note_index, return {status: "ok"}
+- [x] [T055] [US1] Create backend/src/mcp/server.py search_notes MCP tool: query note_fts with bm25 ranking (3.0 title weight, 1.0 body weight), add recency bonus, return [{path, title, snippet}]
+- [x] [T056] [US1] Create backend/src/mcp/server.py get_backlinks MCP tool: query note_links WHERE target_path=?, join note_metadata, return [{path, title}]
+- [x] [T057] [US1] Create backend/src/mcp/server.py get_tags MCP tool: query note_tags GROUP BY tag, return [{tag, count}]
+- [x] [T058] [US1] Create backend/src/mcp/server.py STDIO transport mode: if __name__ == "__main__", run FastMCP with stdio transport for local development
+- [x] [T059] [US1] Add recency bonus calculation to search_notes: +1.0 for updated in last 7 days, +0.5 for last 30 days, 0 otherwise
 
 ---
 
