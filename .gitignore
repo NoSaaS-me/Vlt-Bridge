@@ -40,3 +40,6 @@ dist/
 build/
 *.egg-info/
 
+# Runtime data
+data/
+
