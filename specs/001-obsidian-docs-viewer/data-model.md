@@ -413,7 +413,7 @@ ORDER BY rank DESC
 LIMIT 50;
 ```
 
-**Safety**: Incoming queries are tokenized and each token is wrapped in double quotes before being passed to `MATCH`, escaping embedded quotes and preserving trailing `*` for prefix searches. This prevents syntax errors from characters such as apostrophes while keeping simple keyword semantics.
+**Safety**: Incoming queries are tokenized into alphanumeric terms (per requirement to split on non-alphanumeric characters), each optionally preserving a trailing `*` for prefix searches, then wrapped in double quotes before being passed to `MATCH`. This neutralizes MATCH operators, trims punctuation such as apostrophes/ampersands, and prevents SQL syntax errors while preserving simple keyword semantics.
 
 ---
 

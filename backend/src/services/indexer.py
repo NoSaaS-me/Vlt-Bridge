@@ -12,7 +12,7 @@ from .database import DatabaseService
 from .vault import VaultNote
 
 WIKILINK_PATTERN = re.compile(r"\[\[([^\]]+)\]\]")
-WHITESPACE_RE = re.compile(r"\s+")
+TOKEN_PATTERN = re.compile(r"[0-9A-Za-z]+(?:\*)?")
 
 
 def _utcnow_iso() -> str:
@@ -40,34 +40,19 @@ def _prepare_match_query(query: str) -> str:
     """
     Sanitize user-supplied query text for FTS5 MATCH usage.
 
-    - Splits on whitespace to keep simple keyword semantics.
-    - Wraps each token in double quotes to neutralize punctuation (e.g., apostrophes).
-    - Escapes embedded double quotes by doubling them.
-    - Preserves trailing '*' characters for prefix searches.
+    - Extracts tokens comprised of alphanumeric characters (per spec: split on non-alphanum).
+    - Preserves a single trailing '*' to allow prefix searches.
+    - Wraps each token in double quotes to neutralize MATCH operators.
     """
-    tokens = [token for token in WHITESPACE_RE.split(query or "") if token.strip()]
     sanitized_terms: List[str] = []
 
-    for token in tokens:
-        cleaned = token.strip()
-        suffix = ""
-        while cleaned.endswith("*"):
-            suffix += "*"
-            cleaned = cleaned[:-1]
-
-        # Remove wrapping quotes if present; inner quotes are preserved/escaped below.
-        if cleaned.startswith('"') and cleaned.endswith('"') and len(cleaned) >= 2:
-            cleaned = cleaned[1:-1]
-        if cleaned.startswith("'") and cleaned.endswith("'") and len(cleaned) >= 2:
-            cleaned = cleaned[1:-1]
-
-        cleaned = cleaned.strip()
-        if not cleaned:
+    for match in TOKEN_PATTERN.finditer(query or ""):
+        token = match.group()
+        has_prefix_star = token.endswith("*")
+        core = token[:-1] if has_prefix_star else token
+        if not core:
             continue
-
-        escaped = cleaned.replace('"', '""')
-        term = f'"{escaped}"{suffix}'
-        sanitized_terms.append(term)
+        sanitized_terms.append(f'"{core}"{"*" if has_prefix_star else ""}')
 
     if not sanitized_terms:
         raise ValueError("Search query must contain alphanumeric characters")

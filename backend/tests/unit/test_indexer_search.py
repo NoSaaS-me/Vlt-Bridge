@@ -53,3 +53,19 @@ def test_search_notes_preserves_prefix_queries(indexer: IndexerService) -> None:
     assert results
     assert results[0]["path"] == "notes/auth.md"
 
+
+def test_search_notes_handles_symbol_tokens(indexer: IndexerService) -> None:
+    indexer.index_note(
+        "local-dev",
+        _note(
+            "notes/api-docs.md",
+            "API & Documentation Guide",
+            "Overview covering API & documentation best practices.",
+        ),
+    )
+
+    results = indexer.search_notes("local-dev", "API & documentation")
+
+    assert results
+    assert results[0]["path"] == "notes/api-docs.md"
+
