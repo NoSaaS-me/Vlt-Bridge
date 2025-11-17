@@ -31,19 +31,28 @@ export function Settings() {
 
   const loadData = async () => {
     try {
-      const [userData, health] = await Promise.all([
-        getCurrentUser().catch(() => null),
-        getIndexHealth().catch(() => null),
-      ]);
-      
-      setUser(userData);
-      setIndexHealth(health);
-      
-      // Get current token
       const token = getStoredToken();
-      if (token) {
+      
+      // Handle local-dev-token as a special case
+      if (token === 'local-dev-token') {
+        setUser({
+          user_id: 'demo-user',
+          vault_path: '/data/vaults/demo-user',
+          created: new Date().toISOString(),
+        });
         setApiToken(token);
+      } else {
+        // Real OAuth user
+        const userData = await getCurrentUser().catch(() => null);
+        setUser(userData);
+        if (token) {
+          setApiToken(token);
+        }
       }
+      
+      // Always try to load index health
+      const health = await getIndexHealth().catch(() => null);
+      setIndexHealth(health);
     } catch (err) {
       console.error('Error loading settings:', err);
     }
@@ -123,14 +132,9 @@ export function Settings() {
 
         {/* Profile */}
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <div>
-              <CardTitle>Profile</CardTitle>
-              <CardDescription>Your account information</CardDescription>
-            </div>
-            <Button variant="outline" size="sm" onClick={logout}>
-              Sign Out
-            </Button>
+          <CardHeader>
+            <CardTitle>Profile</CardTitle>
+            <CardDescription>Your account information</CardDescription>
           </CardHeader>
           <CardContent>
             {user ? (

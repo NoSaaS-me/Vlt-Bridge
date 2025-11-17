@@ -22,6 +22,8 @@ This guide walks through deploying the Document-MCP application to Hugging Face 
 
 ## Step 2: Configure OAuth Application
 
+**IMPORTANT**: HF Spaces run at a different URL than the management page. Your app's actual URL will be detected automatically via request headers.
+
 If you haven't already created an OAuth app:
 
 1. Go to https://huggingface.co/settings/connected-applications
@@ -34,6 +36,8 @@ If you haven't already created an OAuth app:
 
 4. Click **Create**
 5. **Save the Client ID and Client Secret** - you'll need these for environment variables
+
+**Note**: The OAuth redirect URI will automatically adjust to your Space's actual running URL (e.g., `https://YOUR_USERNAME-document-mcp.hf.space/auth/callback`) via HTTP headers. The configured `HF_SPACE_URL` is only used as a fallback.
 
 ## Step 3: Set Environment Variables
 
@@ -50,6 +54,8 @@ HF_OAUTH_CLIENT_ID=<your-oauth-client-id>
 HF_OAUTH_CLIENT_SECRET=<your-oauth-client-secret>
 HF_SPACE_URL=https://huggingface.co/spaces/YOUR_USERNAME/Document-MCP
 ```
+
+**Note on HF_SPACE_URL**: This is only a fallback. The application automatically detects its actual running URL using `X-Forwarded-Host` and `X-Forwarded-Proto` headers set by HF Spaces proxy. You can set this to the Space management URL for simplicity.
 
 ### Generating JWT_SECRET_KEY
 
@@ -167,11 +173,16 @@ curl -X POST "https://YOUR_USERNAME-Document-MCP.hf.space/mcp/list_notes" \
 - **Python install fails**: Check `backend/pyproject.toml` dependencies
 - **Out of memory**: Upgrade to a paid tier with more RAM
 
-### OAuth Redirect Loop
+### OAuth Redirect Loop or 404 After Login
 
-- Verify `HF_SPACE_URL` matches your actual Space URL exactly
-- Ensure OAuth redirect URI is: `https://huggingface.co/spaces/YOUR_USERNAME/Document-MCP/auth/callback`
-- Check that OAuth app scopes include `openid` and `profile`
+**The app now auto-detects its URL** from request headers. If OAuth fails:
+
+- Check HF Space **application logs** for "OAuth base URL" messages to see what URL was detected
+- Verify your OAuth app's Redirect URI matches one of:
+  - The Space management URL: `https://huggingface.co/spaces/YOUR_USERNAME/Document-MCP/auth/callback`
+  - The running app URL (shown in logs): `https://YOUR_USERNAME-document-mcp.hf.space/auth/callback`
+- Ensure OAuth app scopes include `openid` and `profile`
+- Try updating your OAuth app's Redirect URI to match the URL shown in the logs
 
 ### 500 Internal Server Error
 

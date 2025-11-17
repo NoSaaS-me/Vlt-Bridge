@@ -11,19 +11,27 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [isChecking, setIsChecking] = useState(true);
+  const [hasToken, setHasToken] = useState<boolean>(isAuthenticated());
 
   // T110: Check if user is authenticated on mount
   useEffect(() => {
     const checkAuth = async () => {
       // Check for OAuth callback token in URL hash
-      if (setAuthTokenFromHash()) {
+      const tokenExtracted = setAuthTokenFromHash();
+      if (tokenExtracted) {
         console.log('OAuth token extracted from URL hash');
-      }
-
-      if (!isAuthenticated()) {
+        setHasToken(true);
         setIsChecking(false);
         return;
       }
+
+      if (!isAuthenticated()) {
+        setHasToken(false);
+        setIsChecking(false);
+        return;
+      }
+
+      setHasToken(true);
 
       const token = localStorage.getItem('auth_token');
       // Skip validation for local dev token
@@ -40,16 +48,16 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         // Token is invalid (401), redirect to login
         console.warn('Authentication failed, redirecting to login');
         localStorage.removeItem('auth_token');
-        navigate('/login', { replace: true, state: { from: location } });
+        setHasToken(false);
+        setIsChecking(false);
+        if (location.pathname !== '/login') {
+          navigate('/login', { replace: true, state: { from: location } });
+        }
       }
     };
 
     checkAuth();
   }, [navigate, location]);
-
-  if (!isAuthenticated()) {
-    return <Navigate to="/login" replace />;
-  }
 
   if (isChecking) {
     return (
@@ -57,6 +65,10 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         <div className="text-muted-foreground">Loading...</div>
       </div>
     );
+  }
+
+  if (!hasToken) {
+    return <Navigate to="/login" replace />;
   }
 
   return <>{children}</>;

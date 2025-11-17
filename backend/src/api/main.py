@@ -103,6 +103,11 @@ if frontend_dist.exists():
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """Serve the SPA for all non-API routes."""
+        # Don't intercept API or auth routes
+        if full_path.startswith(("api/", "auth/", "health")):
+            # Let FastAPI's 404 handler take over
+            raise HTTPException(status_code=404, detail="Not found")
+        
         # If the path looks like a file (has extension), try to serve it
         file_path = frontend_dist / full_path
         if file_path.is_file():

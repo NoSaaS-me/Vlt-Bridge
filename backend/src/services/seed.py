@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from .database import init_database
+from .database import DatabaseService
 from .indexer import IndexerService
 from .vault import VaultService
 
@@ -449,6 +449,31 @@ A: See [[Getting Started]] for links to the repository.
     },
 ]
 
+WELCOME_NOTE_FILENAME = "Welcome.md"
+WELCOME_NOTE_TITLE = "Welcome to Your Vault"
+WELCOME_NOTE_TEMPLATE = """# Welcome to Your Vault
+
+Thanks for signing in with Hugging Face! This workspace is private to **{user_id}**.
+
+## Next steps
+
+- Use the directory tree on the left to browse or create folders.
+- Click **New Note** to create your first document.
+- Use the **Search** bar to find content as your vault grows.
+
+## Settings & API access
+
+- Visit the Settings page to copy your API token for MCP or automation.
+- Regenerate the token at any time if you accidentally share it.
+
+## Tips
+
+- Organize content with plain folders; each note is a Markdown file.
+- Wikilink to other notes with `[[Example Note]]` once you create them.
+- Data in this demo space is ephemeral and may reset when the app restarts.
+
+Enjoy documenting!"""
+
 
 def seed_demo_vault(user_id: str = "demo-user") -> int:
     """
@@ -492,6 +517,58 @@ def seed_demo_vault(user_id: str = "demo-user") -> int:
     return notes_created
 
 
+def ensure_welcome_note(user_id: str) -> bool:
+    """
+    Ensure an authenticated user's vault contains the welcome note.
+
+    Returns True if a welcome note was created, False if it already existed
+    or was skipped because the vault already has user content.
+    """
+    vault_service = VaultService()
+    indexer_service = IndexerService()
+    db_service = DatabaseService()
+
+    logger.info("Ensuring welcome note for user", extra={"user_id": user_id})
+
+    # Make sure the user's vault directory exists
+    vault_service.initialize_vault(user_id)
+
+    existing_notes = vault_service.list_notes(user_id)
+
+    if any(note["path"] == WELCOME_NOTE_FILENAME for note in existing_notes):
+        logger.info("Welcome note already present", extra={"user_id": user_id})
+        return False
+
+    if existing_notes:
+        # User has already created content—do not overwrite their vault
+        logger.info(
+            "Vault already contains notes; skipping welcome note",
+            extra={"user_id": user_id, "note_count": len(existing_notes)},
+        )
+        return False
+
+    body = WELCOME_NOTE_TEMPLATE.format(user_id=user_id)
+    note = vault_service.write_note(
+        user_id,
+        WELCOME_NOTE_FILENAME,
+        title=WELCOME_NOTE_TITLE,
+        body=body,
+        metadata={"tags": ["welcome"]},
+    )
+
+    indexer_service.index_note(user_id, note)
+
+    conn = db_service.connect()
+    try:
+        with conn:
+            indexer_service.update_index_health(conn, user_id)
+    finally:
+        conn.close()
+
+    logger.info("Welcome note created", extra={"user_id": user_id})
+    return True
+
+
 def init_and_seed(user_id: str = "demo-user") -> None:
     """
     Initialize database schema and seed demo vault.
@@ -511,5 +588,5 @@ def init_and_seed(user_id: str = "demo-user") -> None:
     logger.info(f"Initialization complete. Created {notes_created} demo notes.")
 
 
-__all__ = ["seed_demo_vault", "init_and_seed"]
+__all__ = ["seed_demo_vault", "init_and_seed", "ensure_welcome_note"]
 
