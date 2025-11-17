@@ -6,13 +6,14 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import unquote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ...models.index import Tag
 from ...models.search import SearchResult
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
+from ..middleware import AuthContext, get_auth_context
 
 router = APIRouter()
 
@@ -24,15 +25,13 @@ class BacklinkResult(BaseModel):
     title: str
 
 
-def get_user_id() -> str:
-    """Return the current user ID. For now, hardcoded to 'local-dev'."""
-    return "local-dev"
-
-
 @router.get("/api/search", response_model=list[SearchResult])
-async def search_notes(q: str = Query(..., min_length=1, max_length=256)):
+async def search_notes(
+    q: str = Query(..., min_length=1, max_length=256),
+    auth: AuthContext = Depends(get_auth_context),
+):
     """Full-text search across all notes."""
-    user_id = get_user_id()
+    user_id = auth.user_id
     indexer_service = IndexerService()
     
     try:
@@ -65,9 +64,9 @@ async def search_notes(q: str = Query(..., min_length=1, max_length=256)):
 
 
 @router.get("/api/backlinks/{path:path}", response_model=list[BacklinkResult])
-async def get_backlinks(path: str):
+async def get_backlinks(path: str, auth: AuthContext = Depends(get_auth_context)):
     """Get all notes that link to this note."""
-    user_id = get_user_id()
+    user_id = auth.user_id
     indexer_service = IndexerService()
     
     try:
@@ -88,9 +87,9 @@ async def get_backlinks(path: str):
 
 
 @router.get("/api/tags", response_model=list[Tag])
-async def get_tags():
+async def get_tags(auth: AuthContext = Depends(get_auth_context)):
     """Get all tags with usage counts."""
-    user_id = get_user_id()
+    user_id = auth.user_id
     indexer_service = IndexerService()
     
     try:

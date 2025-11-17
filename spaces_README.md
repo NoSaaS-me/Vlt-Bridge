@@ -44,7 +44,7 @@ After signing in, go to **Settings** to get your API token for MCP access:
 {
   "mcpServers": {
     "obsidian-docs": {
-      "url": "https://huggingface.co/spaces/YOUR_USERNAME/Document-MCP/mcp",
+      "url": "https://YOUR_USERNAME-Document-MCP.hf.space/mcp",
       "transport": "http",
       "headers": {
         "Authorization": "Bearer YOUR_JWT_TOKEN"
@@ -53,6 +53,8 @@ After signing in, go to **Settings** to get your API token for MCP access:
   }
 }
 ```
+
+For local experiments you can still run the MCP server via STDIO—use the "Local Development" snippet shown in Settings.
 
 AI agents can then use these tools:
 - `list_notes` - Browse vault

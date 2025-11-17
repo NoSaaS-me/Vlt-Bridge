@@ -133,20 +133,20 @@ huggingface-cli upload YOUR_USERNAME/Document-MCP . --repo-type=space
 
 ## Step 7: MCP HTTP Access
 
-To use MCP tools via HTTP (for AI agents):
+The Space exposes the MCP server over HTTPS so tools like Claude Desktop can connect without running anything locally. Every JWT maps to an isolated vault directory (`data/vaults/<user_id>`), so each Hugging Face account sees only its own notes.
 
 1. **Get your JWT token**:
-   - Go to Settings page in the app
-   - Copy your API token
+   - Go to the in-app Settings page
+   - Click **Copy token** (or generate a new one)
 
-2. **Configure MCP client** (e.g., Claude Desktop):
+2. **Configure your MCP client** (example for Claude Desktop):
 
 ```json
 {
   "mcpServers": {
     "obsidian-docs": {
-      "url": "https://YOUR_USERNAME-Document-MCP.hf.space/mcp",
       "transport": "http",
+      "url": "https://YOUR_USERNAME-Document-MCP.hf.space/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_JWT_TOKEN_HERE"
       }
@@ -155,13 +155,7 @@ To use MCP tools via HTTP (for AI agents):
 }
 ```
 
-3. **Test MCP tools**:
-
-```bash
-curl -X POST "https://YOUR_USERNAME-Document-MCP.hf.space/mcp/list_notes" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json"
-```
+3. **Local development (optional)**: If you want to run the MCP server via STDIO on your laptop, use the "Local Development" snippet from the app's Settings page.
 
 ## Troubleshooting
 

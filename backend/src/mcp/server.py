@@ -11,6 +11,12 @@ from fastmcp import FastMCP
 from pydantic import Field
 
 from ..services import IndexerService, VaultNote, VaultService
+from ..services.auth import AuthError, AuthService
+
+try:
+    from fastmcp.server.http import _current_http_request  # type: ignore
+except ImportError:  # pragma: no cover
+    _current_http_request = None
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +34,32 @@ mcp = FastMCP(
 
 vault_service = VaultService()
 indexer_service = IndexerService()
+auth_service = AuthService()
 
 
 def _current_user_id() -> str:
     """Resolve the acting user ID (local mode defaults to local-dev)."""
+    # HTTP transport (hosted) uses Authorization headers
+    if _current_http_request is not None:
+        try:
+            request = _current_http_request.get()  # type: ignore[call-arg]
+        except LookupError:
+            request = None
+        if request is not None:
+            header = request.headers.get("Authorization")
+            if not header:
+                raise PermissionError("Authorization header required")
+            scheme, _, token = header.partition(" ")
+            if scheme.lower() != "bearer" or not token:
+                raise PermissionError("Authorization header must be 'Bearer <token>'")
+            try:
+                payload = auth_service.validate_jwt(token)
+            except AuthError as exc:
+                raise PermissionError(exc.message) from exc
+            os.environ.setdefault("LOCAL_USER_ID", payload.sub)
+            return payload.sub
+
+    # STDIO / local fall back
     return os.getenv("LOCAL_USER_ID", "local-dev")
 
 

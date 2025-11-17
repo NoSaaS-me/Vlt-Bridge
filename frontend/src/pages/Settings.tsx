@@ -205,25 +205,39 @@ export function Settings() {
             </Button>
 
             <div className="text-xs text-muted-foreground mt-4">
-              <p className="font-semibold mb-2">MCP Configuration Example:</p>
+              <p className="font-semibold mb-2">MCP Configuration (Hosted HTTP):</p>
+              <pre className="bg-muted p-3 rounded overflow-x-auto">
+{`{
+  "mcpServers": {
+    "obsidian-docs": {
+      "transport": "http",
+      "url": "${window.location.origin}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${apiToken || 'YOUR_TOKEN_HERE'}"
+      }
+    }
+  }
+}`}
+              </pre>
+              <p className="font-semibold mb-2 mt-4">Local Development (STDIO):</p>
               <pre className="bg-muted p-3 rounded overflow-x-auto">
 {`{
   "mcpServers": {
     "obsidian-docs": {
       "command": "python",
       "args": ["-m", "backend.src.mcp.server"],
-      "cwd": "/path/to/Document-MCP",
+      "cwd": "/absolute/path/to/Document-MCP",
       "env": {
-        "BEARER_TOKEN": "${apiToken || 'YOUR_TOKEN_HERE'}",
-        "FASTMCP_SHOW_CLI_BANNER": "false",
-        "PYTHONPATH": "/path/to/Document-MCP"
+        "LOCAL_USER_ID": "local-dev",
+        "PYTHONPATH": "/absolute/path/to/Document-MCP",
+        "FASTMCP_SHOW_CLI_BANNER": "false"
       }
     }
   }
 }`}
               </pre>
               <p className="text-xs text-muted-foreground mt-2">
-                💡 Replace <code className="bg-muted px-1 rounded">/path/to/Document-MCP</code> with your actual project path
+                💡 Replace <code className="bg-muted px-1 rounded">/absolute/path/to/Document-MCP</code> with your local checkout path
               </p>
             </div>
           </CardContent>

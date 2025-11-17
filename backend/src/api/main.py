@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routes import auth, index, notes, search
+from ..mcp.server import mcp
 from ..services.seed import init_and_seed
 
 logger = logging.getLogger(__name__)
@@ -79,10 +80,10 @@ app.include_router(notes.router, tags=["notes"])
 app.include_router(search.router, tags=["search"])
 app.include_router(index.router, tags=["index"])
 
-# Note: FastMCP HTTP mode is typically run as a separate server
-# For HF Space deployment, MCP is primarily used via STDIO in local development
-# To use MCP HTTP, run: fastmcp run backend.src.mcp.server:mcp --port 8001
-logger.info("MCP server available for STDIO mode (local development)")
+# Hosted MCP HTTP endpoint (mounted Starlette app)
+mcp_http_app = mcp.http_app(path="/", transport="http")
+app.mount("/mcp", mcp_http_app)
+logger.info("MCP HTTP endpoint mounted at /mcp")
 
 
 @app.get("/health")
@@ -104,7 +105,7 @@ if frontend_dist.exists():
     async def serve_spa(full_path: str):
         """Serve the SPA for all non-API routes."""
         # Don't intercept API or auth routes
-        if full_path.startswith(("api/", "auth/", "health")):
+        if full_path.startswith(("api/", "auth/", "health", "mcp")):
             # Let FastAPI's 404 handler take over
             raise HTTPException(status_code=404, detail="Not found")
         
