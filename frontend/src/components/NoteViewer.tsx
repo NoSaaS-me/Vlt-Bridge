@@ -6,7 +6,6 @@ import { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Edit, Trash2, Calendar, Tag as TagIcon, ArrowLeft } from 'lucide-react';
-import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -14,7 +13,6 @@ import { Separator } from '@/components/ui/separator';
 import type { Note } from '@/types/note';
 import type { BacklinkResult } from '@/services/api';
 import { createWikilinkComponent } from '@/lib/markdown.tsx';
-import { normalizeSlug } from '@/lib/wikilink';
 
 interface NoteViewerProps {
   note: Note;

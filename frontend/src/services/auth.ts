@@ -81,3 +81,22 @@ export function getStoredToken(): string | null {
   return localStorage.getItem('auth_token');
 }
 
+/**
+ * Extract JWT token from URL hash after OAuth callback.
+ * URL format: /#token=<jwt>
+ * Returns true if token was found and saved.
+ */
+export function setAuthTokenFromHash(): boolean {
+  const hash = window.location.hash;
+  if (hash.startsWith('#token=')) {
+    const token = hash.substring(7); // Remove '#token='
+    if (token) {
+      localStorage.setItem('auth_token', token);
+      // Clean up the URL
+      window.history.replaceState(null, '', window.location.pathname);
+      return true;
+    }
+  }
+  return false;
+}
+

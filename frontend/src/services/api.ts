@@ -1,4 +1,4 @@
-import type { Note, NoteSummary, NoteUpdateRequest } from '@/types/note';
+import type { Note, NoteSummary, NoteUpdateRequest, NoteCreateRequest } from '@/types/note';
 import type { SearchResult, Tag, IndexHealth } from '@/types/search';
 import type { User } from '@/types/user';
 import type { APIError } from '@/types/auth';
@@ -7,13 +7,16 @@ import type { APIError } from '@/types/auth';
  * Custom error class for API errors
  */
 export class APIException extends Error {
-  constructor(
-    public status: number,
-    public error: string,
-    public detail?: Record<string, unknown>
-  ) {
+  status: number;
+  error: string;
+  detail?: Record<string, unknown>;
+
+  constructor(status: number, error: string, detail?: Record<string, unknown>) {
     super(error);
     this.name = 'APIException';
+    this.status = status;
+    this.error = error;
+    this.detail = detail;
   }
 }
 
@@ -46,9 +49,9 @@ async function apiFetch<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const token = getAuthToken();
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(options.headers || {}),
+    ...(options.headers as Record<string, string> || {}),
   };
 
   if (token) {
@@ -135,7 +138,7 @@ export async function getTags(): Promise<Tag[]> {
 }
 
 /**
- * T071: Update a note
+ * T071: Create a note
  */
 export async function createNote(data: NoteCreateRequest): Promise<Note> {
   return apiFetch<Note>('/api/notes', {

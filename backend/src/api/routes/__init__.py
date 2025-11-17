@@ -1,5 +1,5 @@
 """HTTP API route handlers."""
 
-from . import index, notes, search
+from . import auth, index, notes, search
 
-__all__ = ["notes", "search", "index"]
+__all__ = ["auth", "notes", "search", "index"]

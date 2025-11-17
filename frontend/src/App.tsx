@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { MainApp } from './pages/MainApp';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
-import { isAuthenticated, getCurrentUser } from './services/auth';
+import { isAuthenticated, getCurrentUser, setAuthTokenFromHash } from './services/auth';
 import './App.css';
 
 // Protected route wrapper with auth check
@@ -15,6 +15,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   // T110: Check if user is authenticated on mount
   useEffect(() => {
     const checkAuth = async () => {
+      // Check for OAuth callback token in URL hash
+      if (setAuthTokenFromHash()) {
+        console.log('OAuth token extracted from URL hash');
+      }
+
       if (!isAuthenticated()) {
         setIsChecking(false);
         return;
