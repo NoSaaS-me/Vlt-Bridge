@@ -198,20 +198,20 @@ The MVP delivers immediate value:
 
 **Goal**: Documentation, configuration, logging, error handling improvements.
 
-- [ ] [T121] Create README.md with project overview, tech stack, local setup instructions (backend venv + npm install)
-- [ ] [T122] Add README.md section: "Running Backend" with uvicorn command for HTTP API and python -m backend.src.mcp.server for MCP STDIO
-- [ ] [T123] Add README.md section: "Running Frontend" with npm run dev command
-- [ ] [T124] Add README.md section: "MCP Client Configuration" with Claude Code/Desktop STDIO example from mcp-tools.json
+- [x] [T121] Create README.md with project overview, tech stack, local setup instructions (backend venv + npm install)
+- [x] [T122] Add README.md section: "Running Backend" with uvicorn command for HTTP API and python -m backend.src.mcp.server for MCP STDIO
+- [x] [T123] Add README.md section: "Running Frontend" with npm run dev command
+- [x] [T124] Add README.md section: "MCP Client Configuration" with Claude Code/Desktop STDIO example from mcp-tools.json
 - [ ] [T125] Add README.md section: "Deploying to Hugging Face Space" with environment variables and OAuth setup
-- [ ] [T126] Update .env.example with all variables: JWT_SECRET_KEY, VAULT_BASE_PATH, HF_OAUTH_CLIENT_ID, HF_OAUTH_CLIENT_SECRET, DATABASE_PATH
-- [ ] [T127] Add structured logging to backend/src/services/vault.py: log file operations with user_id, note_path, operation type
-- [ ] [T128] Add structured logging to backend/src/services/indexer.py: log index updates with user_id, note_path, duration_ms
-- [ ] [T129] Add structured logging to backend/src/mcp/server.py: log MCP tool calls with tool_name, user_id, duration_ms
-- [ ] [T130] Improve error messages in backend/src/api/middleware/error_handlers.py: include detail objects with field names and reasons
-- [ ] [T131] Add input validation to all HTTP API routes: validate path format, content size, required fields
-- [ ] [T132] Add input validation to all MCP tools: validate path format, content size via Pydantic models
-- [ ] [T133] Add rate limiting consideration to README.md: note potential need for per-user rate limits in production
-- [ ] [T134] Add performance optimization notes to README.md: FTS5 prefix indexes, SQLite WAL mode for concurrency
+- [x] [T126] Update .env.example with all variables: JWT_SECRET_KEY, VAULT_BASE_PATH, HF_OAUTH_CLIENT_ID, HF_OAUTH_CLIENT_SECRET, DATABASE_PATH
+- [x] [T127] Add structured logging to backend/src/services/vault.py: log file operations with user_id, note_path, operation type
+- [x] [T128] Add structured logging to backend/src/services/indexer.py: log index updates with user_id, note_path, duration_ms
+- [x] [T129] Add structured logging to backend/src/mcp/server.py: log MCP tool calls with tool_name, user_id, duration_ms
+- [x] [T130] Improve error messages in backend/src/api/middleware/error_handlers.py: include detail objects with field names and reasons
+- [x] [T131] Add input validation to all HTTP API routes: validate path format, content size, required fields
+- [x] [T132] Add input validation to all MCP tools: validate path format, content size via Pydantic models
+- [x] [T133] Add rate limiting consideration to README.md: note potential need for per-user rate limits in production
+- [x] [T134] Add performance optimization notes to README.md: FTS5 prefix indexes, SQLite WAL mode for concurrency
 
 ---
 

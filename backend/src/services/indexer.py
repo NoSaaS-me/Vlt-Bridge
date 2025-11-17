@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 from pathlib import Path
 import re
 import sqlite3
+import time
 from typing import Any, Dict, List, Sequence
 
 from .database import DatabaseService
 from .vault import VaultNote
+
+logger = logging.getLogger(__name__)
 
 WIKILINK_PATTERN = re.compile(r"\[\[([^\]]+)\]\]")
 TOKEN_PATTERN = re.compile(r"[0-9A-Za-z]+(?:\*)?")
@@ -68,6 +72,8 @@ class IndexerService:
 
     def index_note(self, user_id: str, note: VaultNote) -> int:
         """Insert or update index rows for a note."""
+        start_time = time.time()
+        
         note_path = note["path"]
         metadata = dict(note.get("metadata") or {})
         title = note.get("title") or metadata.get("title") or Path(note_path).stem
@@ -148,6 +154,19 @@ class IndexerService:
                     )
 
                 self.update_index_health(conn, user_id)
+
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                "Note indexed successfully",
+                extra={
+                    "user_id": user_id,
+                    "note_path": note_path,
+                    "version": version,
+                    "tags_count": len(tags),
+                    "wikilinks_count": len(wikilinks),
+                    "duration_ms": f"{duration_ms:.2f}"
+                }
+            )
 
             return version
         finally:
