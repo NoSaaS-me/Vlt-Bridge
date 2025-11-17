@@ -1,0 +1,9 @@
+fastapi
+fastmcp
+python-frontmatter
+pyjwt
+huggingface_hub
+uvicorn
+httpx
+pytest
+pytest-asyncio

@@ -1,0 +1,925 @@
+openapi: 3.1.0
+info:
+  title: Obsidian-Like Docs Viewer API
+  version: 1.0.0
+  description: |
+    Multi-tenant Obsidian-like documentation viewer with full-text search, wikilinks, and tags.
+
+    ## Authentication
+    All endpoints require Bearer JWT authentication via the `Authorization` header (except in local mode).
+
+    ## Multi-tenancy
+    All operations are scoped to the authenticated user's vault. Users cannot access other users' notes.
+
+    ## Path Encoding
+    Note paths in URLs must be URL-encoded (e.g., `api/design.md` becomes `api%2Fdesign.md`).
+  contact:
+    name: API Support
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: https://your-space.hf.space
+    description: Hugging Face Space deployment
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Authentication
+    description: User authentication and token management
+  - name: Notes
+    description: CRUD operations for notes
+  - name: Search
+    description: Full-text search and navigation
+  - name: Index
+    description: Index health and rebuild operations
+
+paths:
+  /api/tokens:
+    post:
+      summary: Issue JWT token
+      description: Issue a new JWT access token for the authenticated user (90-day expiration)
+      operationId: issueToken
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Token issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              example:
+                token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZSIsImlhdCI6MTczNjk1NjgwMCwiZXhwIjoxNzQ0NzMyODAwfQ.signature
+                token_type: bearer
+                expires_at: "2025-04-15T10:30:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/me:
+    get:
+      summary: Get current user info
+      description: Retrieve authenticated user information including HF profile
+      operationId: getCurrentUser
+      tags:
+        - Authentication
+      responses:
+        '200':
+          description: User information retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              example:
+                user_id: alice
+                hf_profile:
+                  username: alice
+                  name: Alice Smith
+                  avatar_url: https://cdn-avatars.huggingface.co/v1/alice
+                vault_path: /data/vaults/alice
+                created: "2025-01-15T10:30:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/notes:
+    get:
+      summary: List notes
+      description: List all notes in the user's vault with optional folder filtering
+      operationId: listNotes
+      tags:
+        - Notes
+      parameters:
+        - name: folder
+          in: query
+          description: Filter notes by folder path (e.g., "api" or "guides/tutorials")
+          required: false
+          schema:
+            type: string
+            maxLength: 256
+          example: api
+      responses:
+        '200':
+          description: List of notes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NoteSummary'
+              example:
+                - note_path: api/design.md
+                  title: API Design
+                  updated: "2025-01-15T14:30:00Z"
+                - note_path: api/endpoints.md
+                  title: API Endpoints
+                  updated: "2025-01-14T09:15:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/notes/{path}:
+    get:
+      summary: Get note
+      description: Retrieve full note content including metadata, body, and version
+      operationId: getNote
+      tags:
+        - Notes
+      parameters:
+        - $ref: '#/components/parameters/NotePath'
+      responses:
+        '200':
+          description: Note retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Note'
+              example:
+                user_id: alice
+                note_path: api/design.md
+                version: 5
+                title: API Design
+                metadata:
+                  tags:
+                    - backend
+                    - api
+                  project: auth-service
+                body: "# API Design\n\nThis document describes the API architecture...\n\n## Endpoints\n\nSee [[Endpoints]] for details."
+                created: "2025-01-10T09:00:00Z"
+                updated: "2025-01-15T14:30:00Z"
+                size_bytes: 4096
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Note not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: not_found
+                message: Note not found
+                detail:
+                  note_path: api/design.md
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    put:
+      summary: Create or update note
+      description: Create a new note or update an existing note with optional optimistic concurrency control
+      operationId: createOrUpdateNote
+      tags:
+        - Notes
+      parameters:
+        - $ref: '#/components/parameters/NotePath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteUpdate'
+            example:
+              title: API Design
+              metadata:
+                tags:
+                  - backend
+                  - api
+                project: auth-service
+              body: "# API Design\n\nThis document describes the API architecture..."
+              if_version: 4
+      responses:
+        '200':
+          description: Note updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteResponse'
+              example:
+                status: ok
+                path: api/design.md
+                version: 5
+        '201':
+          description: Note created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteResponse'
+              example:
+                status: ok
+                path: api/design.md
+                version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      summary: Delete note
+      description: Delete a note and remove it from all indices
+      operationId: deleteNote
+      tags:
+        - Notes
+      parameters:
+        - $ref: '#/components/parameters/NotePath'
+      responses:
+        '200':
+          description: Note deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteResponse'
+              example:
+                status: ok
+                path: api/design.md
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Note not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: not_found
+                message: Note not found
+                detail:
+                  note_path: api/design.md
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/search:
+    get:
+      summary: Search notes
+      description: Full-text search across all notes with ranking (title 3x weight, body 1x, recency bonus)
+      operationId: searchNotes
+      tags:
+        - Search
+      parameters:
+        - name: q
+          in: query
+          description: Search query (tokenized, case-insensitive)
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+          example: authentication
+        - name: limit
+          in: query
+          description: Maximum number of results to return
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SearchResult'
+              example:
+                - note_path: api/auth.md
+                  title: Authentication Flow
+                  snippet: "...describes the <mark>authentication</mark> process using JWT tokens..."
+                  score: 8.5
+                  updated: "2025-01-15T14:30:00Z"
+                - note_path: guides/setup.md
+                  title: Setup Guide
+                  snippet: "...configure <mark>authentication</mark> settings in the config file..."
+                  score: 3.2
+                  updated: "2025-01-10T09:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/backlinks/{path}:
+    get:
+      summary: Get backlinks
+      description: Get all notes that reference the specified note via wikilinks
+      operationId: getBacklinks
+      tags:
+        - Search
+      parameters:
+        - name: path
+          in: path
+          description: URL-encoded note path (includes .md extension)
+          required: true
+          schema:
+            type: string
+            maxLength: 256
+          example: api%2Fdesign.md
+      responses:
+        '200':
+          description: Backlinks retrieved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacklinkResult'
+              example:
+                - note_path: guides/architecture.md
+                  title: Architecture Overview
+                - note_path: api/endpoints.md
+                  title: API Endpoints
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Note not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: not_found
+                message: Note not found
+                detail:
+                  note_path: api/design.md
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/tags:
+    get:
+      summary: List all tags
+      description: Get all tags used in the user's vault with note counts
+      operationId: listTags
+      tags:
+        - Search
+      responses:
+        '200':
+          description: List of tags
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tag'
+              example:
+                - tag: backend
+                  count: 15
+                - tag: api
+                  count: 12
+                - tag: frontend
+                  count: 8
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/index/health:
+    get:
+      summary: Get index health status
+      description: Retrieve index health metrics including note count and last update timestamps
+      operationId: getIndexHealth
+      tags:
+        - Index
+      responses:
+        '200':
+          description: Index health metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndexHealth'
+              example:
+                user_id: alice
+                note_count: 142
+                last_full_rebuild: "2025-01-01T00:00:00Z"
+                last_incremental_update: "2025-01-15T14:30:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/index/rebuild:
+    post:
+      summary: Trigger full index rebuild
+      description: Manually rebuild all indices from scratch by re-scanning vault files
+      operationId: rebuildIndex
+      tags:
+        - Index
+      responses:
+        '200':
+          description: Index rebuild completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RebuildResponse'
+              example:
+                status: ok
+                notes_indexed: 142
+                duration_ms: 1250
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from POST /api/tokens
+
+  parameters:
+    NotePath:
+      name: path
+      in: path
+      description: URL-encoded note path (includes .md extension, e.g., "api%2Fdesign.md")
+      required: true
+      schema:
+        type: string
+        maxLength: 256
+      example: api%2Fdesign.md
+
+  schemas:
+    User:
+      type: object
+      required:
+        - user_id
+        - vault_path
+        - created
+      properties:
+        user_id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Internal user identifier
+          example: alice
+        hf_profile:
+          $ref: '#/components/schemas/HFProfile'
+        vault_path:
+          type: string
+          description: Absolute path to user's vault directory
+          example: /data/vaults/alice
+        created:
+          type: string
+          format: date-time
+          description: Account creation timestamp (ISO 8601)
+          example: "2025-01-15T10:30:00Z"
+
+    HFProfile:
+      type: object
+      properties:
+        username:
+          type: string
+          description: Hugging Face username
+          example: alice
+        name:
+          type: string
+          nullable: true
+          description: Display name from HF profile
+          example: Alice Smith
+        avatar_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Profile picture URL
+          example: https://cdn-avatars.huggingface.co/v1/alice
+
+    NoteMetadata:
+      type: object
+      description: Arbitrary frontmatter key-value pairs (YAML)
+      properties:
+        title:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+          nullable: true
+        project:
+          type: string
+          nullable: true
+        created:
+          type: string
+          format: date-time
+          nullable: true
+        updated:
+          type: string
+          format: date-time
+          nullable: true
+      additionalProperties: true
+      example:
+        tags:
+          - backend
+          - api
+        project: auth-service
+
+    Note:
+      type: object
+      required:
+        - user_id
+        - note_path
+        - version
+        - title
+        - body
+        - created
+        - updated
+        - size_bytes
+      properties:
+        user_id:
+          type: string
+          description: Owner user ID
+          example: alice
+        note_path:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Relative path to vault root (includes .md)
+          example: api/design.md
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic concurrency version counter
+          example: 5
+        title:
+          type: string
+          minLength: 1
+          description: Display title (from frontmatter, H1, or filename)
+          example: API Design
+        metadata:
+          $ref: '#/components/schemas/NoteMetadata'
+        body:
+          type: string
+          description: Markdown content (excluding frontmatter)
+          example: "# API Design\n\nThis document describes..."
+        created:
+          type: string
+          format: date-time
+          description: Creation timestamp (ISO 8601)
+          example: "2025-01-10T09:00:00Z"
+        updated:
+          type: string
+          format: date-time
+          description: Last modification timestamp (ISO 8601)
+          example: "2025-01-15T14:30:00Z"
+        size_bytes:
+          type: integer
+          minimum: 0
+          maximum: 1048576
+          description: File size in bytes (max 1 MiB)
+          example: 4096
+
+    NoteSummary:
+      type: object
+      required:
+        - note_path
+        - title
+        - updated
+      properties:
+        note_path:
+          type: string
+          example: api/design.md
+        title:
+          type: string
+          example: API Design
+        updated:
+          type: string
+          format: date-time
+          example: "2025-01-15T14:30:00Z"
+
+    NoteUpdate:
+      type: object
+      required:
+        - body
+      properties:
+        title:
+          type: string
+          nullable: true
+          description: Override title (if not set, will be extracted from frontmatter or body)
+        metadata:
+          $ref: '#/components/schemas/NoteMetadata'
+        body:
+          type: string
+          maxLength: 1048576
+          description: Markdown content (max 1 MiB UTF-8)
+        if_version:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: Expected version for optimistic concurrency (409 if mismatch)
+          example: 4
+
+    NoteResponse:
+      type: object
+      required:
+        - status
+        - path
+        - version
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+        path:
+          type: string
+          example: api/design.md
+        version:
+          type: integer
+          example: 5
+
+    DeleteResponse:
+      type: object
+      required:
+        - status
+        - path
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+        path:
+          type: string
+          example: api/design.md
+
+    SearchResult:
+      type: object
+      required:
+        - note_path
+        - title
+        - snippet
+        - score
+        - updated
+      properties:
+        note_path:
+          type: string
+          example: api/auth.md
+        title:
+          type: string
+          example: Authentication Flow
+        snippet:
+          type: string
+          description: Highlighted excerpt with <mark> tags
+          example: "...describes the <mark>authentication</mark> process using JWT..."
+        score:
+          type: number
+          format: float
+          description: Relevance score (title 3x, body 1x, recency bonus)
+          example: 8.5
+        updated:
+          type: string
+          format: date-time
+          example: "2025-01-15T14:30:00Z"
+
+    BacklinkResult:
+      type: object
+      required:
+        - note_path
+        - title
+      properties:
+        note_path:
+          type: string
+          example: guides/architecture.md
+        title:
+          type: string
+          example: Architecture Overview
+
+    Tag:
+      type: object
+      required:
+        - tag
+        - count
+      properties:
+        tag:
+          type: string
+          description: Tag name (lowercase, normalized)
+          example: backend
+        count:
+          type: integer
+          minimum: 0
+          description: Number of notes with this tag
+          example: 15
+
+    IndexHealth:
+      type: object
+      required:
+        - user_id
+        - note_count
+      properties:
+        user_id:
+          type: string
+          example: alice
+        note_count:
+          type: integer
+          minimum: 0
+          description: Total notes indexed
+          example: 142
+        last_full_rebuild:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of last manual rebuild
+          example: "2025-01-01T00:00:00Z"
+        last_incremental_update:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of last write/delete operation
+          example: "2025-01-15T14:30:00Z"
+
+    RebuildResponse:
+      type: object
+      required:
+        - status
+        - notes_indexed
+        - duration_ms
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+        notes_indexed:
+          type: integer
+          minimum: 0
+          example: 142
+        duration_ms:
+          type: integer
+          minimum: 0
+          description: Rebuild duration in milliseconds
+          example: 1250
+
+    TokenResponse:
+      type: object
+      required:
+        - token
+        - token_type
+        - expires_at
+      properties:
+        token:
+          type: string
+          description: JWT access token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        token_type:
+          type: string
+          enum:
+            - bearer
+          example: bearer
+        expires_at:
+          type: string
+          format: date-time
+          description: Token expiration timestamp (90 days from issuance)
+          example: "2025-04-15T10:30:00Z"
+
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code (machine-readable)
+          example: validation_error
+        message:
+          type: string
+          description: Human-readable error message
+          example: Invalid note path format
+        detail:
+          type: object
+          nullable: true
+          description: Additional error context
+          additionalProperties: true
+          example:
+            field: note_path
+            reason: Path must end with .md
+
+  responses:
+    BadRequest:
+      description: Bad request (invalid input)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            invalidPath:
+              summary: Invalid note path
+              value:
+                error: validation_error
+                message: Invalid note path format
+                detail:
+                  field: note_path
+                  reason: Path must end with .md
+            emptyQuery:
+              summary: Empty search query
+              value:
+                error: validation_error
+                message: Search query cannot be empty
+                detail:
+                  field: query
+                  reason: Query must be at least 1 character
+
+    Unauthorized:
+      description: Authentication required or token invalid/expired
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            missingToken:
+              summary: Missing authorization header
+              value:
+                error: unauthorized
+                message: Authorization header required
+            expiredToken:
+              summary: Expired JWT token
+              value:
+                error: token_expired
+                message: Token expired, please re-authenticate
+            invalidToken:
+              summary: Invalid JWT token
+              value:
+                error: invalid_token
+                message: Invalid token signature
+
+    Forbidden:
+      description: Forbidden (vault limit exceeded or permission denied)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            vaultLimitExceeded:
+              summary: Vault note limit exceeded
+              value:
+                error: vault_note_limit_exceeded
+                message: Vault has reached maximum of 5,000 notes
+                detail:
+                  current_count: 5000
+                  max_limit: 5000
+            pathTraversal:
+              summary: Path traversal attempt
+              value:
+                error: forbidden
+                message: Path escapes vault root
+                detail:
+                  note_path: ../../../etc/passwd
+
+    Conflict:
+      description: Version conflict (optimistic concurrency failure)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: version_conflict
+            message: Note was modified since you opened it
+            detail:
+              expected_version: 4
+              current_version: 6
+              note_path: api/design.md
+
+    PayloadTooLarge:
+      description: Note content exceeds 1 MiB limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: payload_too_large
+            message: Note content exceeds maximum size of 1 MiB
+            detail:
+              size_bytes: 1572864
+              max_size_bytes: 1048576
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: internal_error
+            message: An unexpected error occurred
+            detail:
+              request_id: req_abc123
