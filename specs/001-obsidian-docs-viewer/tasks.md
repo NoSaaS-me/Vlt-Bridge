@@ -109,12 +109,12 @@ The MVP delivers immediate value:
 
 **Goal**: Web UI for browsing, searching, and reading notes with wikilinks and backlinks.
 
-- [ ] [T060] [US2] Create backend/src/api/routes/notes.py with GET /api/notes endpoint: call VaultService.list_notes, return NoteSummary[] from http-api.yaml
-- [ ] [T061] [US2] Create backend/src/api/routes/notes.py with GET /api/notes/{path} endpoint: URL-decode path, call VaultService.read_note, return Note from http-api.yaml
-- [ ] [T062] [US2] Create backend/src/api/routes/search.py with GET /api/search endpoint: call IndexerService search with query param, return SearchResult[] from http-api.yaml
-- [ ] [T063] [US2] Create backend/src/api/routes/search.py with GET /api/backlinks/{path} endpoint: URL-decode path, query note_links, return BacklinkResult[] from http-api.yaml
-- [ ] [T064] [US2] Create backend/src/api/routes/search.py with GET /api/tags endpoint: query note_tags, return Tag[] from http-api.yaml
-- [ ] [T065] [US2] Create backend/src/api/main.py FastAPI app with CORS middleware, mount routes, include error handlers
+- [x] [T060] [US2] Create backend/src/api/routes/notes.py with GET /api/notes endpoint: call VaultService.list_notes, return NoteSummary[] from http-api.yaml
+- [x] [T061] [US2] Create backend/src/api/routes/notes.py with GET /api/notes/{path} endpoint: URL-decode path, call VaultService.read_note, return Note from http-api.yaml
+- [x] [T062] [US2] Create backend/src/api/routes/search.py with GET /api/search endpoint: call IndexerService search with query param, return SearchResult[] from http-api.yaml
+- [x] [T063] [US2] Create backend/src/api/routes/search.py with GET /api/backlinks/{path} endpoint: URL-decode path, query note_links, return BacklinkResult[] from http-api.yaml
+- [x] [T064] [US2] Create backend/src/api/routes/search.py with GET /api/tags endpoint: query note_tags, return Tag[] from http-api.yaml
+- [x] [T065] [US2] Create backend/src/api/main.py FastAPI app with CORS middleware, mount routes, include error handlers
 - [x] [T066] [US2] Create frontend/src/services/api.ts API client with fetch wrapper: add Authorization: Bearer header, handle JSON responses, throw APIError on non-200
 - [x] [T067] [US2] Create frontend/src/services/api.ts listNotes function: GET /api/notes?folder=, return NoteSummary[]
 - [x] [T068] [US2] Create frontend/src/services/api.ts getNote function: GET /api/notes/{encodeURIComponent(path)}, return Note
@@ -141,16 +141,16 @@ The MVP delivers immediate value:
 
 **Goal**: Split-pane editor with optimistic concurrency protection.
 
-- [ ] [T085] [US3] Create backend/src/api/routes/notes.py with PUT /api/notes/{path} endpoint: URL-decode path, validate request body (NoteUpdate), check if_version, call VaultService.write_note, return NoteResponse from http-api.yaml
-- [ ] [T086] [US3] Add optimistic concurrency check in IndexerService.increment_version: if if_version provided and != current version, raise ConflictError
-- [ ] [T087] [US3] Create ConflictError exception in backend/src/models/errors.py, map to 409 Conflict in error_handlers.py
-- [ ] [T088] [US3] Create frontend/src/services/api.ts updateNote function: PUT /api/notes/{encodeURIComponent(path)} with {title?, metadata?, body, if_version?}, handle 409 response
-- [ ] [T089] [US3] Create frontend/src/components/NoteEditor.tsx: split-pane layout (left: textarea for markdown source, right: live preview with react-markdown)
-- [ ] [T090] [US3] Create frontend/src/components/NoteEditor.tsx with Save button: onClick → call updateNote with if_version from initial note load, handle success → switch to read mode
-- [ ] [T091] [US3] Create frontend/src/components/NoteEditor.tsx with Cancel button: onClick → discard changes, switch to read mode
-- [ ] [T092] [US3] Add 409 Conflict error handling in NoteEditor: display alert "Note changed since you opened it, please reload before saving"
-- [ ] [T093] [US3] Add Edit button to NoteViewer: onClick → switch main pane to NoteEditor mode, pass current note version
-- [ ] [T094] [US3] Update frontend/src/pages/App.tsx to toggle between NoteViewer and NoteEditor based on edit mode state
+- [x] [T085] [US3] Create backend/src/api/routes/notes.py with PUT /api/notes/{path} endpoint: URL-decode path, validate request body (NoteUpdate), check if_version, call VaultService.write_note, return NoteResponse from http-api.yaml
+- [x] [T086] [US3] Add optimistic concurrency check in IndexerService.increment_version: if if_version provided and != current version, raise ConflictError
+- [x] [T087] [US3] Create ConflictError exception in backend/src/models/errors.py, map to 409 Conflict in error_handlers.py
+- [x] [T088] [US3] Create frontend/src/services/api.ts updateNote function: PUT /api/notes/{encodeURIComponent(path)} with {title?, metadata?, body, if_version?}, handle 409 response
+- [x] [T089] [US3] Create frontend/src/components/NoteEditor.tsx: split-pane layout (left: textarea for markdown source, right: live preview with react-markdown)
+- [x] [T090] [US3] Create frontend/src/components/NoteEditor.tsx with Save button: onClick → call updateNote with if_version from initial note load, handle success → switch to read mode
+- [x] [T091] [US3] Create frontend/src/components/NoteEditor.tsx with Cancel button: onClick → discard changes, switch to read mode
+- [x] [T092] [US3] Add 409 Conflict error handling in NoteEditor: display alert "Note changed since you opened it, please reload before saving"
+- [x] [T093] [US3] Add Edit button to NoteViewer: onClick → switch main pane to NoteEditor mode, pass current note version
+- [x] [T094] [US3] Update frontend/src/pages/MainApp.tsx to toggle between NoteViewer and NoteEditor based on edit mode state
 
 ---
 
@@ -173,8 +173,8 @@ The MVP delivers immediate value:
 - [x] [T107] [US4] Create frontend/src/services/auth.ts with getToken function: POST /api/tokens, return TokenResponse, store token in memory
 - [x] [T108] [US4] Create frontend/src/pages/Login.tsx: "Sign in with Hugging Face" button → onClick call auth.login()
 - [x] [T109] [US4] Create frontend/src/pages/Settings.tsx: display user profile (user_id, HF avatar), API token with copy button for MCP config
-- [ ] [T110] [US4] Update frontend/src/pages/App.tsx to call getCurrentUser on mount, redirect to Login if 401
-- [ ] [T111] [US4] Update frontend/src/services/api.ts to include token from auth.getToken() in Authorization header
+- [x] [T110] [US4] Update frontend/src/pages/App.tsx to call getCurrentUser on mount, redirect to Login if 401
+- [x] [T111] [US4] Update frontend/src/services/api.ts to include token from localStorage in Authorization header
 
 ---
 
@@ -184,12 +184,12 @@ The MVP delivers immediate value:
 
 - [ ] [T112] [US5] Update backend/src/services/indexer.py search_notes to calculate recency bonus: +1.0 for updated in last 7 days, +0.5 for last 30 days, 0 otherwise
 - [ ] [T113] [US5] Update backend/src/services/indexer.py search_notes to calculate final score: (3 * title_bm25) + (1 * body_bm25) + recency_bonus
-- [ ] [T114] [US5] Create backend/src/api/routes/index.py with GET /api/index/health endpoint: query index_health, return IndexHealth from http-api.yaml
-- [ ] [T115] [US5] Create backend/src/api/routes/index.py with POST /api/index/rebuild endpoint: call IndexerService.rebuild_index, return RebuildResponse from http-api.yaml
-- [ ] [T116] [US5] Create backend/src/services/indexer.py IndexerService.rebuild_index method: delete all user rows, walk vault, parse all notes, re-insert into all index tables, update index_health
+- [x] [T114] [US5] Create backend/src/api/routes/index.py with GET /api/index/health endpoint: query index_health, return IndexHealth from http-api.yaml
+- [x] [T115] [US5] Create backend/src/api/routes/index.py with POST /api/index/rebuild endpoint: call IndexerService.rebuild_index, return RebuildResponse from http-api.yaml
+- [x] [T116] [US5] Create backend/src/services/indexer.py IndexerService.rebuild_index method: delete all user rows, walk vault, parse all notes, re-insert into all index tables, update index_health
 - [ ] [T117] [US5] Create frontend/src/services/api.ts getIndexHealth function: GET /api/index/health, return IndexHealth
 - [ ] [T118] [US5] Create frontend/src/services/api.ts rebuildIndex function: POST /api/index/rebuild, return RebuildResponse
-- [ ] [T119] [US5] Add index health indicator to frontend/src/pages/App.tsx: display note count and last updated timestamp in footer
+- [x] [T119] [US5] Add index health indicator to frontend/src/pages/MainApp.tsx: display note count and last updated timestamp in footer
 - [x] [T120] [US5] Add "Rebuild Index" button to frontend/src/pages/Settings.tsx: onClick → call rebuildIndex, show progress/completion message
 
 ---

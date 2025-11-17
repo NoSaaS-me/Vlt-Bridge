@@ -12,13 +12,16 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DirectoryTree } from '@/components/DirectoryTree';
 import { SearchBar } from '@/components/SearchBar';
 import { NoteViewer } from '@/components/NoteViewer';
+import { NoteEditor } from '@/components/NoteEditor';
 import {
   listNotes,
   getNote,
   getBacklinks,
+  getIndexHealth,
   type BacklinkResult,
   APIException,
 } from '@/services/api';
+import type { IndexHealth } from '@/types/search';
 import type { Note, NoteSummary } from '@/types/note';
 import { normalizeSlug } from '@/lib/wikilink';
 
@@ -31,15 +34,24 @@ export function MainApp() {
   const [isLoadingNotes, setIsLoadingNotes] = useState(true);
   const [isLoadingNote, setIsLoadingNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [indexHealth, setIndexHealth] = useState<IndexHealth | null>(null);
 
   // T083: Load directory tree on mount
+  // T119: Load index health
   useEffect(() => {
-    const loadNotes = async () => {
+    const loadData = async () => {
       setIsLoadingNotes(true);
       setError(null);
       try {
-        const notesList = await listNotes();
+        // Load notes and index health in parallel
+        const [notesList, health] = await Promise.all([
+          listNotes(),
+          getIndexHealth().catch(() => null), // Don't fail if health unavailable
+        ]);
+        
         setNotes(notesList);
+        setIndexHealth(health);
         
         // Auto-select first note if available
         if (notesList.length > 0 && !selectedPath) {
@@ -57,7 +69,7 @@ export function MainApp() {
       }
     };
 
-    loadNotes();
+    loadData();
   }, []);
 
   // T084: Load note and backlinks when path changes
@@ -124,6 +136,26 @@ export function MainApp() {
   const handleSelectNote = (path: string) => {
     setSelectedPath(path);
     setError(null);
+    setIsEditMode(false); // Exit edit mode when switching notes
+  };
+
+  // T093: Handle edit button click
+  const handleEdit = () => {
+    setIsEditMode(true);
+  };
+
+  // Handle note save from editor
+  const handleNoteSave = (updatedNote: Note) => {
+    setCurrentNote(updatedNote);
+    setIsEditMode(false);
+    setError(null);
+    // Reload notes list to update modified timestamp
+    listNotes().then(setNotes).catch(console.error);
+  };
+
+  // Handle editor cancel
+  const handleEditCancel = () => {
+    setIsEditMode(false);
   };
 
   return (
@@ -188,11 +220,21 @@ export function MainApp() {
                   <div className="text-muted-foreground">Loading note...</div>
                 </div>
               ) : currentNote ? (
-                <NoteViewer
-                  note={currentNote}
-                  backlinks={backlinks}
-                  onWikilinkClick={handleWikilinkClick}
-                />
+                isEditMode ? (
+                  <NoteEditor
+                    note={currentNote}
+                    onSave={handleNoteSave}
+                    onCancel={handleEditCancel}
+                    onWikilinkClick={handleWikilinkClick}
+                  />
+                ) : (
+                  <NoteViewer
+                    note={currentNote}
+                    backlinks={backlinks}
+                    onEdit={handleEdit}
+                    onWikilinkClick={handleWikilinkClick}
+                  />
+                )
               ) : (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-center text-muted-foreground">
@@ -210,9 +252,34 @@ export function MainApp() {
         </ResizablePanelGroup>
       </div>
 
-      {/* Footer */}
+      {/* Footer with Index Health */}
       <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
-        {notes.length} note{notes.length !== 1 ? 's' : ''} indexed
+        <div className="flex items-center justify-between">
+          <div>
+            {indexHealth ? (
+              <>
+                <span className="font-medium">{indexHealth.note_count}</span> note{indexHealth.note_count !== 1 ? 's' : ''} indexed
+              </>
+            ) : (
+              <>
+                <span className="font-medium">{notes.length}</span> note{notes.length !== 1 ? 's' : ''} indexed
+              </>
+            )}
+          </div>
+          {indexHealth && indexHealth.last_incremental_update && (
+            <div className="flex items-center gap-2">
+              <span>Last updated:</span>
+              <span className="font-medium">
+                {new Date(indexHealth.last_incremental_update).toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
