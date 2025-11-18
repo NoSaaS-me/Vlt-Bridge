@@ -5,10 +5,15 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import asyncio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.routing import ASGIRoute
+from starlette.responses import Response
+
+from fastmcp.server.streamable_http import StreamableHTTPSessionManager
 
 from .routes import auth, index, notes, search
 from ..mcp.server import mcp
@@ -81,9 +86,49 @@ app.include_router(search.router, tags=["search"])
 app.include_router(index.router, tags=["index"])
 
 # Hosted MCP HTTP endpoint (mounted Starlette app)
-mcp_http_app = mcp.http_app(path="/", transport="http")
-app.mount("/mcp", mcp_http_app)
-logger.info("MCP HTTP endpoint mounted at /mcp")
+
+session_manager = StreamableHTTPSessionManager(
+    app=mcp._mcp_server,
+    event_store=None,
+    json_response=False,
+    stateless=True,
+)
+
+
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"])
+async def mcp_http_bridge(request: Request) -> Response:
+    """Forward HTTP requests to the FastMCP streamable HTTP session manager."""
+
+    send_queue: asyncio.Queue = asyncio.Queue()
+
+    async def send(message):
+        await send_queue.put(message)
+
+    await session_manager.handle_request(request.scope, request.receive, send)
+    await send_queue.put(None)
+
+    result_body = b""
+    headers = {}
+    status = 200
+
+    while True:
+        message = await send_queue.get()
+        if message is None:
+            break
+        msg_type = message["type"]
+        if msg_type == "http.response.start":
+            status = message.get("status", 200)
+            raw_headers = message.get("headers", [])
+            headers = {key.decode(): value.decode() for key, value in raw_headers}
+        elif msg_type == "http.response.body":
+            result_body += message.get("body", b"")
+            if not message.get("more_body"):
+                break
+
+    return Response(content=result_body, status_code=status, headers=headers)
+
+
+logger.info("MCP HTTP endpoint mounted at /mcp via StreamableHTTPSessionManager")
 
 
 @app.get("/health")

@@ -5,17 +5,21 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
 
+from ...models.auth import TokenResponse
+from ...models.user import HFProfile, User
+from ...services.auth import AuthService
 from ...services.config import get_config
 from ...services.seed import ensure_welcome_note
-from ..middleware import extract_user_id_from_jwt
+from ...services.vault import VaultService
+from ..middleware import AuthContext, get_auth_context
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,8 @@ router = APIRouter()
 
 OAUTH_STATE_TTL_SECONDS = 300
 oauth_states: dict[str, float] = {}
+
+auth_service = AuthService()
 
 
 def _create_oauth_state() -> str:
@@ -44,14 +50,6 @@ def _consume_oauth_state(state: str | None) -> None:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state.")
     # Remove to prevent reuse
     del oauth_states[state]
-
-
-class UserInfo(BaseModel):
-    """Current user information."""
-
-    user_id: str
-    username: str
-    email: Optional[str] = None
 
 
 def get_base_url(request: Request) -> str:
@@ -271,23 +269,43 @@ async def callback(
         )
 
 
-@router.get("/api/me", response_model=UserInfo)
-async def get_current_user(user_id: str = Depends(extract_user_id_from_jwt)):
-    """Return basic profile data for the authenticated user."""
-    if user_id == "local-dev":
-        return UserInfo(user_id="local-dev", username="local-dev")
+@router.post("/api/tokens", response_model=TokenResponse)
+async def create_api_token(auth: AuthContext = Depends(get_auth_context)):
+    """Issue a new JWT for the authenticated user."""
+    token, expires_at = auth_service.issue_token_response(auth.user_id)
+    return TokenResponse(token=token, token_type="bearer", expires_at=expires_at)
 
-    # Derive a friendly username if possible
-    username = user_id
-    email = None
 
+@router.get("/api/me", response_model=User)
+async def get_current_user(auth: AuthContext = Depends(get_auth_context)):
+    """Return profile metadata for the authenticated user."""
+    user_id = auth.user_id
+    vault_service = VaultService()
+    vault_path = vault_service.initialize_vault(user_id)
+
+    # Attempt to derive a stable "created" timestamp from the vault directory
+    try:
+        stat = vault_path.stat()
+        created_dt = datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
+    except Exception:
+        created_dt = datetime.now(timezone.utc)
+
+    profile: Optional[HFProfile] = None
     if user_id.startswith("hf-"):
         username = user_id[len("hf-") :]
+        profile = HFProfile(
+            username=username,
+            name=username.replace("-", " ").title(),
+            avatar_url=f"https://api.dicebear.com/7.x/initials/svg?seed={username}",
+        )
+    elif user_id not in {"local-dev", "demo-user"}:
+        profile = HFProfile(username=user_id)
 
-    return UserInfo(
+    return User(
         user_id=user_id,
-        username=username,
-        email=email,
+        hf_profile=profile,
+        vault_path=str(vault_path),
+        created=created_dt,
     )
 
 
