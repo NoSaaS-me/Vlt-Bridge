@@ -67,13 +67,21 @@ async def create_note(create: NoteCreate):
     
     try:
         note_path = create.note_path
-        
+
         # Check if note already exists
         try:
             vault_service.read_note(user_id, note_path)
-            raise HTTPException(status_code=409, detail=f"Note already exists: {note_path}")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "note_already_exists",
+                    "message": f"A note with the name '{note_path}' already exists. Please choose a different name.",
+                }
+            )
         except FileNotFoundError:
             pass  # Good, note doesn't exist
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions
         
         # Prepare metadata
         metadata = create.metadata.model_dump() if create.metadata else {}
@@ -103,15 +111,27 @@ async def create_note(create: NoteCreate):
         # Return created note
         created = written_note["metadata"].get("created")
         updated_ts = written_note["metadata"].get("updated")
-        
-        if isinstance(created, str):
-            created = datetime.fromisoformat(created.replace("Z", "+00:00"))
-        elif not isinstance(created, datetime):
+
+        # Parse created timestamp
+        try:
+            if isinstance(created, str):
+                created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            elif isinstance(created, datetime):
+                pass  # Already a datetime
+            else:
+                created = datetime.now()
+        except (ValueError, TypeError):
             created = datetime.now()
-            
-        if isinstance(updated_ts, str):
-            updated_ts = datetime.fromisoformat(updated_ts.replace("Z", "+00:00"))
-        elif not isinstance(updated_ts, datetime):
+
+        # Parse updated timestamp
+        try:
+            if isinstance(updated_ts, str):
+                updated_ts = datetime.fromisoformat(updated_ts.replace("Z", "+00:00"))
+            elif isinstance(updated_ts, datetime):
+                pass  # Already a datetime
+            else:
+                updated_ts = created
+        except (ValueError, TypeError):
             updated_ts = created
         
         return Note(
@@ -163,15 +183,27 @@ async def get_note(path: str):
         metadata = note_data.get("metadata", {})
         created = metadata.get("created")
         updated = metadata.get("updated")
-        
-        if isinstance(created, str):
-            created = datetime.fromisoformat(created.replace("Z", "+00:00"))
-        elif not isinstance(created, datetime):
+
+        # Parse created timestamp
+        try:
+            if isinstance(created, str):
+                created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            elif isinstance(created, datetime):
+                pass  # Already a datetime
+            else:
+                created = datetime.now()
+        except (ValueError, TypeError):
             created = datetime.now()
-            
-        if isinstance(updated, str):
-            updated = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-        elif not isinstance(updated, datetime):
+
+        # Parse updated timestamp
+        try:
+            if isinstance(updated, str):
+                updated = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+            elif isinstance(updated, datetime):
+                pass  # Already a datetime
+            else:
+                updated = created
+        except (ValueError, TypeError):
             updated = created
         
         return Note(
@@ -249,15 +281,27 @@ async def update_note(path: str, update: NoteUpdate):
         # Return updated note
         created = written_note["metadata"].get("created")
         updated_ts = written_note["metadata"].get("updated")
-        
-        if isinstance(created, str):
-            created = datetime.fromisoformat(created.replace("Z", "+00:00"))
-        elif not isinstance(created, datetime):
+
+        # Parse created timestamp
+        try:
+            if isinstance(created, str):
+                created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            elif isinstance(created, datetime):
+                pass  # Already a datetime
+            else:
+                created = datetime.now()
+        except (ValueError, TypeError):
             created = datetime.now()
-            
-        if isinstance(updated_ts, str):
-            updated_ts = datetime.fromisoformat(updated_ts.replace("Z", "+00:00"))
-        elif not isinstance(updated_ts, datetime):
+
+        # Parse updated timestamp
+        try:
+            if isinstance(updated_ts, str):
+                updated_ts = datetime.fromisoformat(updated_ts.replace("Z", "+00:00"))
+            elif isinstance(updated_ts, datetime):
+                pass  # Already a datetime
+            else:
+                updated_ts = created
+        except (ValueError, TypeError):
             updated_ts = created
         
         return Note(

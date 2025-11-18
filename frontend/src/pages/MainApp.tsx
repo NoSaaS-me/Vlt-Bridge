@@ -13,6 +13,7 @@ import { DirectoryTree } from '@/components/DirectoryTree';
 import { SearchBar } from '@/components/SearchBar';
 import { NoteViewer } from '@/components/NoteViewer';
 import { NoteEditor } from '@/components/NoteEditor';
+import { useToast } from '@/hooks/useToast';
 import {
   listNotes,
   getNote,
@@ -24,6 +25,7 @@ import {
 } from '@/services/api';
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -38,6 +40,7 @@ import { normalizeSlug } from '@/lib/wikilink';
 
 export function MainApp() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [currentNote, setCurrentNote] = useState<Note | null>(null);
@@ -49,6 +52,7 @@ export function MainApp() {
   const [indexHealth, setIndexHealth] = useState<IndexHealth | null>(null);
   const [isNewNoteDialogOpen, setIsNewNoteDialogOpen] = useState(false);
   const [newNoteName, setNewNoteName] = useState('');
+  const [isCreatingNote, setIsCreatingNote] = useState(false);
 
   // T083: Load directory tree on mount
   // T119: Load index health
@@ -171,36 +175,76 @@ export function MainApp() {
     setIsEditMode(false);
   };
 
+  // Handle dialog open change
+  const handleDialogOpenChange = (open: boolean) => {
+    setIsNewNoteDialogOpen(open);
+    if (!open) {
+      // Clear input when dialog closes
+      setNewNoteName('');
+    }
+  };
+
   // Handle create new note
   const handleCreateNote = async () => {
-    if (!newNoteName.trim()) return;
-    
+    if (!newNoteName.trim() || isCreatingNote) return;
+
+    setIsCreatingNote(true);
+    setError(null);
+
     try {
-      const notePath = newNoteName.endsWith('.md') ? newNoteName : `${newNoteName}.md`;
-      const note = await createNote({
-        note_path: notePath,
-        title: newNoteName.replace(/\.md$/, ''),
-        body: `# ${newNoteName.replace(/\.md$/, '')}\n\nStart writing your note here...`,
-      });
-      
-      // Refresh notes list
-      const notesList = await listNotes();
-      setNotes(notesList);
-      
-      // Select the new note
-      setSelectedPath(note.note_path);
-      setIsNewNoteDialogOpen(false);
-      setNewNoteName('');
-      
-      // Switch to edit mode for the new note
-      setIsEditMode(true);
-    } catch (err) {
-      if (err instanceof APIException) {
-        setError(err.error);
-      } else {
-        setError('Failed to create note');
+      const baseName = newNoteName.replace(/\.md$/, '');
+      let notePath = newNoteName.endsWith('.md') ? newNoteName : `${newNoteName}.md`;
+      let attempt = 1;
+      const maxAttempts = 100;
+
+      // Retry with number suffix if note already exists
+      while (attempt <= maxAttempts) {
+        try {
+          const note = await createNote({
+            note_path: notePath,
+            title: baseName,
+            body: `# ${baseName}\n\nStart writing your note here...`,
+          });
+
+          // Refresh notes list
+          const notesList = await listNotes();
+          setNotes(notesList);
+
+          // Select the new note
+          setSelectedPath(note.note_path);
+          setIsEditMode(true);
+          const displayName = notePath.replace(/\.md$/, '');
+          toast.success(`Note "${displayName}" created successfully`);
+          break;
+        } catch (err) {
+          if (err instanceof APIException && err.status === 409) {
+            // Note already exists, try with number suffix
+            attempt++;
+            if (attempt <= maxAttempts) {
+              notePath = `${baseName} ${attempt}.md`;
+              continue;
+            } else {
+              throw err;
+            }
+          } else {
+            throw err;
+          }
+        }
       }
+    } catch (err) {
+      let errorMessage = 'Failed to create note';
+      if (err instanceof APIException) {
+        // Use the message field which contains the actual error description
+        errorMessage = err.message || err.error;
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+      }
+      toast.error(errorMessage);
       console.error('Error creating note:', err);
+    } finally {
+      setIsCreatingNote(false);
+      // Always close dialog, regardless of success or failure
+      handleDialogOpenChange(false);
     }
   };
 
@@ -210,50 +254,9 @@ export function MainApp() {
       <div className="border-b border-border p-4">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">📚 Document Viewer</h1>
-          <div className="flex gap-2">
-            <Dialog open={isNewNoteDialogOpen} onOpenChange={setIsNewNoteDialogOpen}>
-              <DialogTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Note
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Create New Note</DialogTitle>
-                  <DialogDescription>
-                    Enter a name for your new note. The .md extension will be added automatically if not provided.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-4 py-4">
-                  <div className="grid gap-2">
-                    <label htmlFor="note-name" className="text-sm font-medium">Note Name</label>
-                    <Input
-                      id="note-name"
-                      placeholder="my-note"
-                      value={newNoteName}
-                      onChange={(e) => setNewNoteName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleCreateNote();
-                        }
-                      }}
-                    />
-                  </div>
-                </div>                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsNewNoteDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={handleCreateNote} disabled={!newNoteName.trim()}>
-                    Create Note
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-            <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
-              <SettingsIcon className="h-4 w-4" />
-            </Button>
-          </div>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
+            <SettingsIcon className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
@@ -264,6 +267,56 @@ export function MainApp() {
           <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
             <div className="h-full flex flex-col">
               <div className="p-4 space-y-4">
+                <Dialog
+                  open={isNewNoteDialogOpen}
+                  onOpenChange={handleDialogOpenChange}
+                >
+                  <DialogTrigger asChild>
+                    <Button variant="outline" size="sm" className="w-full">
+                      <Plus className="h-4 w-4 mr-1" />
+                      New Note
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Create New Note</DialogTitle>
+                      <DialogDescription>
+                        Enter a name for your new note. The .md extension will be added automatically if not provided.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <div className="grid gap-2">
+                        <label htmlFor="note-name" className="text-sm font-medium">Note Name</label>
+                        <Input
+                          id="note-name"
+                          placeholder="my-note"
+                          value={newNoteName}
+                          onChange={(e) => setNewNoteName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleCreateNote();
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => setIsNewNoteDialogOpen(false)}
+                        disabled={isCreatingNote}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={handleCreateNote}
+                        disabled={!newNoteName.trim() || isCreatingNote}
+                      >
+                        {isCreatingNote ? 'Creating...' : 'Create Note'}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
                 <SearchBar onSelectNote={handleSelectNote} />
                 <Separator />
               </div>

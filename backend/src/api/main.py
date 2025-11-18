@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from ..services.database import DatabaseService
 from .routes import index, notes, search
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Document Viewer API",
@@ -22,6 +27,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Startup event to initialize database
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database schema on startup if it doesn't exist."""
+    try:
+        db_service = DatabaseService()
+        db_service.initialize()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        raise
 
 
 # Error handlers
