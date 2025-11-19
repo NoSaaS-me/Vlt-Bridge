@@ -50,13 +50,13 @@ export function NoteViewer({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="border-b border-border p-4">
+      <div className="border-b border-border p-4 animate-fade-in">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <h1 className="text-3xl font-bold truncate">{note.title}</h1>
-            <p className="text-sm text-muted-foreground mt-1">{note.note_path}</p>
+            <h1 className="text-3xl font-bold truncate animate-slide-in-up" style={{ animationDelay: '0.1s' }}>{note.title}</h1>
+            <p className="text-sm text-muted-foreground mt-1 animate-fade-in" style={{ animationDelay: '0.2s' }}>{note.note_path}</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 animate-fade-in" style={{ animationDelay: '0.15s' }}>
             {onEdit && (
               <Button variant="outline" size="sm" onClick={onEdit}>
                 <Edit className="h-4 w-4 mr-2" />
@@ -74,7 +74,7 @@ export function NoteViewer({
 
       {/* Content */}
       <ScrollArea className="flex-1 p-6">
-        <div className="prose prose-slate dark:prose-invert max-w-none">
+        <div className="prose prose-slate dark:prose-invert max-w-none animate-fade-in" style={{ animationDelay: '0.3s' }}>
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={markdownComponents}
@@ -86,7 +86,7 @@ export function NoteViewer({
         <Separator className="my-8" />
 
         {/* Metadata Footer */}
-        <div className="space-y-4 text-sm">
+        <div className="space-y-4 text-sm animate-fade-in" style={{ animationDelay: '0.4s' }}>
           {/* Tags */}
           {note.metadata.tags && note.metadata.tags.length > 0 && (
             <div className="flex items-start gap-2">

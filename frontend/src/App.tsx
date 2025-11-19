@@ -4,6 +4,7 @@ import { MainApp } from './pages/MainApp';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { isAuthenticated, getCurrentUser } from './services/auth';
+import { AuthLoadingSkeleton } from './components/AuthLoadingSkeleton';
 import { Toaster } from './components/ui/toaster';
 import './App.css';
 
@@ -48,11 +49,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (isChecking) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-background">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
+    return <AuthLoadingSkeleton />;
   }
 
   return <>{children}</>;

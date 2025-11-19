@@ -20,6 +20,7 @@ interface DirectoryTreeProps {
   notes: NoteSummary[];
   selectedPath?: string;
   onSelectNote: (path: string) => void;
+  onMoveNote?: (oldPath: string, newFolderPath: string) => void;
 }
 
 /**
@@ -89,10 +90,46 @@ interface TreeNodeItemProps {
   depth: number;
   selectedPath?: string;
   onSelectNote: (path: string) => void;
+  onMoveNote?: (oldPath: string, newFolderPath: string) => void;
 }
 
-function TreeNodeItem({ node, depth, selectedPath, onSelectNote }: TreeNodeItemProps) {
+function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote }: TreeNodeItemProps) {
   const [isOpen, setIsOpen] = useState(depth < 2); // Auto-expand first 2 levels
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (node.type === 'folder') {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    if (node.type === 'folder') {
+      const draggedPath = e.dataTransfer.getData('application/note-path');
+      if (draggedPath && onMoveNote) {
+        onMoveNote(draggedPath, node.path);
+      }
+    }
+  };
+
+  const handleDragStart = (e: React.DragEvent) => {
+    if (node.type === 'file') {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('application/note-path', node.path);
+    }
+  };
 
   if (node.type === 'folder') {
     return (
@@ -101,10 +138,14 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote }: TreeNodeItemP
           variant="ghost"
           className={cn(
             "w-full justify-start font-normal px-2 h-8",
-            "hover:bg-accent"
+            "hover:bg-accent transition-colors duration-200",
+            isDragOver && "bg-accent ring-2 ring-primary"
           )}
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
           onClick={() => setIsOpen(!isOpen)}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
         >
           {isOpen ? (
             <ChevronDown className="h-4 w-4 mr-1 shrink-0" />
@@ -123,6 +164,7 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote }: TreeNodeItemP
                 depth={depth + 1}
                 selectedPath={selectedPath}
                 onSelectNote={onSelectNote}
+                onMoveNote={onMoveNote}
               />
             ))}
           </div>
@@ -141,11 +183,14 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote }: TreeNodeItemP
       variant="ghost"
       className={cn(
         "w-full justify-start font-normal px-2 h-8",
-        "hover:bg-accent",
-        isSelected && "bg-accent"
+        "hover:bg-accent transition-colors duration-200",
+        isSelected && "bg-accent animate-highlight-pulse",
+        "cursor-move"
       )}
       style={{ paddingLeft: `${depth * 12 + 8}px` }}
       onClick={() => onSelectNote(node.path)}
+      draggable
+      onDragStart={handleDragStart}
     >
       <File className="h-4 w-4 mr-2 shrink-0 text-muted-foreground" />
       <span className="truncate">{displayName}</span>
@@ -153,7 +198,7 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote }: TreeNodeItemP
   );
 }
 
-export function DirectoryTree({ notes, selectedPath, onSelectNote }: DirectoryTreeProps) {
+export function DirectoryTree({ notes, selectedPath, onSelectNote, onMoveNote }: DirectoryTreeProps) {
   const tree = useMemo(() => buildTree(notes), [notes]);
 
   if (notes.length === 0) {
@@ -174,6 +219,7 @@ export function DirectoryTree({ notes, selectedPath, onSelectNote }: DirectoryTr
             depth={0}
             selectedPath={selectedPath}
             onSelectNote={onSelectNote}
+            onMoveNote={onMoveNote}
           />
         ))}
       </div>

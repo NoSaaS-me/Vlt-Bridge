@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
+import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
 import { getCurrentUser, getToken, logout, getStoredToken } from '@/services/auth';
 import { getIndexHealth, rebuildIndex, type RebuildResponse } from '@/services/api';
 import type { User } from '@/types/user';
@@ -122,13 +123,13 @@ export function Settings() {
         )}
 
         {/* Profile */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Profile</CardTitle>
-            <CardDescription>Your account information</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {user ? (
+        {user ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Profile</CardTitle>
+              <CardDescription>Your account information</CardDescription>
+            </CardHeader>
+            <CardContent>
               <div className="flex items-center gap-4">
                 <Avatar className="h-16 w-16">
                   <AvatarImage src={user.hf_profile?.avatar_url} />
@@ -149,11 +150,14 @@ export function Settings() {
                   Sign Out
                 </Button>
               </div>
-            ) : (
-              <div className="text-muted-foreground">Loading user data...</div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        ) : (
+          <SettingsSectionSkeleton
+            title="Profile"
+            description="Your account information"
+          />
+        )}
 
         {/* API Token */}
         <Card>
@@ -221,61 +225,62 @@ export function Settings() {
         </Card>
 
         {/* Index Health */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Index Health</CardTitle>
-            <CardDescription>
-              Full-text search index status and maintenance
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {indexHealth ? (
-              <>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <div className="text-sm text-muted-foreground">Notes Indexed</div>
-                    <div className="text-2xl font-bold">{indexHealth.note_count}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-muted-foreground">Last Updated</div>
-                    <div className="text-sm">{formatDate(indexHealth.last_incremental_update)}</div>
-                  </div>
-                </div>
-
-                <Separator />
-
+        {indexHealth ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Index Health</CardTitle>
+              <CardDescription>
+                Full-text search index status and maintenance
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <div className="text-sm text-muted-foreground mb-1">Last Full Rebuild</div>
-                  <div className="text-sm">{formatDate(indexHealth.last_full_rebuild)}</div>
+                  <div className="text-sm text-muted-foreground">Notes Indexed</div>
+                  <div className="text-2xl font-bold">{indexHealth.note_count}</div>
                 </div>
-
-                {rebuildResult && (
-                  <Alert>
-                    <AlertDescription>
-                      ✅ Index rebuilt successfully! Indexed {rebuildResult.notes_indexed} notes in {rebuildResult.duration_ms}ms
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                <Button 
-                  onClick={handleRebuildIndex}
-                  disabled={isRebuilding}
-                  variant="outline"
-                >
-                  <RefreshCw className={`h-4 w-4 mr-2 ${isRebuilding ? 'animate-spin' : ''}`} />
-                  {isRebuilding ? 'Rebuilding...' : 'Rebuild Index'}
-                </Button>
-
-                <div className="text-xs text-muted-foreground">
-                  Rebuilding the index will re-scan all notes and update the full-text search database.
-                  This may take a few seconds for large vaults.
+                <div>
+                  <div className="text-sm text-muted-foreground">Last Updated</div>
+                  <div className="text-sm">{formatDate(indexHealth.last_incremental_update)}</div>
                 </div>
-              </>
-            ) : (
-              <div className="text-muted-foreground">Loading index health...</div>
-            )}
-          </CardContent>
-        </Card>
+              </div>
+
+              <Separator />
+
+              <div>
+                <div className="text-sm text-muted-foreground mb-1">Last Full Rebuild</div>
+                <div className="text-sm">{formatDate(indexHealth.last_full_rebuild)}</div>
+              </div>
+
+              {rebuildResult && (
+                <Alert>
+                  <AlertDescription>
+                    ✅ Index rebuilt successfully! Indexed {rebuildResult.notes_indexed} notes in {rebuildResult.duration_ms}ms
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <Button
+                onClick={handleRebuildIndex}
+                disabled={isRebuilding}
+                variant="outline"
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${isRebuilding ? 'animate-spin' : ''}`} />
+                {isRebuilding ? 'Rebuilding...' : 'Rebuild Index'}
+              </Button>
+
+              <div className="text-xs text-muted-foreground">
+                Rebuilding the index will re-scan all notes and update the full-text search database.
+                This may take a few seconds for large vaults.
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <SettingsSectionSkeleton
+            title="Index Health"
+            description="Full-text search index status and maintenance"
+          />
+        )}
       </div>
     </div>
   );

@@ -184,3 +184,14 @@ export async function rebuildIndex(): Promise<RebuildResponse> {
   });
 }
 
+/**
+ * Move or rename a note to a new path
+ */
+export async function moveNote(oldPath: string, newPath: string): Promise<Note> {
+  const encodedPath = encodeURIComponent(oldPath);
+  return apiFetch<Note>(`/api/notes/${encodedPath}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ new_path: newPath }),
+  });
+}
+

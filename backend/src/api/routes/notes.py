@@ -325,5 +325,99 @@ async def update_note(path: str, update: NoteUpdate):
         raise HTTPException(status_code=500, detail=f"Failed to update note: {str(e)}")
 
 
+from pydantic import BaseModel
+
+
+class NoteMoveRequest(BaseModel):
+    """Request payload for moving/renaming a note."""
+    new_path: str
+
+
+@router.patch("/api/notes/{path:path}", response_model=Note)
+async def move_note(path: str, move_request: NoteMoveRequest):
+    """Move or rename a note to a new path."""
+    user_id = get_user_id()
+    vault_service = VaultService()
+    indexer_service = IndexerService()
+    db_service = DatabaseService()
+
+    try:
+        # URL decode the old path
+        old_path = unquote(path)
+        new_path = move_request.new_path
+
+        # Move the note in the vault
+        moved_note = vault_service.move_note(user_id, old_path, new_path)
+
+        # Delete old note index entries
+        conn = db_service.connect()
+        try:
+            with conn:
+                # Delete from all index tables
+                conn.execute("DELETE FROM note_metadata WHERE user_id = ? AND note_path = ?", (user_id, old_path))
+                conn.execute("DELETE FROM note_links WHERE user_id = ? AND source_path = ?", (user_id, old_path))
+                conn.execute("DELETE FROM note_tags WHERE user_id = ? AND note_path = ?", (user_id, old_path))
+        finally:
+            conn.close()
+
+        # Index the note at new location
+        new_version = indexer_service.index_note(user_id, moved_note)
+
+        # Update index health
+        conn = db_service.connect()
+        try:
+            with conn:
+                indexer_service.update_index_health(conn, user_id)
+        finally:
+            conn.close()
+
+        # Parse metadata
+        metadata = moved_note.get("metadata", {})
+        created = metadata.get("created")
+        updated = metadata.get("updated")
+
+        # Parse created timestamp
+        try:
+            if isinstance(created, str):
+                created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            elif isinstance(created, datetime):
+                pass  # Already a datetime
+            else:
+                created = datetime.now()
+        except (ValueError, TypeError):
+            created = datetime.now()
+
+        # Parse updated timestamp
+        try:
+            if isinstance(updated, str):
+                updated = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+            elif isinstance(updated, datetime):
+                pass  # Already a datetime
+            else:
+                updated = created
+        except (ValueError, TypeError):
+            updated = created
+
+        return Note(
+            user_id=user_id,
+            note_path=new_path,
+            version=new_version,
+            title=moved_note["title"],
+            metadata=metadata,
+            body=moved_note["body"],
+            created=created,
+            updated=updated,
+            size_bytes=moved_note.get("size_bytes", len(moved_note["body"].encode("utf-8"))),
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Note not found: {path}")
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to move note: {str(e)}")
+
+
 __all__ = ["router", "ConflictError"]
 

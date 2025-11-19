@@ -4,14 +4,16 @@
  */
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Settings as SettingsIcon } from 'lucide-react';
+import { Plus, Settings as SettingsIcon, FolderPlus } from 'lucide-react';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DirectoryTree } from '@/components/DirectoryTree';
+import { DirectoryTreeSkeleton } from '@/components/DirectoryTreeSkeleton';
 import { SearchBar } from '@/components/SearchBar';
 import { NoteViewer } from '@/components/NoteViewer';
+import { NoteViewerSkeleton } from '@/components/NoteViewerSkeleton';
 import { NoteEditor } from '@/components/NoteEditor';
 import { useToast } from '@/hooks/useToast';
 import {
@@ -20,6 +22,7 @@ import {
   getBacklinks,
   getIndexHealth,
   createNote,
+  moveNote,
   type BacklinkResult,
   APIException,
 } from '@/services/api';
@@ -53,6 +56,9 @@ export function MainApp() {
   const [isNewNoteDialogOpen, setIsNewNoteDialogOpen] = useState(false);
   const [newNoteName, setNewNoteName] = useState('');
   const [isCreatingNote, setIsCreatingNote] = useState(false);
+  const [isNewFolderDialogOpen, setIsNewFolderDialogOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
 
   // T083: Load directory tree on mount
   // T119: Load index health
@@ -175,12 +181,21 @@ export function MainApp() {
     setIsEditMode(false);
   };
 
-  // Handle dialog open change
+  // Handle note dialog open change
   const handleDialogOpenChange = (open: boolean) => {
     setIsNewNoteDialogOpen(open);
     if (!open) {
       // Clear input when dialog closes
       setNewNoteName('');
+    }
+  };
+
+  // Handle folder dialog open change
+  const handleFolderDialogOpenChange = (open: boolean) => {
+    setIsNewFolderDialogOpen(open);
+    if (!open) {
+      // Clear input when dialog closes
+      setNewFolderName('');
     }
   };
 
@@ -248,10 +263,126 @@ export function MainApp() {
     }
   };
 
+  // Handle create new folder
+  const handleCreateFolder = async () => {
+    if (!newFolderName.trim() || isCreatingFolder) return;
+
+    setIsCreatingFolder(true);
+    setError(null);
+
+    try {
+      // Create a placeholder note in the folder
+      const folderPath = newFolderName.replace(/\/$/, ''); // Remove trailing slash if present
+      const placeholderPath = `${folderPath}/.placeholder.md`;
+
+      const note = await createNote({
+        note_path: placeholderPath,
+        title: 'Folder',
+        body: `# ${folderPath}\n\nThis folder was created.`,
+      });
+
+      // Refresh notes list
+      const notesList = await listNotes();
+      setNotes(notesList);
+
+      toast.success(`Folder "${folderPath}" created successfully`);
+    } catch (err) {
+      let errorMessage = 'Failed to create folder';
+      if (err instanceof APIException) {
+        errorMessage = err.message || err.error;
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+      }
+      toast.error(errorMessage);
+      console.error('Error creating folder:', err);
+    } finally {
+      setIsCreatingFolder(false);
+      // Always close dialog, regardless of success or failure
+      handleFolderDialogOpenChange(false);
+    }
+  };
+
+  // Handle rename note
+  const handleRenameNote = async (oldPath: string, newPath: string) => {
+    if (!newPath.trim()) {
+      toast.error('New path cannot be empty');
+      return;
+    }
+
+    try {
+      // Ensure new path has .md extension
+      const finalNewPath = newPath.endsWith('.md') ? newPath : `${newPath}.md`;
+
+      await moveNote(oldPath, finalNewPath);
+
+      // Refresh notes list
+      const notesList = await listNotes();
+      setNotes(notesList);
+
+      // If renaming currently selected note, update selection
+      if (selectedPath === oldPath) {
+        setSelectedPath(finalNewPath);
+      }
+
+      toast.success(`Note renamed successfully`);
+    } catch (err) {
+      let errorMessage = 'Failed to rename note';
+      if (err instanceof APIException) {
+        errorMessage = err.message || err.error;
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+      }
+      toast.error(errorMessage);
+      console.error('Error renaming note:', err);
+    }
+  };
+
+  // Handle dragging file to folder
+  const handleMoveNoteToFolder = async (oldPath: string, targetFolderPath: string) => {
+    try {
+      // Get the filename from the old path
+      const fileName = oldPath.split('/').pop();
+      if (!fileName) {
+        toast.error('Invalid file path');
+        return;
+      }
+
+      // Construct new path: targetFolder/fileName
+      const newPath = targetFolderPath ? `${targetFolderPath}/${fileName}` : fileName;
+
+      // Don't move if source and destination are the same
+      if (newPath === oldPath) {
+        return;
+      }
+
+      await moveNote(oldPath, newPath);
+
+      // Refresh notes list
+      const notesList = await listNotes();
+      setNotes(notesList);
+
+      // If moving currently selected note, update selection
+      if (selectedPath === oldPath) {
+        setSelectedPath(newPath);
+      }
+
+      toast.success(`Note moved successfully`);
+    } catch (err) {
+      let errorMessage = 'Failed to move note';
+      if (err instanceof APIException) {
+        errorMessage = err.message || err.error;
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+      }
+      toast.error(errorMessage);
+      console.error('Error moving note:', err);
+    }
+  };
+
   return (
     <div className="h-screen flex flex-col">
       {/* Top bar */}
-      <div className="border-b border-border p-4">
+      <div className="border-b border-border p-4 animate-fade-in">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">📚 Document Viewer</h1>
           <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
@@ -261,7 +392,7 @@ export function MainApp() {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden animate-fade-in" style={{ animationDelay: '0.1s' }}>
         <ResizablePanelGroup direction="horizontal">
           {/* Left sidebar */}
           <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
@@ -317,19 +448,68 @@ export function MainApp() {
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
+                <Dialog
+                  open={isNewFolderDialogOpen}
+                  onOpenChange={handleFolderDialogOpenChange}
+                >
+                  <DialogTrigger asChild>
+                    <Button variant="outline" size="sm" className="w-full">
+                      <FolderPlus className="h-4 w-4 mr-1" />
+                      New Folder
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Create New Folder</DialogTitle>
+                      <DialogDescription>
+                        Enter a name for your new folder. You can use forward slashes for nested folders (e.g., "Projects/Work").
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <div className="grid gap-2">
+                        <label htmlFor="folder-name" className="text-sm font-medium">Folder Name</label>
+                        <Input
+                          id="folder-name"
+                          placeholder="my-folder"
+                          value={newFolderName}
+                          onChange={(e) => setNewFolderName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleCreateFolder();
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => setIsNewFolderDialogOpen(false)}
+                        disabled={isCreatingFolder}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={handleCreateFolder}
+                        disabled={!newFolderName.trim() || isCreatingFolder}
+                      >
+                        {isCreatingFolder ? 'Creating...' : 'Create Folder'}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
                 <SearchBar onSelectNote={handleSelectNote} />
                 <Separator />
               </div>
               <div className="flex-1 overflow-hidden">
                 {isLoadingNotes ? (
-                  <div className="p-4 text-center text-sm text-muted-foreground">
-                    Loading notes...
-                  </div>
+                  <DirectoryTreeSkeleton />
                 ) : (
                   <DirectoryTree
                     notes={notes}
                     selectedPath={selectedPath || undefined}
                     onSelectNote={handleSelectNote}
+                    onMoveNote={handleMoveNoteToFolder}
                   />
                 )}
               </div>
@@ -350,9 +530,7 @@ export function MainApp() {
               )}
 
               {isLoadingNote ? (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-muted-foreground">Loading note...</div>
-                </div>
+                <NoteViewerSkeleton />
               ) : currentNote ? (
                 isEditMode ? (
                   <NoteEditor
@@ -387,7 +565,7 @@ export function MainApp() {
       </div>
 
       {/* Footer with Index Health */}
-      <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
+      <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground animate-fade-in" style={{ animationDelay: '0.2s' }}>
         <div className="flex items-center justify-between">
           <div>
             {indexHealth ? (
