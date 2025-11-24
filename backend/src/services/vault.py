@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 import re
+import time
 from typing import Any, Dict, List, Tuple
 
 import frontmatter
 
 from .config import AppConfig, get_config
+
+logger = logging.getLogger(__name__)
 
 INVALID_PATH_CHARS = {'<', '>', ':', '"', '|', '?', '*'}
 MAX_NOTE_BYTES = 1_048_576
@@ -115,13 +119,33 @@ class VaultService:
 
     def read_note(self, user_id: str, note_path: str) -> VaultNote:
         """Read a Markdown note, returning metadata, body, and derived title."""
+        start_time = time.time()
+        
         base = self.initialize_vault(user_id)
         absolute_path = self.resolve_note_path(user_id, note_path)
         if not absolute_path.exists():
+            logger.warning(
+                "Note not found",
+                extra={"user_id": user_id, "note_path": note_path, "operation": "read"}
+            )
             raise FileNotFoundError(f"Note not found: {note_path}")
+        
         post = frontmatter.load(absolute_path)
         metadata = dict(post.metadata or {})
         body = post.content or ""
+        
+        duration_ms = (time.time() - start_time) * 1000
+        logger.info(
+            "Note read successfully",
+            extra={
+                "user_id": user_id,
+                "note_path": note_path,
+                "operation": "read",
+                "duration_ms": f"{duration_ms:.2f}",
+                "size_bytes": absolute_path.stat().st_size
+            }
+        )
+        
         return self._build_note_payload(note_path, metadata, body, absolute_path)
 
     def write_note(
@@ -134,6 +158,8 @@ class VaultService:
         body: str,
     ) -> VaultNote:
         """Create or update a note with validated metadata and content."""
+        start_time = time.time()
+        
         absolute_path = self.resolve_note_path(user_id, note_path)
         body = body or ""
         _validate_note_body(body)
@@ -141,8 +167,9 @@ class VaultService:
         metadata_dict: Dict[str, Any] = dict(metadata or {})
         _validate_frontmatter(metadata_dict)
 
+        is_new_note = not absolute_path.exists()
         existing_created: str | None = None
-        if absolute_path.exists():
+        if not is_new_note:
             try:
                 current = frontmatter.load(absolute_path)
                 current_created = current.metadata.get("created")
@@ -163,15 +190,93 @@ class VaultService:
         absolute_path.parent.mkdir(parents=True, exist_ok=True)
         post = frontmatter.Post(body, **metadata_dict)
         absolute_path.write_text(frontmatter.dumps(post), encoding="utf-8")
+        
+        duration_ms = (time.time() - start_time) * 1000
+        logger.info(
+            f"Note {'created' if is_new_note else 'updated'} successfully",
+            extra={
+                "user_id": user_id,
+                "note_path": note_path,
+                "operation": "create" if is_new_note else "update",
+                "duration_ms": f"{duration_ms:.2f}",
+                "size_bytes": len(frontmatter.dumps(post).encode("utf-8"))
+            }
+        )
+        
         return self._build_note_payload(note_path, metadata_dict, body, absolute_path)
 
     def delete_note(self, user_id: str, note_path: str) -> None:
         """Delete a note from the vault."""
+        start_time = time.time()
+
         absolute_path = self.resolve_note_path(user_id, note_path)
         try:
             absolute_path.unlink()
+
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                "Note deleted successfully",
+                extra={
+                    "user_id": user_id,
+                    "note_path": note_path,
+                    "operation": "delete",
+                    "duration_ms": f"{duration_ms:.2f}"
+                }
+            )
         except FileNotFoundError as exc:
+            logger.warning(
+                "Note not found for deletion",
+                extra={"user_id": user_id, "note_path": note_path, "operation": "delete"}
+            )
             raise FileNotFoundError(f"Note not found: {note_path}") from exc
+
+    def move_note(self, user_id: str, old_path: str, new_path: str) -> VaultNote:
+        """Move or rename a note to a new path."""
+        start_time = time.time()
+
+        # Validate both paths
+        is_valid_old, msg_old = validate_note_path(old_path)
+        if not is_valid_old:
+            raise ValueError(f"Invalid source path: {msg_old}")
+
+        is_valid_new, msg_new = validate_note_path(new_path)
+        if not is_valid_new:
+            raise ValueError(f"Invalid destination path: {msg_new}")
+
+        # Resolve absolute paths
+        old_absolute = self.resolve_note_path(user_id, old_path)
+        new_absolute = self.resolve_note_path(user_id, new_path)
+
+        # Check if source exists
+        if not old_absolute.exists():
+            raise FileNotFoundError(f"Source note not found: {old_path}")
+
+        # Check if destination already exists
+        if new_absolute.exists():
+            raise FileExistsError(f"Destination note already exists: {new_path}")
+
+        # Create destination directory if needed
+        new_absolute.parent.mkdir(parents=True, exist_ok=True)
+
+        # Move the file
+        old_absolute.rename(new_absolute)
+
+        # Read and return the note from new location
+        note = self.read_note(user_id, new_path)
+
+        duration_ms = (time.time() - start_time) * 1000
+        logger.info(
+            "Note moved successfully",
+            extra={
+                "user_id": user_id,
+                "old_path": old_path,
+                "new_path": new_path,
+                "operation": "move",
+                "duration_ms": f"{duration_ms:.2f}"
+            }
+        )
+
+        return note
 
     def list_notes(self, user_id: str, folder: str | None = None) -> List[Dict[str, Any]]:
         """List notes (optionally scoped to a folder) with titles and timestamps."""

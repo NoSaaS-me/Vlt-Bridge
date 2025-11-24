@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 from pathlib import Path
 import re
 import sqlite3
+import time
 from typing import Any, Dict, List, Sequence
 
 from .database import DatabaseService
 from .vault import VaultNote
 
+logger = logging.getLogger(__name__)
+
 WIKILINK_PATTERN = re.compile(r"\[\[([^\]]+)\]\]")
+TOKEN_PATTERN = re.compile(r"[0-9A-Za-z]+(?:\*)?")
 
 
 def _utcnow_iso() -> str:
@@ -35,6 +40,30 @@ def normalize_tag(tag: str | None) -> str:
     return tag.strip().lower()
 
 
+def _prepare_match_query(query: str) -> str:
+    """
+    Sanitize user-supplied query text for FTS5 MATCH usage.
+
+    - Extracts tokens comprised of alphanumeric characters (per spec: split on non-alphanum).
+    - Preserves a single trailing '*' to allow prefix searches.
+    - Wraps each token in double quotes to neutralize MATCH operators.
+    """
+    sanitized_terms: List[str] = []
+
+    for match in TOKEN_PATTERN.finditer(query or ""):
+        token = match.group()
+        has_prefix_star = token.endswith("*")
+        core = token[:-1] if has_prefix_star else token
+        if not core:
+            continue
+        sanitized_terms.append(f'"{core}"{"*" if has_prefix_star else ""}')
+
+    if not sanitized_terms:
+        raise ValueError("Search query must contain alphanumeric characters")
+
+    return " ".join(sanitized_terms)
+
+
 class IndexerService:
     """Manage SQLite-backed metadata, tags, search index, and link graph."""
 
@@ -43,6 +72,8 @@ class IndexerService:
 
     def index_note(self, user_id: str, note: VaultNote) -> int:
         """Insert or update index rows for a note."""
+        start_time = time.time()
+        
         note_path = note["path"]
         metadata = dict(note.get("metadata") or {})
         title = note.get("title") or metadata.get("title") or Path(note_path).stem
@@ -123,6 +154,19 @@ class IndexerService:
                     )
 
                 self.update_index_health(conn, user_id)
+
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                "Note indexed successfully",
+                extra={
+                    "user_id": user_id,
+                    "note_path": note_path,
+                    "version": version,
+                    "tags_count": len(tags),
+                    "wikilinks_count": len(wikilinks),
+                    "duration_ms": f"{duration_ms:.2f}"
+                }
+            )
 
             return version
         finally:
@@ -241,6 +285,8 @@ class IndexerService:
         if not query or not query.strip():
             raise ValueError("Search query cannot be empty")
 
+        sanitized_query = _prepare_match_query(query)
+
         conn = self.db_service.connect()
         try:
             rows = conn.execute(
@@ -257,7 +303,7 @@ class IndexerService:
                 ORDER BY score DESC
                 LIMIT ?
                 """,
-                (user_id, query, limit),
+                (user_id, sanitized_query, limit),
             ).fetchall()
         finally:
             conn.close()

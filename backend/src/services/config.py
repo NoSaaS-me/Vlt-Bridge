@@ -18,7 +18,10 @@ class AppConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    jwt_secret_key: str = Field(..., min_length=16, description="HMAC secret for JWT signing")
+    jwt_secret_key: Optional[str] = Field(
+        default=None,
+        description="HMAC secret for JWT signing (required for JWT/HTTP auth)",
+    )
     vault_base_path: Path = Field(..., description="Base directory for per-user vaults")
     hf_oauth_client_id: Optional[str] = Field(
         None, description="Hugging Face OAuth client ID (optional)"
@@ -38,12 +41,19 @@ class AppConfig(BaseModel):
             path = Path(value)
         return path.expanduser().resolve()
 
-    @field_validator("jwt_secret_key")
+    @field_validator("jwt_secret_key", mode="before")
     @classmethod
-    def _ensure_secret(cls, value: str) -> str:
-        if not value or not value.strip():
-            raise ValueError("JWT_SECRET_KEY is required")
-        return value.strip()
+    def _ensure_secret(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(
+                "JWT_SECRET_KEY cannot be empty; unset the variable to disable JWT auth in local mode"
+            )
+        if len(cleaned) < 16:
+            raise ValueError("JWT_SECRET_KEY must be at least 16 characters")
+        return cleaned
 
 
 def _read_env(key: str, default: Optional[str] = None) -> Optional[str]:

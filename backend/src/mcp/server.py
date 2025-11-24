@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from fastmcp import FastMCP
 from pydantic import Field
 
 from ..services import IndexerService, VaultNote, VaultService
+
+logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
     "obsidian-docs-viewer",
@@ -47,8 +51,23 @@ def list_notes(
         description="Optional relative folder (trim '/' ; no '..' or '\\').",
     ),
 ) -> List[Dict[str, Any]]:
+    start_time = time.time()
     user_id = _current_user_id()
+    
     notes = vault_service.list_notes(user_id, folder=folder)
+    
+    duration_ms = (time.time() - start_time) * 1000
+    logger.info(
+        "MCP tool called",
+        extra={
+            "tool_name": "list_notes",
+            "user_id": user_id,
+            "folder": folder or "(root)",
+            "result_count": len(notes),
+            "duration_ms": f"{duration_ms:.2f}"
+        }
+    )
+    
     return [
         {
             "path": entry["path"],
@@ -63,8 +82,22 @@ def list_notes(
 def read_note(
     path: str = Field(..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."),
 ) -> Dict[str, Any]:
+    start_time = time.time()
     user_id = _current_user_id()
+    
     note = vault_service.read_note(user_id, path)
+    
+    duration_ms = (time.time() - start_time) * 1000
+    logger.info(
+        "MCP tool called",
+        extra={
+            "tool_name": "read_note",
+            "user_id": user_id,
+            "note_path": path,
+            "duration_ms": f"{duration_ms:.2f}"
+        }
+    )
+    
     return _note_to_response(note)
 
 
@@ -84,7 +117,9 @@ def write_note(
         description="Optional frontmatter dict (tags arrays of strings; 'version' reserved).",
     ),
 ) -> Dict[str, Any]:
+    start_time = time.time()
     user_id = _current_user_id()
+    
     note = vault_service.write_note(
         user_id,
         path,
@@ -93,6 +128,18 @@ def write_note(
         body=body,
     )
     indexer_service.index_note(user_id, note)
+    
+    duration_ms = (time.time() - start_time) * 1000
+    logger.info(
+        "MCP tool called",
+        extra={
+            "tool_name": "write_note",
+            "user_id": user_id,
+            "note_path": path,
+            "duration_ms": f"{duration_ms:.2f}"
+        }
+    )
+    
     return {"status": "ok", "path": path}
 
 
@@ -100,9 +147,23 @@ def write_note(
 def delete_note(
     path: str = Field(..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."),
 ) -> Dict[str, str]:
+    start_time = time.time()
     user_id = _current_user_id()
+    
     vault_service.delete_note(user_id, path)
     indexer_service.delete_note_index(user_id, path)
+    
+    duration_ms = (time.time() - start_time) * 1000
+    logger.info(
+        "MCP tool called",
+        extra={
+            "tool_name": "delete_note",
+            "user_id": user_id,
+            "note_path": path,
+            "duration_ms": f"{duration_ms:.2f}"
+        }
+    )
+    
     return {"status": "ok"}
 
 
@@ -114,8 +175,24 @@ def search_notes(
     query: str = Field(..., description="Non-empty search query (bm25 + recency)."),
     limit: int = Field(50, ge=1, le=100, description="Result cap between 1 and 100."),
 ) -> List[Dict[str, Any]]:
+    start_time = time.time()
     user_id = _current_user_id()
+    
     results = indexer_service.search_notes(user_id, query, limit=limit)
+    
+    duration_ms = (time.time() - start_time) * 1000
+    logger.info(
+        "MCP tool called",
+        extra={
+            "tool_name": "search_notes",
+            "user_id": user_id,
+            "query": query,
+            "limit": limit,
+            "result_count": len(results),
+            "duration_ms": f"{duration_ms:.2f}"
+        }
+    )
+    
     return [
         {
             "path": row["path"],

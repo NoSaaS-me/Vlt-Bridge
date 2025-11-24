@@ -35,7 +35,6 @@ DDL_STATEMENTS: tuple[str, ...] = (
         note_path UNINDEXED,
         title,
         body,
-        content='',
         tokenize='porter unicode61',
         prefix='2 3'
     )

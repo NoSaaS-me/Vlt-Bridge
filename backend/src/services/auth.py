@@ -44,6 +44,16 @@ class AuthService:
         self.algorithm = algorithm
         self.token_ttl_days = token_ttl_days
 
+    def _require_secret(self) -> str:
+        secret = self.config.jwt_secret_key
+        if not secret:
+            raise AuthError(
+                "missing_jwt_secret",
+                "JWT secret is not configured; set JWT_SECRET_KEY to enable authentication features",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return secret
+
     def _build_payload(
         self, user_id: str, expires_in: Optional[timedelta] = None
     ) -> JWTPayload:
@@ -60,7 +70,7 @@ class AuthService:
         payload = self._build_payload(user_id, expires_in)
         return jwt.encode(
             payload.model_dump(),
-            self.config.jwt_secret_key,
+            self._require_secret(),
             algorithm=self.algorithm,
         )
 
@@ -69,7 +79,7 @@ class AuthService:
         try:
             decoded = jwt.decode(
                 token,
-                self.config.jwt_secret_key,
+                self._require_secret(),
                 algorithms=[self.algorithm],
             )
             return JWTPayload(**decoded)
@@ -85,7 +95,7 @@ class AuthService:
         payload = self._build_payload(user_id, expires_in)
         token = jwt.encode(
             payload.model_dump(),
-            self.config.jwt_secret_key,
+            self._require_secret(),
             algorithm=self.algorithm,
         )
         expires_at = datetime.fromtimestamp(payload.exp, tz=timezone.utc)

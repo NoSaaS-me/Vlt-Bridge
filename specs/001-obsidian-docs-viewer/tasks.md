@@ -109,31 +109,31 @@ The MVP delivers immediate value:
 
 **Goal**: Web UI for browsing, searching, and reading notes with wikilinks and backlinks.
 
-- [ ] [T060] [US2] Create backend/src/api/routes/notes.py with GET /api/notes endpoint: call VaultService.list_notes, return NoteSummary[] from http-api.yaml
-- [ ] [T061] [US2] Create backend/src/api/routes/notes.py with GET /api/notes/{path} endpoint: URL-decode path, call VaultService.read_note, return Note from http-api.yaml
-- [ ] [T062] [US2] Create backend/src/api/routes/search.py with GET /api/search endpoint: call IndexerService search with query param, return SearchResult[] from http-api.yaml
-- [ ] [T063] [US2] Create backend/src/api/routes/search.py with GET /api/backlinks/{path} endpoint: URL-decode path, query note_links, return BacklinkResult[] from http-api.yaml
-- [ ] [T064] [US2] Create backend/src/api/routes/search.py with GET /api/tags endpoint: query note_tags, return Tag[] from http-api.yaml
-- [ ] [T065] [US2] Create backend/src/api/main.py FastAPI app with CORS middleware, mount routes, include error handlers
-- [ ] [T066] [US2] Create frontend/src/services/api.ts API client with fetch wrapper: add Authorization: Bearer header, handle JSON responses, throw APIError on non-200
-- [ ] [T067] [US2] Create frontend/src/services/api.ts listNotes function: GET /api/notes?folder=, return NoteSummary[]
-- [ ] [T068] [US2] Create frontend/src/services/api.ts getNote function: GET /api/notes/{encodeURIComponent(path)}, return Note
-- [ ] [T069] [US2] Create frontend/src/services/api.ts searchNotes function: GET /api/search?q=, return SearchResult[]
-- [ ] [T070] [US2] Create frontend/src/services/api.ts getBacklinks function: GET /api/backlinks/{encodeURIComponent(path)}, return BacklinkResult[]
-- [ ] [T071] [US2] Create frontend/src/services/api.ts getTags function: GET /api/tags, return Tag[]
-- [ ] [T072] [US2] Create frontend/src/lib/wikilink.ts with extractWikilinks function: regex /\[\[([^\]]+)\]\]/g
-- [ ] [T073] [US2] Create frontend/src/lib/wikilink.ts with normalizeSlug function: lowercase, replace spaces/underscores with dash, strip non-alphanumeric
-- [ ] [T074] [US2] Create frontend/src/lib/markdown.ts with react-markdown config: code highlighting, wikilink custom renderer
-- [ ] [T075] [US2] Initialize shadcn/ui in frontend/: run npx shadcn-ui@latest init, select default theme
-- [ ] [T076] [US2] Install shadcn/ui components: ScrollArea, Button, Input, Card, Badge
-- [ ] [T077] [US2] Create frontend/src/components/DirectoryTree.tsx: recursive tree view with collapsible folders, leaf items for notes, onClick handler to load note
-- [ ] [T078] [US2] Create frontend/src/components/NoteViewer.tsx: render note title, metadata (tags as badges, timestamps), react-markdown body with wikilink links, backlinks section in footer
-- [ ] [T079] [US2] Create frontend/src/components/SearchBar.tsx: Input with debounced onChange (300ms), dropdown results with onClick to navigate to note
-- [ ] [T080] [US2] Create frontend/src/pages/App.tsx: two-pane layout (left: DirectoryTree + SearchBar in ScrollArea, right: NoteViewer), state management for selected note path
-- [ ] [T081] [US2] Add wikilink click handler in NoteViewer: onClick [[link]] → normalizeSlug → API lookup → navigate to resolved note
-- [ ] [T082] [US2] Add broken wikilink styling in NoteViewer: render unresolved [[links]] with distinct color/style
-- [ ] [T083] [US2] Create frontend/src/pages/App.tsx useEffect to load directory tree on mount: call listNotes()
-- [ ] [T084] [US2] Create frontend/src/pages/App.tsx useEffect to load note when path changes: call getNote(path) and getBacklinks(path)
+- [x] [T060] [US2] Create backend/src/api/routes/notes.py with GET /api/notes endpoint: call VaultService.list_notes, return NoteSummary[] from http-api.yaml
+- [x] [T061] [US2] Create backend/src/api/routes/notes.py with GET /api/notes/{path} endpoint: URL-decode path, call VaultService.read_note, return Note from http-api.yaml
+- [x] [T062] [US2] Create backend/src/api/routes/search.py with GET /api/search endpoint: call IndexerService search with query param, return SearchResult[] from http-api.yaml
+- [x] [T063] [US2] Create backend/src/api/routes/search.py with GET /api/backlinks/{path} endpoint: URL-decode path, query note_links, return BacklinkResult[] from http-api.yaml
+- [x] [T064] [US2] Create backend/src/api/routes/search.py with GET /api/tags endpoint: query note_tags, return Tag[] from http-api.yaml
+- [x] [T065] [US2] Create backend/src/api/main.py FastAPI app with CORS middleware, mount routes, include error handlers
+- [x] [T066] [US2] Create frontend/src/services/api.ts API client with fetch wrapper: add Authorization: Bearer header, handle JSON responses, throw APIError on non-200
+- [x] [T067] [US2] Create frontend/src/services/api.ts listNotes function: GET /api/notes?folder=, return NoteSummary[]
+- [x] [T068] [US2] Create frontend/src/services/api.ts getNote function: GET /api/notes/{encodeURIComponent(path)}, return Note
+- [x] [T069] [US2] Create frontend/src/services/api.ts searchNotes function: GET /api/search?q=, return SearchResult[]
+- [x] [T070] [US2] Create frontend/src/services/api.ts getBacklinks function: GET /api/backlinks/{encodeURIComponent(path)}, return BacklinkResult[]
+- [x] [T071] [US2] Create frontend/src/services/api.ts getTags function: GET /api/tags, return Tag[]
+- [x] [T072] [US2] Create frontend/src/lib/wikilink.ts with extractWikilinks function: regex /\[\[([^\]]+)\]\]/g
+- [x] [T073] [US2] Create frontend/src/lib/wikilink.ts with normalizeSlug function: lowercase, replace spaces/underscores with dash, strip non-alphanumeric
+- [x] [T074] [US2] Create frontend/src/lib/markdown.tsx with react-markdown config: code highlighting, wikilink custom renderer
+- [x] [T075] [US2] Initialize shadcn/ui in frontend/: run npx shadcn@latest init, select default theme
+- [x] [T076] [US2] Install shadcn/ui components: ScrollArea, Button, Input, Card, Badge, Resizable, Collapsible, Dialog, Alert, Textarea, Dropdown-Menu, Avatar, Command, Tooltip, Popover
+- [x] [T077] [US2] Create frontend/src/components/DirectoryTree.tsx: recursive tree view with collapsible folders, leaf items for notes, onClick handler to load note
+- [x] [T078] [US2] Create frontend/src/components/NoteViewer.tsx: render note title, metadata (tags as badges, timestamps), react-markdown body with wikilink links, backlinks section in footer
+- [x] [T079] [US2] Create frontend/src/components/SearchBar.tsx: Input with debounced onChange (300ms), dropdown results with onClick to navigate to note
+- [x] [T080] [US2] Create frontend/src/pages/MainApp.tsx: two-pane layout (left: DirectoryTree + SearchBar in ScrollArea, right: NoteViewer), state management for selected note path
+- [x] [T081] [US2] Add wikilink click handler in NoteViewer: onClick [[link]] → normalizeSlug → API lookup → navigate to resolved note
+- [x] [T082] [US2] Add broken wikilink styling in NoteViewer: render unresolved [[links]] with distinct color/style
+- [x] [T083] [US2] Create frontend/src/pages/MainApp.tsx useEffect to load directory tree on mount: call listNotes()
+- [x] [T084] [US2] Create frontend/src/pages/MainApp.tsx useEffect to load note when path changes: call getNote(path) and getBacklinks(path)
 
 ---
 
@@ -141,16 +141,16 @@ The MVP delivers immediate value:
 
 **Goal**: Split-pane editor with optimistic concurrency protection.
 
-- [ ] [T085] [US3] Create backend/src/api/routes/notes.py with PUT /api/notes/{path} endpoint: URL-decode path, validate request body (NoteUpdate), check if_version, call VaultService.write_note, return NoteResponse from http-api.yaml
-- [ ] [T086] [US3] Add optimistic concurrency check in IndexerService.increment_version: if if_version provided and != current version, raise ConflictError
-- [ ] [T087] [US3] Create ConflictError exception in backend/src/models/errors.py, map to 409 Conflict in error_handlers.py
-- [ ] [T088] [US3] Create frontend/src/services/api.ts updateNote function: PUT /api/notes/{encodeURIComponent(path)} with {title?, metadata?, body, if_version?}, handle 409 response
-- [ ] [T089] [US3] Create frontend/src/components/NoteEditor.tsx: split-pane layout (left: textarea for markdown source, right: live preview with react-markdown)
-- [ ] [T090] [US3] Create frontend/src/components/NoteEditor.tsx with Save button: onClick → call updateNote with if_version from initial note load, handle success → switch to read mode
-- [ ] [T091] [US3] Create frontend/src/components/NoteEditor.tsx with Cancel button: onClick → discard changes, switch to read mode
-- [ ] [T092] [US3] Add 409 Conflict error handling in NoteEditor: display alert "Note changed since you opened it, please reload before saving"
-- [ ] [T093] [US3] Add Edit button to NoteViewer: onClick → switch main pane to NoteEditor mode, pass current note version
-- [ ] [T094] [US3] Update frontend/src/pages/App.tsx to toggle between NoteViewer and NoteEditor based on edit mode state
+- [x] [T085] [US3] Create backend/src/api/routes/notes.py with PUT /api/notes/{path} endpoint: URL-decode path, validate request body (NoteUpdate), check if_version, call VaultService.write_note, return NoteResponse from http-api.yaml
+- [x] [T086] [US3] Add optimistic concurrency check in IndexerService.increment_version: if if_version provided and != current version, raise ConflictError
+- [x] [T087] [US3] Create ConflictError exception in backend/src/models/errors.py, map to 409 Conflict in error_handlers.py
+- [x] [T088] [US3] Create frontend/src/services/api.ts updateNote function: PUT /api/notes/{encodeURIComponent(path)} with {title?, metadata?, body, if_version?}, handle 409 response
+- [x] [T089] [US3] Create frontend/src/components/NoteEditor.tsx: split-pane layout (left: textarea for markdown source, right: live preview with react-markdown)
+- [x] [T090] [US3] Create frontend/src/components/NoteEditor.tsx with Save button: onClick → call updateNote with if_version from initial note load, handle success → switch to read mode
+- [x] [T091] [US3] Create frontend/src/components/NoteEditor.tsx with Cancel button: onClick → discard changes, switch to read mode
+- [x] [T092] [US3] Add 409 Conflict error handling in NoteEditor: display alert "Note changed since you opened it, please reload before saving"
+- [x] [T093] [US3] Add Edit button to NoteViewer: onClick → switch main pane to NoteEditor mode, pass current note version
+- [x] [T094] [US3] Update frontend/src/pages/MainApp.tsx to toggle between NoteViewer and NoteEditor based on edit mode state
 
 ---
 
@@ -168,13 +168,13 @@ The MVP delivers immediate value:
 - [ ] [T102] [US4] Update backend/src/services/indexer.py to scope all queries by user_id: WHERE user_id = ?
 - [ ] [T103] [US4] Initialize vault and index on first user login: create vault dir, insert initial index_health row
 - [ ] [T104] [US4] Create backend/src/mcp/server.py HTTP transport mode: FastMCP with http transport, BearerAuth validation, extract user_id from JWT
-- [ ] [T105] [US4] Create frontend/src/services/auth.ts with login function: redirect to /auth/login
-- [ ] [T106] [US4] Create frontend/src/services/auth.ts with getCurrentUser function: GET /api/me, return User
-- [ ] [T107] [US4] Create frontend/src/services/auth.ts with getToken function: POST /api/tokens, return TokenResponse, store token in memory
-- [ ] [T108] [US4] Create frontend/src/pages/Login.tsx: "Sign in with Hugging Face" button → onClick call auth.login()
-- [ ] [T109] [US4] Create frontend/src/pages/Settings.tsx: display user profile (user_id, HF avatar), API token with copy button for MCP config
-- [ ] [T110] [US4] Update frontend/src/pages/App.tsx to call getCurrentUser on mount, redirect to Login if 401
-- [ ] [T111] [US4] Update frontend/src/services/api.ts to include token from auth.getToken() in Authorization header
+- [x] [T105] [US4] Create frontend/src/services/auth.ts with login function: redirect to /auth/login
+- [x] [T106] [US4] Create frontend/src/services/auth.ts with getCurrentUser function: GET /api/me, return User
+- [x] [T107] [US4] Create frontend/src/services/auth.ts with getToken function: POST /api/tokens, return TokenResponse, store token in memory
+- [x] [T108] [US4] Create frontend/src/pages/Login.tsx: "Sign in with Hugging Face" button → onClick call auth.login()
+- [x] [T109] [US4] Create frontend/src/pages/Settings.tsx: display user profile (user_id, HF avatar), API token with copy button for MCP config
+- [x] [T110] [US4] Update frontend/src/pages/App.tsx to call getCurrentUser on mount, redirect to Login if 401
+- [x] [T111] [US4] Update frontend/src/services/api.ts to include token from localStorage in Authorization header
 
 ---
 
@@ -182,15 +182,15 @@ The MVP delivers immediate value:
 
 **Goal**: Enhanced search ranking and index health monitoring.
 
-- [ ] [T112] [US5] Update backend/src/services/indexer.py search_notes to calculate recency bonus: +1.0 for updated in last 7 days, +0.5 for last 30 days, 0 otherwise
-- [ ] [T113] [US5] Update backend/src/services/indexer.py search_notes to calculate final score: (3 * title_bm25) + (1 * body_bm25) + recency_bonus
-- [ ] [T114] [US5] Create backend/src/api/routes/index.py with GET /api/index/health endpoint: query index_health, return IndexHealth from http-api.yaml
-- [ ] [T115] [US5] Create backend/src/api/routes/index.py with POST /api/index/rebuild endpoint: call IndexerService.rebuild_index, return RebuildResponse from http-api.yaml
-- [ ] [T116] [US5] Create backend/src/services/indexer.py IndexerService.rebuild_index method: delete all user rows, walk vault, parse all notes, re-insert into all index tables, update index_health
-- [ ] [T117] [US5] Create frontend/src/services/api.ts getIndexHealth function: GET /api/index/health, return IndexHealth
-- [ ] [T118] [US5] Create frontend/src/services/api.ts rebuildIndex function: POST /api/index/rebuild, return RebuildResponse
-- [ ] [T119] [US5] Add index health indicator to frontend/src/pages/App.tsx: display note count and last updated timestamp in footer
-- [ ] [T120] [US5] Add "Rebuild Index" button to frontend/src/pages/Settings.tsx: onClick → call rebuildIndex, show progress/completion message
+- [x] [T112] [US5] Update backend/src/services/indexer.py search_notes to calculate recency bonus: +1.0 for updated in last 7 days, +0.5 for last 30 days, 0 otherwise
+- [x] [T113] [US5] Update backend/src/services/indexer.py search_notes to calculate final score: (3 * title_bm25) + (1 * body_bm25) + recency_bonus
+- [x] [T114] [US5] Create backend/src/api/routes/index.py with GET /api/index/health endpoint: query index_health, return IndexHealth from http-api.yaml
+- [x] [T115] [US5] Create backend/src/api/routes/index.py with POST /api/index/rebuild endpoint: call IndexerService.rebuild_index, return RebuildResponse from http-api.yaml
+- [x] [T116] [US5] Create backend/src/services/indexer.py IndexerService.rebuild_index method: delete all user rows, walk vault, parse all notes, re-insert into all index tables, update index_health
+- [x] [T117] [US5] Create frontend/src/services/api.ts getIndexHealth function: GET /api/index/health, return IndexHealth
+- [x] [T118] [US5] Create frontend/src/services/api.ts rebuildIndex function: POST /api/index/rebuild, return RebuildResponse
+- [x] [T119] [US5] Add index health indicator to frontend/src/pages/MainApp.tsx: display note count and last updated timestamp in footer
+- [x] [T120] [US5] Add "Rebuild Index" button to frontend/src/pages/Settings.tsx: onClick → call rebuildIndex, show progress/completion message
 
 ---
 
@@ -198,20 +198,20 @@ The MVP delivers immediate value:
 
 **Goal**: Documentation, configuration, logging, error handling improvements.
 
-- [ ] [T121] Create README.md with project overview, tech stack, local setup instructions (backend venv + npm install)
-- [ ] [T122] Add README.md section: "Running Backend" with uvicorn command for HTTP API and python -m backend.src.mcp.server for MCP STDIO
-- [ ] [T123] Add README.md section: "Running Frontend" with npm run dev command
-- [ ] [T124] Add README.md section: "MCP Client Configuration" with Claude Code/Desktop STDIO example from mcp-tools.json
+- [x] [T121] Create README.md with project overview, tech stack, local setup instructions (backend venv + npm install)
+- [x] [T122] Add README.md section: "Running Backend" with uvicorn command for HTTP API and python -m backend.src.mcp.server for MCP STDIO
+- [x] [T123] Add README.md section: "Running Frontend" with npm run dev command
+- [x] [T124] Add README.md section: "MCP Client Configuration" with Claude Code/Desktop STDIO example from mcp-tools.json
 - [ ] [T125] Add README.md section: "Deploying to Hugging Face Space" with environment variables and OAuth setup
-- [ ] [T126] Update .env.example with all variables: JWT_SECRET_KEY, VAULT_BASE_PATH, HF_OAUTH_CLIENT_ID, HF_OAUTH_CLIENT_SECRET, DATABASE_PATH
-- [ ] [T127] Add structured logging to backend/src/services/vault.py: log file operations with user_id, note_path, operation type
-- [ ] [T128] Add structured logging to backend/src/services/indexer.py: log index updates with user_id, note_path, duration_ms
-- [ ] [T129] Add structured logging to backend/src/mcp/server.py: log MCP tool calls with tool_name, user_id, duration_ms
-- [ ] [T130] Improve error messages in backend/src/api/middleware/error_handlers.py: include detail objects with field names and reasons
-- [ ] [T131] Add input validation to all HTTP API routes: validate path format, content size, required fields
-- [ ] [T132] Add input validation to all MCP tools: validate path format, content size via Pydantic models
-- [ ] [T133] Add rate limiting consideration to README.md: note potential need for per-user rate limits in production
-- [ ] [T134] Add performance optimization notes to README.md: FTS5 prefix indexes, SQLite WAL mode for concurrency
+- [x] [T126] Update .env.example with all variables: JWT_SECRET_KEY, VAULT_BASE_PATH, HF_OAUTH_CLIENT_ID, HF_OAUTH_CLIENT_SECRET, DATABASE_PATH
+- [x] [T127] Add structured logging to backend/src/services/vault.py: log file operations with user_id, note_path, operation type
+- [x] [T128] Add structured logging to backend/src/services/indexer.py: log index updates with user_id, note_path, duration_ms
+- [x] [T129] Add structured logging to backend/src/mcp/server.py: log MCP tool calls with tool_name, user_id, duration_ms
+- [x] [T130] Improve error messages in backend/src/api/middleware/error_handlers.py: include detail objects with field names and reasons
+- [x] [T131] Add input validation to all HTTP API routes: validate path format, content size, required fields
+- [x] [T132] Add input validation to all MCP tools: validate path format, content size via Pydantic models
+- [x] [T133] Add rate limiting consideration to README.md: note potential need for per-user rate limits in production
+- [x] [T134] Add performance optimization notes to README.md: FTS5 prefix indexes, SQLite WAL mode for concurrency
 
 ---
 

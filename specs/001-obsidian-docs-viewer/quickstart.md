@@ -71,9 +71,9 @@ cp .env.example .env
 MODE=local
 
 # JWT Secret Key
-# IMPORTANT: Generate a secure random string for production
+# Required for HTTP/JWT auth (space mode). Remove this line entirely in local STDIO mode.
 # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
-JWT_SECRET_KEY=your-secret-key-change-in-production
+# JWT_SECRET_KEY=your-secret-key-change-in-production
 
 # Vault Storage
 # Base directory for per-user vault storage
@@ -624,6 +624,8 @@ Claude Code uses a similar configuration. Create or edit `~/.claude/mcp_config.j
   }
 }
 ```
+
+`JWT_SECRET_KEY` is optional for STDIO mode—omit it from the environment when running locally without HTTP authentication.
 
 ### MCP HTTP Transport (Remote Access)
 

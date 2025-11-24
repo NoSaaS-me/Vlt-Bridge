@@ -43,3 +43,7 @@ build/
 # Runtime data
 data/
 
+# Development script artifacts
+.backend.pid
+.frontend.pid
+
