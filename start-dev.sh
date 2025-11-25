@@ -37,12 +37,12 @@ echo -e "${GREEN}Starting backend server...${NC}"
 cd "$BACKEND_DIR"
 JWT_SECRET_KEY="local-dev-secret-key-123" \
 VAULT_BASE_PATH="$PROJECT_ROOT/data/vaults" \
-.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload > "$PROJECT_ROOT/backend.log" 2>&1 &
+.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --reload > "$PROJECT_ROOT/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo $BACKEND_PID > "$BACKEND_PID_FILE"
 echo -e "${GREEN}✓ Backend started (PID: $BACKEND_PID)${NC}"
 echo "  Logs: $PROJECT_ROOT/backend.log"
-echo "  URL: http://localhost:8001"
+echo "  URL: http://localhost:8000"
 
 # Wait a moment for backend to start
 sleep 2
@@ -63,7 +63,7 @@ echo "Development servers are running!"
 echo "=================================================="
 echo -e "${NC}"
 echo "Frontend: http://localhost:5173"
-echo "Backend:  http://localhost:8001"
+echo "Backend:  http://localhost:8000"
 echo ""
 echo "To stop servers, run: ./stop-dev.sh"
 echo "To view logs, run: tail -f backend.log frontend.log"

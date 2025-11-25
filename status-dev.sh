@@ -19,7 +19,7 @@ if [ -f "$BACKEND_PID_FILE" ]; then
     BACKEND_PID=$(cat "$BACKEND_PID_FILE")
     if ps -p $BACKEND_PID > /dev/null 2>&1; then
         echo -e "${GREEN}✓ Backend: RUNNING${NC} (PID: $BACKEND_PID)"
-        echo "  URL: http://localhost:8001"
+        echo "  URL: http://localhost:8000"
     else
         echo -e "${RED}✗ Backend: NOT RUNNING${NC} (stale PID: $BACKEND_PID)"
     fi
