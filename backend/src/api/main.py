@@ -21,7 +21,7 @@ from starlette.responses import Response
 from fastmcp.server.http import StreamableHTTPSessionManager
 from fastapi.responses import FileResponse
 
-from .routes import auth, index, notes, search
+from .routes import auth, index, notes, search, graph
 from ..mcp.server import mcp
 from ..services.seed import init_and_seed
 
@@ -94,6 +94,7 @@ app.include_router(auth.router, tags=["auth"])
 app.include_router(notes.router, tags=["notes"])
 app.include_router(search.router, tags=["search"])
 app.include_router(index.router, tags=["index"])
+app.include_router(graph.router, tags=["graph"])
 
 # Hosted MCP HTTP endpoint (mounted Starlette app)
 

@@ -94,6 +94,12 @@ async function apiFetch<T>(
 /**
  * T066: List all notes with optional folder filtering
  */
+import type { GraphData } from '@/types/graph';
+
+export async function getGraphData(): Promise<GraphData> {
+  return apiFetch<GraphData>('/api/graph');
+}
+
 export async function listNotes(folder?: string): Promise<NoteSummary[]> {
   const params = new URLSearchParams();
   if (folder) {

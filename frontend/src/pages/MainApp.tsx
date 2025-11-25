@@ -13,6 +13,7 @@ import { DirectoryTree } from '@/components/DirectoryTree';
 import { SearchBar } from '@/components/SearchBar';
 import { NoteViewer } from '@/components/NoteViewer';
 import { NoteEditor } from '@/components/NoteEditor';
+import { GraphView } from '@/components/GraphView';
 import {
   listNotes,
   getNote,
@@ -35,6 +36,7 @@ import { Input } from '@/components/ui/input';
 import type { IndexHealth } from '@/types/search';
 import type { Note, NoteSummary } from '@/types/note';
 import { normalizeSlug } from '@/lib/wikilink';
+import { Network } from 'lucide-react';
 
 export function MainApp() {
   const navigate = useNavigate();
@@ -46,6 +48,7 @@ export function MainApp() {
   const [isLoadingNote, setIsLoadingNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [isGraphView, setIsGraphView] = useState(false);
   const [indexHealth, setIndexHealth] = useState<IndexHealth | null>(null);
   const [isNewNoteDialogOpen, setIsNewNoteDialogOpen] = useState(false);
   const [newNoteName, setNewNoteName] = useState('');
@@ -257,6 +260,14 @@ export function MainApp() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+            <Button
+              variant={isGraphView ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setIsGraphView(!isGraphView)}
+              title={isGraphView ? "Switch to Note View" : "Switch to Graph View"}
+            >
+              <Network className="h-4 w-4" />
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
               <SettingsIcon className="h-4 w-4" />
             </Button>
@@ -302,38 +313,45 @@ export function MainApp() {
                   </Alert>
                 </div>
               )}
-
-              {isLoadingNote ? (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-muted-foreground">Loading note...</div>
-                </div>
-              ) : currentNote ? (
-                isEditMode ? (
-                  <NoteEditor
-                    note={currentNote}
-                    onSave={handleNoteSave}
-                    onCancel={handleEditCancel}
-                    onWikilinkClick={handleWikilinkClick}
-                  />
-                ) : (
-                  <NoteViewer
-                    note={currentNote}
-                    backlinks={backlinks}
-                    onEdit={handleEdit}
-                    onWikilinkClick={handleWikilinkClick}
-                  />
-                )
+              
+              {isGraphView ? (
+                <GraphView onSelectNote={(path) => {
+                  handleSelectNote(path);
+                  setIsGraphView(false);
+                }} />
               ) : (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center text-muted-foreground">
-                    <p className="text-lg mb-2">Select a note to view</p>
-                    <p className="text-sm">
-                      {notes.length === 0
-                        ? 'No notes available. Create your first note to get started.'
-                        : 'Choose a note from the sidebar'}
-                    </p>
+                isLoadingNote ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-muted-foreground">Loading note...</div>
                   </div>
-                </div>
+                ) : currentNote ? (
+                  isEditMode ? (
+                    <NoteEditor
+                      note={currentNote}
+                      onSave={handleNoteSave}
+                      onCancel={handleEditCancel}
+                      onWikilinkClick={handleWikilinkClick}
+                    />
+                  ) : (
+                    <NoteViewer
+                      note={currentNote}
+                      backlinks={backlinks}
+                      onEdit={handleEdit}
+                      onWikilinkClick={handleWikilinkClick}
+                    />
+                  )
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center text-muted-foreground">
+                      <p className="text-lg mb-2">Select a note to view</p>
+                      <p className="text-sm">
+                        {notes.length === 0
+                          ? 'No notes available. Create your first note to get started.'
+                          : 'Choose a note from the sidebar'}
+                      </p>
+                    </div>
+                  </div>
+                )
               )}
             </div>
           </ResizablePanel>
