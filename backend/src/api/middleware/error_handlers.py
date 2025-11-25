@@ -18,7 +18,7 @@ DEFAULT_ERRORS: Dict[int, Tuple[str, str]] = {
     status.HTTP_403_FORBIDDEN: ("forbidden", "Forbidden"),
     status.HTTP_404_NOT_FOUND: ("not_found", "Resource not found"),
     status.HTTP_409_CONFLICT: ("version_conflict", "Resource version conflict"),
-    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: (
+    status.HTTP_413_CONTENT_TOO_LARGE: (
         "payload_too_large",
         "Payload exceeds allowed size",
     ),

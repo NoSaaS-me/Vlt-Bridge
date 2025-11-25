@@ -384,7 +384,7 @@ export function MainApp() {
       {/* Demo warning banner */}
       <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
         <AlertDescription className="text-center">
-          ⚠️ DEMO ONLY – ALL DATA IS TEMPORARY AND MAY BE DELETED AT ANY TIME
+          DEMO ONLY - ALL DATA IS TEMPORARY AND MAY BE DELETED AT ANY TIME
         </AlertDescription>
       </Alert>
       
@@ -395,6 +395,53 @@ export function MainApp() {
           <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
             <SettingsIcon className="h-4 w-4" />
           </Button>
+=======
+          <h1 className="text-xl font-semibold">Document Viewer</h1>
+          <div className="flex gap-2">
+            <Dialog open={isNewNoteDialogOpen} onOpenChange={setIsNewNoteDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Note
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Create New Note</DialogTitle>
+                  <DialogDescription>
+                    Enter a name for your new note. The .md extension will be added automatically if not provided.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <label htmlFor="note-name" className="text-sm font-medium">Note Name</label>
+                    <Input
+                      id="note-name"
+                      placeholder="my-note"
+                      value={newNoteName}
+                      onChange={(e) => setNewNoteName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleCreateNote();
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsNewNoteDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleCreateNote} disabled={!newNoteName.trim()}>
+                    Create Note
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
+              <SettingsIcon className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
 

@@ -37,7 +37,7 @@ echo -e "${GREEN}Starting backend server...${NC}"
 cd "$BACKEND_DIR"
 JWT_SECRET_KEY="local-dev-secret-key-123" \
 VAULT_BASE_PATH="$PROJECT_ROOT/data/vaults" \
-.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload > "$PROJECT_ROOT/backend.log" 2>&1 &
+.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --reload > "$PROJECT_ROOT/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo $BACKEND_PID > "$BACKEND_PID_FILE"
 echo -e "${GREEN}✓ Backend started (PID: $BACKEND_PID)${NC}"

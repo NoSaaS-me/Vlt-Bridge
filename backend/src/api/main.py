@@ -6,14 +6,20 @@ import logging
 from pathlib import Path
 
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.routing import ASGIRoute
+from dotenv import load_dotenv
+
+load_dotenv()  # Add this line at the top, before other imports
+
+# from fastapi.routing import ASGIRoute
 from starlette.responses import Response
 
-from fastmcp.server.streamable_http import StreamableHTTPSessionManager
+from fastmcp.server.http import StreamableHTTPSessionManager
+from fastapi.responses import FileResponse
 
 from .routes import auth, index, notes, search
 from ..mcp.server import mcp
@@ -21,10 +27,24 @@ from ..services.seed import init_and_seed
 
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan handler to run startup tasks."""
+    logger.info("Running startup: initializing database and seeding demo vault...")
+    try:
+        init_and_seed(user_id="demo-user")
+        logger.info("Startup complete: database and demo vault ready")
+    except Exception as exc:
+        logger.exception("Startup failed: %s", exc)
+        logger.error("App starting without demo data due to initialization error")
+    yield
+
+
 app = FastAPI(
     title="Document Viewer API",
     description="Multi-tenant Obsidian-like documentation system",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # CORS middleware
@@ -39,20 +59,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# Startup event: Initialize database and seed demo data
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database schema and seed demo vault on startup."""
-    logger.info("Running startup: initializing database and seeding demo vault...")
-    try:
-        init_and_seed(user_id="demo-user")
-        logger.info("Startup complete: database and demo vault ready")
-    except Exception as e:
-        logger.exception(f"Startup failed: {e}")
-        # Don't crash the app, but log the error
-        logger.error("App starting without demo data due to initialization error")
 
 
 # Error handlers
@@ -141,9 +147,6 @@ async def health():
     return {"status": "healthy"}
 
 
-# Serve frontend static files with SPA support (must be last to not override API routes)
-from fastapi.responses import FileResponse
-
 frontend_dist = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 if frontend_dist.exists():
     # Mount static assets
@@ -156,7 +159,12 @@ if frontend_dist.exists():
     async def serve_spa(full_path: str):
         """Serve the SPA for all non-API routes."""
         # Don't intercept API or auth routes
-        if full_path.startswith(("api/", "auth/", "health", "mcp")):
+        if (
+            full_path.startswith(("api/", "auth/"))
+            or full_path == "health"
+            or full_path.startswith("mcp/")
+            or full_path == "mcp"
+        ):
             # Let FastAPI's 404 handler take over
             raise HTTPException(status_code=404, detail="Not found")
 

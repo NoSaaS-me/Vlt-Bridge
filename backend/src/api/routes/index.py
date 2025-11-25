@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -21,6 +22,7 @@ class RebuildResponse(BaseModel):
 
     status: str
     notes_indexed: int
+    duration_ms: int
 
 
 @router.get("/api/index/health", response_model=IndexHealth)
@@ -75,6 +77,7 @@ async def get_index_health(auth: AuthContext = Depends(get_auth_context)):
 @router.post("/api/index/rebuild", response_model=RebuildResponse)
 async def rebuild_index(auth: AuthContext = Depends(get_auth_context)):
     """Rebuild the entire index from scratch."""
+    start_time = time.time()
     user_id = auth.user_id
     vault_service = VaultService()
     indexer_service = IndexerService()
@@ -126,6 +129,7 @@ async def rebuild_index(auth: AuthContext = Depends(get_auth_context)):
         return RebuildResponse(
             status="completed",
             notes_indexed=indexed_count,
+            duration_ms=int((time.time() - start_time) * 1000),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to rebuild index: {str(e)}")

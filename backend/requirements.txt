@@ -7,3 +7,6 @@ uvicorn
 httpx
 pytest
 pytest-asyncio
+python-dotenv
+requests
+sqlite

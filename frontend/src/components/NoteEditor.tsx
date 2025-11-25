@@ -104,8 +104,8 @@ export function NoteEditor({ note, onSave, onCancel, onWikilinkClick }: NoteEdit
           <div className="flex-1 min-w-0">
             <h2 className="text-xl font-semibold truncate">{note.title}</h2>
             <p className="text-xs text-muted-foreground mt-1">
-              {note.note_path} • Version {note.version}
-              {hasChanges && ' • Unsaved changes'}
+              {note.note_path} | Version {note.version}
+              {hasChanges && ' | Unsaved changes'}
             </p>
           </div>
           <div className="flex gap-2">
@@ -192,7 +192,7 @@ export function NoteEditor({ note, onSave, onCancel, onWikilinkClick }: NoteEdit
       {/* Footer with keyboard shortcuts hint */}
       <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
         <span className="mr-4">
-          💡 Tip: <kbd className="px-1.5 py-0.5 bg-muted rounded">Cmd/Ctrl+S</kbd> to save,{' '}
+          Tip: <kbd className="px-1.5 py-0.5 bg-muted rounded">Cmd/Ctrl+S</kbd> to save,{' '}
           <kbd className="px-1.5 py-0.5 bg-muted rounded">Esc</kbd> to cancel
         </span>
       </div>

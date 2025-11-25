@@ -114,7 +114,7 @@ Start the HTTP API server:
 cd backend
 JWT_SECRET_KEY="local-dev-secret-key-123" \
 VAULT_BASE_PATH="$(pwd)/../data/vaults" \
-.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Backend will be available at: `http://localhost:8000`

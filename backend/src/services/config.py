@@ -22,6 +22,14 @@ class AppConfig(BaseModel):
         default=None,
         description="HMAC secret for JWT signing (required for JWT/HTTP auth)",
     )
+    enable_local_mode: bool = Field(
+        default=True,
+        description="Allow local-dev token bypass when running locally",
+    )
+    local_dev_token: Optional[str] = Field(
+        default="local-dev-token",
+        description="Static token accepted in local mode for development",
+    )
     vault_base_path: Path = Field(..., description="Base directory for per-user vaults")
     hf_oauth_client_id: Optional[str] = Field(
         None, description="Hugging Face OAuth client ID (optional)"
@@ -72,9 +80,17 @@ def get_config() -> AppConfig:
     hf_client_id = _read_env("HF_OAUTH_CLIENT_ID")
     hf_client_secret = _read_env("HF_OAUTH_CLIENT_SECRET")
     hf_space_url = _read_env("HF_SPACE_URL", "http://localhost:5173")
+    enable_local_mode = _read_env("ENABLE_LOCAL_MODE", "true").lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    local_dev_token = _read_env("LOCAL_DEV_TOKEN", "local-dev-token")
 
     config = AppConfig(
         jwt_secret_key=jwt_secret,
+        enable_local_mode=enable_local_mode,
+        local_dev_token=local_dev_token,
         vault_base_path=vault_base,
         hf_oauth_client_id=hf_client_id,
         hf_oauth_client_secret=hf_client_secret,

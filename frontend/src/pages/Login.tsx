@@ -60,7 +60,7 @@ export function Login() {
             size="lg"
             onClick={handleLocalDev}
           >
-            🔧 Continue as Local Dev
+            Continue as Local Dev
           </Button>
 
           <p className="text-xs text-center text-muted-foreground mt-6">

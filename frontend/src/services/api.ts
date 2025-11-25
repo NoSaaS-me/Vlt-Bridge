@@ -11,11 +11,16 @@ export class APIException extends Error {
   error: string;
   detail?: Record<string, unknown>;
 
-  constructor(status: number, error: string, detail?: Record<string, unknown>) {
-    super(error);
+  constructor(
+    status: number,
+    message: string,
+    errorCode?: string,
+    detail?: Record<string, unknown>
+  ) {
+    super(message);
     this.name = 'APIException';
     this.status = status;
-    this.error = error;
+    this.error = errorCode || message;
     this.detail = detail;
   }
 }
@@ -73,11 +78,9 @@ async function apiFetch<T>(
         message: `HTTP ${response.status}: ${response.statusText}`,
       };
     }
-    throw new APIException(
-      response.status,
-      errorData.message,
-      errorData.detail
-    );
+    const message = errorData.message || `HTTP ${response.status}`;
+    const code = errorData.error || message;
+    throw new APIException(response.status, message, code, errorData.detail);
   }
 
   // Handle 204 No Content

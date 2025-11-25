@@ -129,7 +129,8 @@ export function NoteViewer({
                       className="block text-left text-primary hover:underline"
                       onClick={() => onWikilinkClick(backlink.title)}
                     >
-                      • {backlink.title}
+                      {'-> '}
+                      {backlink.title}
                     </button>
                   ))}
                 </div>
@@ -145,7 +146,7 @@ export function NoteViewer({
           )}
 
           <div className="text-xs text-muted-foreground">
-            Version: {note.version} • Size: {(note.size_bytes / 1024).toFixed(1)} KB
+            Version: {note.version} | Size: {(note.size_bytes / 1024).toFixed(1)} KB
           </div>
         </div>
       </ScrollArea>

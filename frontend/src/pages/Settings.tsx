@@ -241,7 +241,7 @@ export function Settings() {
 }`}
               </pre>
               <p className="text-xs text-muted-foreground mt-2">
-                💡 Replace <code className="bg-muted px-1 rounded">/absolute/path/to/Document-MCP</code> with your local checkout path
+                Replace <code className="bg-muted px-1 rounded">/absolute/path/to/Document-MCP</code> with your local checkout path
               </p>
             </div>
           </CardContent>
@@ -265,6 +265,28 @@ export function Settings() {
                 <div>
                   <div className="text-sm text-muted-foreground">Last Updated</div>
                   <div className="text-sm">{formatDate(indexHealth.last_incremental_update)}</div>
+=======
+
+                {rebuildResult && (
+                  <Alert>
+                    <AlertDescription>
+                      Index rebuilt successfully! Indexed {rebuildResult.notes_indexed} notes in {rebuildResult.duration_ms}ms
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <Button 
+                  onClick={handleRebuildIndex}
+                  disabled={isRebuilding}
+                  variant="outline"
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${isRebuilding ? 'animate-spin' : ''}`} />
+                  {isRebuilding ? 'Rebuilding...' : 'Rebuild Index'}
+                </Button>
+
+                <div className="text-xs text-muted-foreground">
+                  Rebuilding the index will re-scan all notes and update the full-text search database.
+                  This may take a few seconds for large vaults.
                 </div>
               </div>
 
@@ -278,7 +300,7 @@ export function Settings() {
               {rebuildResult && (
                 <Alert>
                   <AlertDescription>
-                    ✅ Index rebuilt successfully! Indexed {rebuildResult.notes_indexed} notes in {rebuildResult.duration_ms}ms
+                    Index rebuilt successfully! Indexed {rebuildResult.notes_indexed} notes in {rebuildResult.duration_ms}ms
                   </AlertDescription>
                 </Alert>
               )}
