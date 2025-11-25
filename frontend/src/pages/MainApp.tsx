@@ -381,6 +381,13 @@ export function MainApp() {
 
   return (
     <div className="h-screen flex flex-col">
+      {/* Demo warning banner */}
+      <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
+        <AlertDescription className="text-center">
+          ⚠️ DEMO ONLY – ALL DATA IS TEMPORARY AND MAY BE DELETED AT ANY TIME
+        </AlertDescription>
+      </Alert>
+      
       {/* Top bar */}
       <div className="border-b border-border p-4 animate-fade-in">
         <div className="flex items-center justify-between">

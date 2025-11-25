@@ -32,19 +32,28 @@ export function Settings() {
 
   const loadData = async () => {
     try {
-      const [userData, health] = await Promise.all([
-        getCurrentUser().catch(() => null),
-        getIndexHealth().catch(() => null),
-      ]);
-      
-      setUser(userData);
-      setIndexHealth(health);
-      
-      // Get current token
       const token = getStoredToken();
-      if (token) {
+      
+      // Handle local-dev-token as a special case
+      if (token === 'local-dev-token') {
+        setUser({
+          user_id: 'demo-user',
+          vault_path: '/data/vaults/demo-user',
+          created: new Date().toISOString(),
+        });
         setApiToken(token);
+      } else {
+        // Real OAuth user
+        const userData = await getCurrentUser().catch(() => null);
+        setUser(userData);
+        if (token) {
+          setApiToken(token);
+        }
       }
+      
+      // Always try to load index health
+      const health = await getIndexHealth().catch(() => null);
+      setIndexHealth(health);
     } catch (err) {
       console.error('Error loading settings:', err);
     }
@@ -200,25 +209,39 @@ export function Settings() {
             </Button>
 
             <div className="text-xs text-muted-foreground mt-4">
-              <p className="font-semibold mb-2">MCP Configuration Example:</p>
+              <p className="font-semibold mb-2">MCP Configuration (Hosted HTTP):</p>
+              <pre className="bg-muted p-3 rounded overflow-x-auto">
+{`{
+  "mcpServers": {
+    "obsidian-docs": {
+      "transport": "http",
+      "url": "${window.location.origin}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${apiToken || 'YOUR_TOKEN_HERE'}"
+      }
+    }
+  }
+}`}
+              </pre>
+              <p className="font-semibold mb-2 mt-4">Local Development (STDIO):</p>
               <pre className="bg-muted p-3 rounded overflow-x-auto">
 {`{
   "mcpServers": {
     "obsidian-docs": {
       "command": "python",
       "args": ["-m", "backend.src.mcp.server"],
-      "cwd": "/path/to/Document-MCP",
+      "cwd": "/absolute/path/to/Document-MCP",
       "env": {
-        "BEARER_TOKEN": "${apiToken || 'YOUR_TOKEN_HERE'}",
-        "FASTMCP_SHOW_CLI_BANNER": "false",
-        "PYTHONPATH": "/path/to/Document-MCP"
+        "LOCAL_USER_ID": "local-dev",
+        "PYTHONPATH": "/absolute/path/to/Document-MCP",
+        "FASTMCP_SHOW_CLI_BANNER": "false"
       }
     }
   }
 }`}
               </pre>
               <p className="text-xs text-muted-foreground mt-2">
-                💡 Replace <code className="bg-muted px-1 rounded">/path/to/Document-MCP</code> with your actual project path
+                💡 Replace <code className="bg-muted px-1 rounded">/absolute/path/to/Document-MCP</code> with your local checkout path
               </p>
             </div>
           </CardContent>

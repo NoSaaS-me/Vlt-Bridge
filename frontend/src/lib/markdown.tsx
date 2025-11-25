@@ -18,7 +18,8 @@ export function createWikilinkComponent(
 ): Components {
   return {
     // Override the text renderer to handle wikilinks
-    text: ({ value }) => {
+    text: ({ children }: any) => {
+      const value = String(children || '');
       const parts: React.ReactNode[] = [];
       const pattern = /\[\[([^\]]+)\]\]/g;
       let lastIndex = 0;

@@ -7,12 +7,10 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import {
   Command,
-  CommandEmpty,
   CommandGroup,
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Button } from '@/components/ui/button';
 import { SearchResultSkeleton } from '@/components/SearchResultSkeleton';
 import { searchNotes } from '@/services/api';

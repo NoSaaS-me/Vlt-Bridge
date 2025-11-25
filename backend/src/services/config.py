@@ -29,6 +29,10 @@ class AppConfig(BaseModel):
     hf_oauth_client_secret: Optional[str] = Field(
         None, description="Hugging Face OAuth client secret (optional)"
     )
+    hf_space_url: str = Field(
+        default="http://localhost:5173",
+        description="Base URL of the HF Space or local dev server"
+    )
 
     @field_validator("vault_base_path", mode="before")
     @classmethod
@@ -67,12 +71,14 @@ def get_config() -> AppConfig:
     vault_base = _read_env("VAULT_BASE_PATH", str(DEFAULT_VAULT_BASE))
     hf_client_id = _read_env("HF_OAUTH_CLIENT_ID")
     hf_client_secret = _read_env("HF_OAUTH_CLIENT_SECRET")
+    hf_space_url = _read_env("HF_SPACE_URL", "http://localhost:5173")
 
     config = AppConfig(
         jwt_secret_key=jwt_secret,
         vault_base_path=vault_base,
         hf_oauth_client_id=hf_client_id,
         hf_oauth_client_secret=hf_client_secret,
+        hf_space_url=hf_space_url,
     )
     # Ensure vault base directory exists for downstream services.
     config.vault_base_path.mkdir(parents=True, exist_ok=True)

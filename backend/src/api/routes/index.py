@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ...models.index import IndexHealth
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
 from ...services.vault import VaultService
+from ..middleware import AuthContext, get_auth_context
 
 router = APIRouter()
 
@@ -22,15 +23,10 @@ class RebuildResponse(BaseModel):
     notes_indexed: int
 
 
-def get_user_id() -> str:
-    """Return the current user ID. For now, hardcoded to 'local-dev'."""
-    return "local-dev"
-
-
 @router.get("/api/index/health", response_model=IndexHealth)
-async def get_index_health():
+async def get_index_health(auth: AuthContext = Depends(get_auth_context)):
     """Get index health statistics."""
-    user_id = get_user_id()
+    user_id = auth.user_id
     db_service = DatabaseService()
     
     try:
@@ -77,9 +73,9 @@ async def get_index_health():
 
 
 @router.post("/api/index/rebuild", response_model=RebuildResponse)
-async def rebuild_index():
+async def rebuild_index(auth: AuthContext = Depends(get_auth_context)):
     """Rebuild the entire index from scratch."""
-    user_id = get_user_id()
+    user_id = auth.user_id
     vault_service = VaultService()
     indexer_service = IndexerService()
     
