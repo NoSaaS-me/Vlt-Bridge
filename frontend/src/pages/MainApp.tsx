@@ -126,6 +126,7 @@ export function MainApp() {
   // Handle wikilink clicks
   const handleWikilinkClick = async (linkText: string) => {
     const slug = normalizeSlug(linkText);
+    console.log(`[Wikilink] Clicked: "${linkText}", Slug: "${slug}"`);
     
     // Try to find exact match first
     let targetNote = notes.find(
@@ -136,11 +137,13 @@ export function MainApp() {
     if (!targetNote) {
       targetNote = notes.find((note) => {
         const pathSlug = normalizeSlug(note.note_path.replace(/\.md$/, ''));
+        // console.log(`Checking path: ${note.note_path}, Slug: ${pathSlug}`);
         return pathSlug.endsWith(slug);
       });
     }
 
     if (targetNote) {
+      console.log(`[Wikilink] Found target: ${targetNote.note_path}`);
       setSelectedPath(targetNote.note_path);
     } else {
       // TODO: Show "Create note" dialog
