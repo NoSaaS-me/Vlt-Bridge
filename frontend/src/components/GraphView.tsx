@@ -100,18 +100,33 @@ export function GraphView({ onSelectNote }: GraphViewProps) {
     }
   }, [data, isLoading]);
 
-  // Simple hash for categorical colors
-  const getGroupColor = (group: string) => {
-    let hash = 0;
-    for (let i = 0; i < group.length; i++) {
-      hash = group.charCodeAt(i) + ((hash << 5) - hash);
+  // Calculate max connectivity for gradient normalization
+  const maxVal = useMemo(() => {
+    return Math.max(1, ...data.nodes.map(node => node.val || 1));
+  }, [data.nodes]);
+
+  // Node styling based on theme and connectivity
+  const getNodeColor = (node: any) => {
+    const val = node.val || 1;
+    // Normalize value 0..1 (logarithmic scale often looks better for power-law graphs)
+    const normalized = Math.min(1, (val - 1) / (Math.max(maxVal, 2) - 1));
+    
+    if (isDark) {
+      // Dark mode: Slate-400 (#94a3b8) to Lime-300 (#bef264)
+      // Simple linear interpolation for RGB
+      const r = 148 + (190 - 148) * normalized;
+      const g = 163 + (242 - 163) * normalized;
+      const b = 184 + (100 - 184) * normalized;
+      return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+    } else {
+      // Light mode: Slate-500 (#64748b) to Lime-500 (#84cc16)
+      const r = 100 + (132 - 100) * normalized;
+      const g = 116 + (204 - 116) * normalized;
+      const b = 139 + (22 - 139) * normalized;
+      return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
     }
-    const c = (hash & 0x00ffffff).toString(16).toUpperCase();
-    return '#' + '00000'.substring(0, 6 - c.length) + c;
   };
 
-  // Node styling based on theme and group
-  const defaultNodeColor = isDark ? '#94a3b8' : '#64748b';
   const linkColor = isDark ? '#334155' : '#e2e8f0';
   const backgroundColor = isDark ? '#020817' : '#ffffff';
 
@@ -150,9 +165,9 @@ export function GraphView({ onSelectNote }: GraphViewProps) {
         ref={graphRef}
         graphData={data}
         nodeLabel="label"
-        nodeColor={(node: any) => node.group && node.group !== 'root' ? getGroupColor(node.group) : defaultNodeColor}
+        nodeColor={getNodeColor}
         linkColor={() => linkColor}
-        linkWidth={3} //width of links between nodes
+        linkWidth={2} //width of links between nodes
         backgroundColor={backgroundColor}
         onNodeClick={handleNodeClick}
         nodeRelSize={6}
