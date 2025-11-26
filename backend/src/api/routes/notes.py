@@ -16,6 +16,19 @@ from ..middleware import AuthContext, get_auth_context
 
 router = APIRouter()
 
+DEMO_USER_ID = "demo-user"
+
+
+def _ensure_write_allowed(user_id: str) -> None:
+    if user_id == DEMO_USER_ID:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "demo_read_only",
+                "message": "Demo mode is read-only. Sign in with Hugging Face to make changes.",
+            },
+        )
+
 
 class ConflictError(Exception):
     """Raised when optimistic concurrency check fails."""
@@ -60,6 +73,7 @@ async def list_notes(
 async def create_note(create: NoteCreate, auth: AuthContext = Depends(get_auth_context)):
     """Create a new note."""
     user_id = auth.user_id
+    _ensure_write_allowed(user_id)
     vault_service = VaultService()
     indexer_service = IndexerService()
     db_service = DatabaseService()
@@ -230,6 +244,7 @@ async def update_note(
 ):
     """Update a note with optimistic concurrency control."""
     user_id = auth.user_id
+    _ensure_write_allowed(user_id)
     vault_service = VaultService()
     indexer_service = IndexerService()
     db_service = DatabaseService()
@@ -337,9 +352,14 @@ class NoteMoveRequest(BaseModel):
 
 
 @router.patch("/api/notes/{path:path}", response_model=Note)
-async def move_note(path: str, move_request: NoteMoveRequest):
+async def move_note(
+    path: str,
+    move_request: NoteMoveRequest,
+    auth: AuthContext = Depends(get_auth_context),
+):
     """Move or rename a note to a new path."""
-    user_id = get_user_id()
+    user_id = auth.user_id
+    _ensure_write_allowed(user_id)
     vault_service = VaultService()
     indexer_service = IndexerService()
     db_service = DatabaseService()

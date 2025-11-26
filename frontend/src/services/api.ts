@@ -139,6 +139,17 @@ export async function getBacklinks(path: string): Promise<BacklinkResult[]> {
   return apiFetch<BacklinkResult[]>(`/api/backlinks/${encodedPath}`);
 }
 
+export interface DemoTokenResponse {
+  token: string;
+  token_type: string;
+  expires_at: string;
+  user_id: string;
+}
+
+export async function getDemoToken(): Promise<DemoTokenResponse> {
+  return apiFetch<DemoTokenResponse>('/api/demo/token');
+}
+
 /**
  * T070: Get all tags with counts
  */

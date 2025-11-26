@@ -41,6 +41,7 @@ import type { IndexHealth } from '@/types/search';
 import type { Note, NoteSummary } from '@/types/note';
 import { normalizeSlug } from '@/lib/wikilink';
 import { Network } from 'lucide-react';
+import { AUTH_TOKEN_CHANGED_EVENT, isDemoSession, login } from '@/services/auth';
 
 export function MainApp() {
   const navigate = useNavigate();
@@ -61,6 +62,21 @@ export function MainApp() {
   const [isNewFolderDialogOpen, setIsNewFolderDialogOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
+
+  useEffect(() => {
+    const handleAuthChange = () => {
+      const demo = isDemoSession();
+      setIsDemoMode(demo);
+      if (demo) {
+        setIsEditMode(false);
+      }
+    };
+    window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, handleAuthChange);
+    return () => {
+      window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, handleAuthChange);
+    };
+  }, []);
 
   // T083: Load directory tree on mount
   // T119: Load index health
@@ -169,6 +185,10 @@ export function MainApp() {
 
   // T093: Handle edit button click
   const handleEdit = () => {
+    if (isDemoMode) {
+      toast.error('Demo mode is read-only. Sign in with Hugging Face to edit notes.');
+      return;
+    }
     setIsEditMode(true);
   };
 
@@ -188,6 +208,10 @@ export function MainApp() {
 
   // Handle note dialog open change
   const handleDialogOpenChange = (open: boolean) => {
+    if (open && isDemoMode) {
+      toast.error('Demo mode is read-only. Sign in with Hugging Face to create notes.');
+      return;
+    }
     setIsNewNoteDialogOpen(open);
     if (!open) {
       // Clear input when dialog closes
@@ -197,6 +221,10 @@ export function MainApp() {
 
   // Handle folder dialog open change
   const handleFolderDialogOpenChange = (open: boolean) => {
+    if (open && isDemoMode) {
+      toast.error('Demo mode is read-only. Sign in with Hugging Face to create folders.');
+      return;
+    }
     setIsNewFolderDialogOpen(open);
     if (!open) {
       // Clear input when dialog closes
@@ -206,6 +234,10 @@ export function MainApp() {
 
   // Handle create new note
   const handleCreateNote = async () => {
+    if (isDemoMode) {
+      toast.error('Demo mode is read-only. Sign in to create notes.');
+      return;
+    }
     if (!newNoteName.trim() || isCreatingNote) return;
 
     setIsCreatingNote(true);
@@ -270,6 +302,10 @@ export function MainApp() {
 
   // Handle create new folder
   const handleCreateFolder = async () => {
+    if (isDemoMode) {
+      toast.error('Demo mode is read-only. Sign in to create folders.');
+      return;
+    }
     if (!newFolderName.trim() || isCreatingFolder) return;
 
     setIsCreatingFolder(true);
@@ -309,6 +345,10 @@ export function MainApp() {
 
   // Handle dragging file to folder
   const handleMoveNoteToFolder = async (oldPath: string, targetFolderPath: string) => {
+    if (isDemoMode) {
+      toast.error('Demo mode is read-only. Sign in to move notes.');
+      return;
+    }
     try {
       // Get the filename from the old path
       const fileName = oldPath.split('/').pop();
@@ -360,9 +400,19 @@ export function MainApp() {
       
       {/* Top bar */}
       <div className="border-b border-border p-4 animate-fade-in">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-semibold">📚 Document Viewer</h1>
           <div className="flex gap-2">
+            {isDemoMode && (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => login()}
+                title="Sign in with Hugging Face"
+              >
+                Sign in
+              </Button>
+            )}
             <Button
               variant={isGraphView ? "secondary" : "ghost"}
               size="sm"
@@ -380,6 +430,16 @@ export function MainApp() {
 
       {/* Main content */}
       <div className="flex-1 overflow-hidden animate-fade-in" style={{ animationDelay: '0.1s' }}>
+        {isDemoMode && (
+          <div className="border-b border-border bg-muted/40 px-4 py-2 text-sm text-muted-foreground flex flex-wrap items-center justify-between gap-2">
+            <span>
+              You are browsing the shared demo vault in read-only mode. Sign in with your Hugging Face account to create and edit notes.
+            </span>
+            <Button variant="outline" size="sm" onClick={() => login()}>
+              Sign in
+            </Button>
+          </div>
+        )}
         <ResizablePanelGroup direction="horizontal">
           {/* Left sidebar */}
           <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
@@ -390,7 +450,7 @@ export function MainApp() {
                   onOpenChange={handleDialogOpenChange}
                 >
                   <DialogTrigger asChild>
-                    <Button variant="outline" size="sm" className="w-full">
+                    <Button variant="outline" size="sm" className="w-full" disabled={isDemoMode}>
                       <Plus className="h-4 w-4 mr-1" />
                       New Note
                     </Button>
@@ -440,7 +500,7 @@ export function MainApp() {
                   onOpenChange={handleFolderDialogOpenChange}
                 >
                   <DialogTrigger asChild>
-                    <Button variant="outline" size="sm" className="w-full">
+                    <Button variant="outline" size="sm" className="w-full" disabled={isDemoMode}>
                       <FolderPlus className="h-4 w-4 mr-1" />
                       New Folder
                     </Button>
@@ -536,7 +596,7 @@ export function MainApp() {
                     <NoteViewer
                       note={currentNote}
                       backlinks={backlinks}
-                      onEdit={handleEdit}
+                      onEdit={isDemoMode ? undefined : handleEdit}
                       onWikilinkClick={handleWikilinkClick}
                     />
                   )

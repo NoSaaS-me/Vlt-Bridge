@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { MainApp } from './pages/MainApp';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
-import { isAuthenticated, getCurrentUser, setAuthTokenFromHash } from './services/auth';
+import { isAuthenticated, getCurrentUser, setAuthTokenFromHash, ensureDemoToken, isDemoSession } from './services/auth';
 import { AuthLoadingSkeleton } from './components/AuthLoadingSkeleton';
 import { Toaster } from './components/ui/toaster';
 import './App.css';
@@ -28,12 +28,20 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       }
 
       if (!isAuthenticated()) {
-        setHasToken(false);
-        setIsChecking(false);
-        return;
+        const demoReady = await ensureDemoToken();
+        if (!demoReady) {
+          setHasToken(false);
+          setIsChecking(false);
+          return;
+        }
       }
 
       setHasToken(true);
+
+      if (isDemoSession()) {
+        setIsChecking(false);
+        return;
+      }
 
       const token = localStorage.getItem('auth_token');
       // Skip validation for local dev token

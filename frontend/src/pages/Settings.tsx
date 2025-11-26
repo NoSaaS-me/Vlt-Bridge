@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
-import { getCurrentUser, getToken, logout, getStoredToken } from '@/services/auth';
+import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
 import { getIndexHealth, rebuildIndex, type RebuildResponse } from '@/services/api';
 import type { User } from '@/types/user';
 import type { IndexHealth } from '@/types/search';
@@ -25,9 +25,16 @@ export function Settings() {
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [rebuildResult, setRebuildResult] = useState<RebuildResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setIsDemoMode(isDemoSession());
+    window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, handler);
+    return () => window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, handler);
   }, []);
 
   const loadData = async () => {
@@ -60,6 +67,10 @@ export function Settings() {
   };
 
   const handleGenerateToken = async () => {
+    if (isDemoMode) {
+      setError('Demo mode is read-only. Sign in to generate new tokens.');
+      return;
+    }
     try {
       setError(null);
       const tokenResponse = await getToken();
@@ -81,6 +92,10 @@ export function Settings() {
   };
 
   const handleRebuildIndex = async () => {
+    if (isDemoMode) {
+      setError('Demo mode is read-only. Sign in to rebuild the index.');
+      return;
+    }
     setIsRebuilding(true);
     setError(null);
     setRebuildResult(null);
@@ -125,6 +140,13 @@ export function Settings() {
 
       {/* Content */}
       <div className="max-w-4xl mx-auto p-6 space-y-6">
+        {isDemoMode && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              You are viewing the shared demo vault. Sign in with Hugging Face from the main app to enable token generation and index management.
+            </AlertDescription>
+          </Alert>
+        )}
         {error && (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
@@ -203,7 +225,7 @@ export function Settings() {
               </div>
             </div>
 
-            <Button onClick={handleGenerateToken}>
+            <Button onClick={handleGenerateToken} disabled={isDemoMode}>
               <RefreshCw className="h-4 w-4 mr-2" />
               Generate New Token
             </Button>
@@ -285,7 +307,7 @@ export function Settings() {
 
               <Button
                 onClick={handleRebuildIndex}
-                disabled={isRebuilding}
+                disabled={isDemoMode || isRebuilding}
                 variant="outline"
               >
                 <RefreshCw className={`h-4 w-4 mr-2 ${isRebuilding ? 'animate-spin' : ''}`} />
