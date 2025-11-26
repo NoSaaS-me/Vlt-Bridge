@@ -40,7 +40,7 @@ export function NoteViewer({
   // [[Link|Alias]] -> [Alias](wikilink:Link)
   const processedBody = useMemo(() => {
     if (!note.body) return '';
-    const processed = note.body.replace(/\[\[([^\]]+)\]\]/g, (match, content) => {
+    const processed = note.body.replace(/\[\[([^\]]+)\]\]/g, (_match, content) => {
       const [link, alias] = content.split('|');
       const displayText = alias || link;
       const href = `wikilink:${encodeURIComponent(link)}`;
