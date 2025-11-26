@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import ForceGraph2D, { type ForceGraphMethods } from 'react-force-graph-2d';
 import { forceRadial } from 'd3-force';
-import type { GraphData, GraphNode } from '@/types/graph';
+import type { GraphData } from '@/types/graph';
 import { getGraphData } from '@/services/api';
 import { Loader2, AlertCircle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -14,7 +14,7 @@ export function GraphView({ onSelectNote }: GraphViewProps) {
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const graphRef = useRef<ForceGraphMethods>();
+  const graphRef = useRef<ForceGraphMethods | undefined>(undefined);
   // Theme detection would go here, simplified for MVP
   const isDark = document.documentElement.classList.contains('dark');
   

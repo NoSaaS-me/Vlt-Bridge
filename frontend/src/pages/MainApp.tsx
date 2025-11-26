@@ -29,7 +29,6 @@ import {
 } from '@/services/api';
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -281,7 +280,7 @@ export function MainApp() {
       const folderPath = newFolderName.replace(/\/$/, ''); // Remove trailing slash if present
       const placeholderPath = `${folderPath}/.placeholder.md`;
 
-      const note = await createNote({
+      await createNote({
         note_path: placeholderPath,
         title: 'Folder',
         body: `# ${folderPath}\n\nThis folder was created.`,
@@ -305,41 +304,6 @@ export function MainApp() {
       setIsCreatingFolder(false);
       // Always close dialog, regardless of success or failure
       handleFolderDialogOpenChange(false);
-    }
-  };
-
-  // Handle rename note
-  const handleRenameNote = async (oldPath: string, newPath: string) => {
-    if (!newPath.trim()) {
-      toast.error('New path cannot be empty');
-      return;
-    }
-
-    try {
-      // Ensure new path has .md extension
-      const finalNewPath = newPath.endsWith('.md') ? newPath : `${newPath}.md`;
-
-      await moveNote(oldPath, finalNewPath);
-
-      // Refresh notes list
-      const notesList = await listNotes();
-      setNotes(notesList);
-
-      // If renaming currently selected note, update selection
-      if (selectedPath === oldPath) {
-        setSelectedPath(finalNewPath);
-      }
-
-      toast.success(`Note renamed successfully`);
-    } catch (err) {
-      let errorMessage = 'Failed to rename note';
-      if (err instanceof APIException) {
-        errorMessage = err.message || err.error;
-      } else if (err instanceof Error) {
-        errorMessage = err.message;
-      }
-      toast.error(errorMessage);
-      console.error('Error renaming note:', err);
     }
   };
 
