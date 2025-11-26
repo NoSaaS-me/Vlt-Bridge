@@ -3,9 +3,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install Node.js for frontend build
+# Install Node.js 20.x for frontend build (required for React 19, Vite 7)
 RUN apt-get update && \
-    apt-get install -y nodejs npm curl && \
+    apt-get install -y curl gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy and install frontend dependencies
