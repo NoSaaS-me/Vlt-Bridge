@@ -16,6 +16,7 @@ import { NoteViewer } from '@/components/NoteViewer';
 import { NoteViewerSkeleton } from '@/components/NoteViewerSkeleton';
 import { NoteEditor } from '@/components/NoteEditor';
 import { useToast } from '@/hooks/useToast';
+import { GraphView } from '@/components/GraphView';
 import {
   listNotes,
   getNote,
@@ -40,6 +41,7 @@ import { Input } from '@/components/ui/input';
 import type { IndexHealth } from '@/types/search';
 import type { Note, NoteSummary } from '@/types/note';
 import { normalizeSlug } from '@/lib/wikilink';
+import { Network } from 'lucide-react';
 
 export function MainApp() {
   const navigate = useNavigate();
@@ -52,6 +54,7 @@ export function MainApp() {
   const [isLoadingNote, setIsLoadingNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [isGraphView, setIsGraphView] = useState(false);
   const [indexHealth, setIndexHealth] = useState<IndexHealth | null>(null);
   const [isNewNoteDialogOpen, setIsNewNoteDialogOpen] = useState(false);
   const [newNoteName, setNewNoteName] = useState('');
@@ -133,6 +136,7 @@ export function MainApp() {
   // Handle wikilink clicks
   const handleWikilinkClick = async (linkText: string) => {
     const slug = normalizeSlug(linkText);
+    console.log(`[Wikilink] Clicked: "${linkText}", Slug: "${slug}"`);
     
     // Try to find exact match first
     let targetNote = notes.find(
@@ -143,11 +147,13 @@ export function MainApp() {
     if (!targetNote) {
       targetNote = notes.find((note) => {
         const pathSlug = normalizeSlug(note.note_path.replace(/\.md$/, ''));
+        // console.log(`Checking path: ${note.note_path}, Slug: ${pathSlug}`);
         return pathSlug.endsWith(slug);
       });
     }
 
     if (targetNote) {
+      console.log(`[Wikilink] Found target: ${targetNote.note_path}`);
       setSelectedPath(targetNote.note_path);
     } else {
       // TODO: Show "Create note" dialog
@@ -392,52 +398,15 @@ export function MainApp() {
       <div className="border-b border-border p-4 animate-fade-in">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">📚 Document Viewer</h1>
-          <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
-            <SettingsIcon className="h-4 w-4" />
-          </Button>
-=======
-          <h1 className="text-xl font-semibold">Document Viewer</h1>
           <div className="flex gap-2">
-            <Dialog open={isNewNoteDialogOpen} onOpenChange={setIsNewNoteDialogOpen}>
-              <DialogTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Note
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Create New Note</DialogTitle>
-                  <DialogDescription>
-                    Enter a name for your new note. The .md extension will be added automatically if not provided.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-4 py-4">
-                  <div className="grid gap-2">
-                    <label htmlFor="note-name" className="text-sm font-medium">Note Name</label>
-                    <Input
-                      id="note-name"
-                      placeholder="my-note"
-                      value={newNoteName}
-                      onChange={(e) => setNewNoteName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleCreateNote();
-                        }
-                      }}
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsNewNoteDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={handleCreateNote} disabled={!newNoteName.trim()}>
-                    Create Note
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+            <Button
+              variant={isGraphView ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setIsGraphView(!isGraphView)}
+              title={isGraphView ? "Switch to Note View" : "Switch to Graph View"}
+            >
+              <Network className="h-4 w-4" />
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
               <SettingsIcon className="h-4 w-4" />
             </Button>
@@ -583,35 +552,42 @@ export function MainApp() {
                 </div>
               )}
 
-              {isLoadingNote ? (
-                <NoteViewerSkeleton />
-              ) : currentNote ? (
-                isEditMode ? (
-                  <NoteEditor
-                    note={currentNote}
-                    onSave={handleNoteSave}
-                    onCancel={handleEditCancel}
-                    onWikilinkClick={handleWikilinkClick}
-                  />
-                ) : (
-                  <NoteViewer
-                    note={currentNote}
-                    backlinks={backlinks}
-                    onEdit={handleEdit}
-                    onWikilinkClick={handleWikilinkClick}
-                  />
-                )
+              {isGraphView ? (
+                <GraphView onSelectNote={(path) => {
+                  handleSelectNote(path);
+                  setIsGraphView(false);
+                }} />
               ) : (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center text-muted-foreground">
-                    <p className="text-lg mb-2">Select a note to view</p>
-                    <p className="text-sm">
-                      {notes.length === 0
-                        ? 'No notes available. Create your first note to get started.'
-                        : 'Choose a note from the sidebar'}
-                    </p>
+                isLoadingNote ? (
+                  <NoteViewerSkeleton />
+                ) : currentNote ? (
+                  isEditMode ? (
+                    <NoteEditor
+                      note={currentNote}
+                      onSave={handleNoteSave}
+                      onCancel={handleEditCancel}
+                      onWikilinkClick={handleWikilinkClick}
+                    />
+                  ) : (
+                    <NoteViewer
+                      note={currentNote}
+                      backlinks={backlinks}
+                      onEdit={handleEdit}
+                      onWikilinkClick={handleWikilinkClick}
+                    />
+                  )
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center text-muted-foreground">
+                      <p className="text-lg mb-2">Select a note to view</p>
+                      <p className="text-sm">
+                        {notes.length === 0
+                          ? 'No notes available. Create your first note to get started.'
+                          : 'Choose a note from the sidebar'}
+                      </p>
+                    </div>
                   </div>
-                </div>
+                )
               )}
             </div>
           </ResizablePanel>

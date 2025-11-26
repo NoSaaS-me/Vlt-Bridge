@@ -17,27 +17,13 @@ export function createWikilinkComponent(
   onWikilinkClick?: (linkText: string) => void
 ): Components {
   return {
-    // Override the text renderer to handle wikilinks
-    text: ({ children }: any) => {
-      const value = String(children || '');
-      const parts: React.ReactNode[] = [];
-      const pattern = /\[\[([^\]]+)\]\]/g;
-      let lastIndex = 0;
-      let match;
-      let key = 0;
-
-      while ((match = pattern.exec(value)) !== null) {
-        // Add text before the wikilink
-        if (match.index > lastIndex) {
-          parts.push(value.slice(lastIndex, match.index));
-        }
-
-        // Add the wikilink as a clickable element
-        const linkText = match[1];
-        parts.push(
+    // Style links
+    a: ({ href, children, ...props }) => {
+      if (href?.startsWith('wikilink:')) {
+        const linkText = decodeURIComponent(href.replace('wikilink:', ''));
+        return (
           <span
-            key={key++}
-            className="wikilink cursor-pointer text-primary hover:underline"
+            className="wikilink cursor-pointer text-primary hover:underline font-medium text-blue-500 dark:text-blue-400"
             onClick={(e) => {
               e.preventDefault();
               onWikilinkClick?.(linkText);
@@ -50,47 +36,13 @@ export function createWikilinkComponent(
                 onWikilinkClick?.(linkText);
               }
             }}
+            title={`Go to ${linkText}`}
           >
-            [[{linkText}]]
+            {children}
           </span>
         );
-
-        lastIndex = pattern.lastIndex;
       }
 
-      // Add remaining text
-      if (lastIndex < value.length) {
-        parts.push(value.slice(lastIndex));
-      }
-
-      return parts.length > 0 ? <>{parts}</> : value;
-    },
-    
-    // Style code blocks
-    code: ({ className, children, ...props }) => {
-      const match = /language-(\w+)/.exec(className || '');
-      const isInline = !match;
-
-      if (isInline) {
-        return (
-          <code className="bg-muted px-1.5 py-0.5 rounded text-sm font-mono" {...props}>
-            {children}
-          </code>
-        );
-      }
-
-      return (
-        <code
-          className={`${className} block bg-muted p-4 rounded-lg overflow-x-auto text-sm font-mono`}
-          {...props}
-        >
-          {children}
-        </code>
-      );
-    },
-
-    // Style links
-    a: ({ href, children, ...props }) => {
       const isExternal = href?.startsWith('http');
       return (
         <a
