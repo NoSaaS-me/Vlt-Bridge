@@ -1,0 +1,60 @@
+openapi: 3.0.0
+info:
+  title: Document MCP Chat API
+  version: 1.0.0
+paths:
+  /api/chat:
+    post:
+      summary: Send a message to the AI agent
+      description: Streams the response using Server-Sent Events (SSE).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                history:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant, system]
+                      content:
+                        type: string
+                persona:
+                  type: string
+                  default: default
+                model:
+                  type: string
+      responses:
+        '200':
+          description: Stream of tokens
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: "data: {\"type\": \"token\", \"content\": \"Hello\"}\n\n"
+  /api/chat/personas:
+    get:
+      summary: List available personas
+      responses:
+        '200':
+          description: List of personas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    description:
+                      type: string
