@@ -35,6 +35,21 @@ export function NoteViewer({
     [onWikilinkClick]
   );
 
+  // Pre-process markdown to convert wikilinks to standard links
+  // [[Link]] -> [Link](wikilink:Link)
+  // [[Link|Alias]] -> [Alias](wikilink:Link)
+  const processedBody = useMemo(() => {
+    if (!note.body) return '';
+    const processed = note.body.replace(/\[\[([^\]]+)\]\]/g, (match, content) => {
+      const [link, alias] = content.split('|');
+      const displayText = alias || link;
+      const href = `wikilink:${encodeURIComponent(link)}`;
+      return `[${displayText}](${href})`;
+    });
+    // console.log('Processed Body:', processed);
+    return processed;
+  }, [note.body]);
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -76,8 +91,9 @@ export function NoteViewer({
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={markdownComponents}
+            urlTransform={(url) => url} // Allow all protocols including wikilink:
           >
-            {note.body}
+            {processedBody}
           </ReactMarkdown>
         </div>
 

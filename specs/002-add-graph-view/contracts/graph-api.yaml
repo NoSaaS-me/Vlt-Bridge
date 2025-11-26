@@ -1,0 +1,65 @@
+openapi: 3.0.0
+info:
+  title: Document MCP Graph API
+  version: 1.0.0
+paths:
+  /api/graph:
+    get:
+      summary: Retrieve graph visualization data
+      operationId: getGraphData
+      responses:
+        '200':
+          description: Successful graph data retrieval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphData'
+        '500':
+          description: Server error
+components:
+  schemas:
+    GraphNode:
+      type: object
+      required:
+        - id
+        - label
+      properties:
+        id:
+          type: string
+          description: Unique identifier (note path)
+        label:
+          type: string
+          description: Note title
+        val:
+          type: integer
+          default: 1
+          description: Node size/weight based on connectivity
+        group:
+          type: string
+          description: Categorical group (e.g. folder)
+    GraphLink:
+      type: object
+      required:
+        - source
+        - target
+      properties:
+        source:
+          type: string
+          description: Source note ID
+        target:
+          type: string
+          description: Target note ID
+    GraphData:
+      type: object
+      required:
+        - nodes
+        - links
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNode'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphLink'

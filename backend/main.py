@@ -4,6 +4,7 @@ import os
 
 import uvicorn
 from dotenv import load_dotenv
+from src.api.main import app
 
 load_dotenv()
 

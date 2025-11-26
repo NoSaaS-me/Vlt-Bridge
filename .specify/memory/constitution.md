@@ -1,50 +1,38 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# Document-MCP Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Brownfield Integration
+Respect the existing codebase. Do not rewrite or refactor existing working code unless explicitly required by the feature spec. Match the style, naming conventions, and architectural patterns of the `backend/` (FastAPI) and `frontend/` (React+Vite) directories.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Test-Backed Development
+Every new backend feature must include `pytest` unit tests. Frontend logic should be tested where feasible, but UI components rely on manual verification/E2E. Do not break existing tests.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Incremental Delivery
+Features should be implemented in small, safe increments. Use feature flags or parallel file structures (e.g., new routes/components) to avoid destabilizing the main application during development.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Specification-Driven
+All work must be traced back to a `specs/` document. If a requirement changes during implementation, the spec must be updated to reflect reality. Do not implement "ghost features" not in the spec.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+## Technology Standards
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+**Backend**:
+-   Python 3.11+
+-   FastAPI for API routes
+-   Pydantic for data validation
+-   SQLite for persistence (via `sqlite3` stdlib, no ORM overhead preferred)
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
-
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
-
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+**Frontend**:
+-   React 18+
+-   TypeScript
+-   Tailwind CSS for styling
+-   Shadcn/UI for components
+-   Lucide React for icons
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+-   **No Magic**: Avoid "clever" abstractions. Explicit is better than implicit.
+-   **Single Source of Truth**: The `data/` directory is the state of record for the vault. The index is a derived view.
+-   **Error Handling**: All API endpoints must return structured error responses. Frontend must handle these gracefully.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2025-11-25

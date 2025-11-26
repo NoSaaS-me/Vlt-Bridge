@@ -47,3 +47,8 @@ data/
 .backend.pid
 .frontend.pid
 
+# Testing
+.playwright-mcp/
+
+reproduce_auth_500.py
+debug_list_notes.py
