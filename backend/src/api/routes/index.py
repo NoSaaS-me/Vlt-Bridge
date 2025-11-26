@@ -14,6 +14,19 @@ from ...services.indexer import IndexerService
 from ...services.vault import VaultService
 from ..middleware import AuthContext, get_auth_context
 
+DEMO_USER_ID = "demo-user"
+
+
+def _ensure_index_mutation_allowed(user_id: str) -> None:
+    if user_id == DEMO_USER_ID:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "demo_read_only",
+                "message": "Demo mode does not allow index rebuilds. Sign in to manage the index.",
+            },
+        )
+
 router = APIRouter()
 
 
@@ -79,6 +92,7 @@ async def rebuild_index(auth: AuthContext = Depends(get_auth_context)):
     """Rebuild the entire index from scratch."""
     start_time = time.time()
     user_id = auth.user_id
+    _ensure_index_mutation_allowed(user_id)
     vault_service = VaultService()
     indexer_service = IndexerService()
     
