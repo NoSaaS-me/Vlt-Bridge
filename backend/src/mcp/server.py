@@ -45,6 +45,7 @@ auth_service = AuthService()
 @mcp.resource("ui://widget/note.html")
 def widget_resource() -> dict:
     """Return the widget HTML bundle."""
+    print("!!! WIDGET RESOURCE ACCESSED !!!", flush=True)
     # Locate widget.html relative to project root
     # In Docker: /app/frontend/dist/widget.html
     # Local: frontend/dist/widget.html
@@ -188,6 +189,7 @@ def read_note(
         ..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."
     ),
 ) -> dict:
+    print(f"!!! READ_NOTE CALLED: {path} !!!", flush=True)
     start_time = time.time()
     user_id = _current_user_id()
 
