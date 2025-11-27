@@ -124,7 +124,7 @@ class AuthService:
         # 1. Local Dev Token (Highest priority)
         if self.config.enable_local_mode:
             self.validators.append(
-                StaticTokenValidator(self.config.local_dev_token, "local-dev")
+                StaticTokenValidator(self.config.local_dev_token, "demo-user")
             )
             
         # 2. ChatGPT Service Token

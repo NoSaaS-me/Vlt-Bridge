@@ -28,7 +28,7 @@ class AppConfig(BaseModel):
     )
     local_dev_token: Optional[str] = Field(
         default="local-dev-token",
-        description="Static token accepted in local mode for development",
+        description="Static token accepted in local mode (maps to 'demo-user')",
     )
     chatgpt_service_token: Optional[str] = Field(
         default=None,
