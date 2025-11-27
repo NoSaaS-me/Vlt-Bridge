@@ -42,7 +42,7 @@ indexer_service = IndexerService()
 auth_service = AuthService()
 
 
-@mcp.resource("widget")
+@mcp.resource("ui://widget/note.html")
 def widget_resource() -> dict:
     """Return the widget HTML bundle."""
     # Locate widget.html relative to project root
