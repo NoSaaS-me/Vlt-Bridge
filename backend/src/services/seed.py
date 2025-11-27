@@ -63,11 +63,15 @@ We've built a custom integration that allows ChatGPT to natively interact with t
 
 ## How to Connect
 
-1. Go to **ChatGPT** -> **Explore GPTs** -> **Create**.
-2. Click **Configure** -> **Create new action**.
-3. Select **Authentication**: `None` (for this Demo instance).
-4. Enter the **Schema**: Import from URL `https://[your-space-url].hf.space/openapi.json`.
-5. Save and test!
+1. Open **ChatGPT Settings** -> **Apps & Connectors**.
+2. Ensure **Developer Mode** is enabled in Advanced Settings.
+3. Click **Create** (top right).
+4. Configure the connector:
+   - **Name**: Document-MCP
+   - **MCP Server URL**: `https://[your-space-url].hf.space/mcp`
+   - **Authentication**: `No authentication`
+5. Save the connector.
+6. Start a new chat and enable the **Document-MCP** app (via the **plus (+)** button in the left side of the chat input).
 
 ## Using the App
 
