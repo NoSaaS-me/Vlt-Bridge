@@ -152,19 +152,7 @@ def list_notes(
     ]
 
 
-@mcp.tool(
-    name="read_note", 
-    description="Read a Markdown note with metadata and body.",
-    _meta={
-        "openai": {
-            "outputTemplate": "ui://widget/note.html",
-            "toolInvocation": {
-                "invoking": "Opening note...",
-                "invoked": "Note opened."
-            }
-        }
-    }
-)
+@mcp.tool(name="read_note", description="Read a Markdown note with metadata and body.")
 def read_note(
     path: str = Field(
         ..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."
@@ -216,15 +204,6 @@ def read_note(
 @mcp.tool(
     name="write_note",
     description="Create or update a note. Automatically updates frontmatter timestamps and search index.",
-    _meta={
-        "openai": {
-            "outputTemplate": "ui://widget/note.html",
-            "toolInvocation": {
-                "invoking": "Saving note...",
-                "invoked": "Note saved."
-            }
-        }
-    }
 )
 def write_note(
     path: str = Field(
@@ -319,15 +298,6 @@ def delete_note(
 @mcp.tool(
     name="search_notes",
     description="Full-text search with snippets and recency-aware scoring.",
-    _meta={
-        "openai": {
-            "outputTemplate": "ui://widget/note.html",
-            "toolInvocation": {
-                "invoking": "Searching...",
-                "invoked": "Search complete."
-            }
-        }
-    }
 )
 def search_notes(
     query: str = Field(..., description="Non-empty search query (bm25 + recency)."),
