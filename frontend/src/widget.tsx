@@ -66,6 +66,15 @@ const WidgetApp = () => {
     console.log("Widget loaded with toolOutput:", toolOutput);
 
     if (!toolOutput) {
+      // Check for toolInput to show loading state (waiting for tool execution)
+      // Note: window.openai types might vary, we check safely
+      const toolInput = (window.openai as any).toolInput;
+      if (toolInput) {
+        console.log("Tool input present, waiting for output:", toolInput);
+        setView('loading');
+        return;
+      }
+
       // Fallback for dev testing via URL
       const params = new URLSearchParams(window.location.search);
       const mockType = params.get('type');
@@ -122,8 +131,16 @@ const WidgetApp = () => {
   return (
     <div className="dark min-h-screen bg-background text-foreground flex flex-col">
         {view === 'loading' && (
-          <div className="flex-1 flex items-center justify-center">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <div className="flex-1 flex flex-col items-center justify-center p-4 text-center">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-4" />
+            <p className="text-sm text-muted-foreground">
+              {window.openai?.toolInput?.query 
+                ? `Searching for "${window.openai.toolInput.query}"...`
+                : "Waiting for tool execution..."}
+            </p>
+            <p className="text-xs text-muted-foreground mt-2">
+              (Please confirm the action in ChatGPT)
+            </p>
           </div>
         )}
 
