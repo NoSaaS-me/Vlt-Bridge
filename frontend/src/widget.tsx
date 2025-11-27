@@ -147,9 +147,11 @@ const WidgetApp = () => {
        const note = await getNote(path);
        setData(note);
        setView('note');
-     } catch (err) {
+     } catch (err: any) {
        console.error("Failed to load note:", err);
-       setError(`Failed to load note: ${path}`);
+       const msg = err?.message || String(err);
+       const status = err?.status ? ` (Status: ${err.status})` : '';
+       setError(`Failed to load note: ${path}\nError: ${msg}${status}`);
        setView('error');
      }
   };
