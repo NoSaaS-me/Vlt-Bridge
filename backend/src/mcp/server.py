@@ -45,28 +45,39 @@ auth_service = AuthService()
 @mcp.resource("ui://widget/note.html", mime_type="text/html+skybridge")
 def widget_resource() -> str:
     """Return the widget HTML bundle."""
-    print("!!! WIDGET RESOURCE ACCESSED (SMOKE TEST) !!!", flush=True)
+    # Locate widget.html relative to project root
+    # In Docker: /app/frontend/dist/widget.html
+    # Local: frontend/dist/widget.html
+    # We use PROJECT_ROOT from config
     
-    return """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Smoke Test</title>
-    <style>body { background: #222; color: #0f0; font-family: monospace; padding: 20px; }</style>
-</head>
-<body>
-    <h1>Widget Smoke Test</h1>
-    <p>If you see this, the pipeline is working.</p>
-    <pre id="output"></pre>
-    <script>
-        const output = document.getElementById('output');
-        output.textContent = 'Window.openai: ' + (window.openai ? 'Present' : 'Missing');
-        if (window.openai && window.openai.toolOutput) {
-            output.textContent += '\\nData: ' + JSON.stringify(window.openai.toolOutput, null, 2);
-        }
-    </script>
-</body>
-</html>"""
+    widget_path = PROJECT_ROOT / "frontend" / "dist" / "widget.html"
+    
+    logger.info(f"Reading widget from: {widget_path}")
+    
+    if not widget_path.exists():
+        logger.error(f"Widget path does not exist: {widget_path}")
+        return "Widget build not found. Please run 'npm run build' in frontend directory."
+        
+    try:
+        html_content = widget_path.read_text(encoding="utf-8")
+        logger.info(f"Widget content length: {len(html_content)}")
+        if not html_content.strip():
+            logger.error("Widget file is empty!")
+            return "Widget build file is empty."
+            
+        # Replace relative asset paths with absolute URLs for ChatGPT iframe
+        config = get_config()
+        base_url = config.hf_space_url.rstrip("/")
+        logger.info(f"Injecting base URL: {base_url}")
+        
+        # Vite builds usually output /assets/...
+        html_content = html_content.replace('src="/assets/', f'src="{base_url}/assets/')
+        html_content = html_content.replace('href="/assets/', f'href="{base_url}/assets/')
+        
+        return html_content
+    except Exception as e:
+        logger.exception(f"Failed to read widget file: {e}")
+        return f"Server error reading widget: {e}"
 
 
 def _current_user_id() -> str:
