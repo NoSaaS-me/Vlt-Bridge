@@ -48,10 +48,11 @@ class MemoryLogHandler(logging.Handler):
 memory_handler = MemoryLogHandler()
 formatter = logging.Formatter('%(message)s')
 memory_handler.setFormatter(formatter)
-logging.getLogger("backend.src.mcp.server").addHandler(memory_handler)
-logging.getLogger("backend.src.services").addHandler(memory_handler)
-# Catch uvicorn/fastapi logs too if desired
-# logging.getLogger("uvicorn.access").addHandler(memory_handler)
+
+# Attach to root logger to capture everything
+logging.getLogger().addHandler(memory_handler)
+# Ensure level allows INFO
+logging.getLogger().setLevel(logging.INFO)
 
 @router.get("/api/system/logs", response_model=List[LogEntry])
 async def get_logs(auth: AuthContext = Depends(get_auth_context)):
