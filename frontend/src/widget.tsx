@@ -1,4 +1,4 @@
-import React, { useEffect, useState, Component, ErrorInfo } from 'react';
+import React, { useEffect, useState, Component, type ErrorInfo } from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import { NoteViewer } from '@/components/NoteViewer';

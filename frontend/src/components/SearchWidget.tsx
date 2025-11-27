@@ -1,6 +1,4 @@
-import React from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Button } from '@/components/ui/button';
 import { Search } from 'lucide-react';
 import type { SearchResult } from '@/types/search';
 
