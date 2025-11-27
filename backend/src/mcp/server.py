@@ -16,7 +16,7 @@ load_dotenv()
 
 from ..services import IndexerService, VaultNote, VaultService
 from ..services.auth import AuthError, AuthService
-from ..services.config import get_config
+from ..services.config import get_config, PROJECT_ROOT
 
 try:
     from fastmcp.server.http import _current_http_request  # type: ignore
@@ -40,6 +40,38 @@ mcp = FastMCP(
 vault_service = VaultService()
 indexer_service = IndexerService()
 auth_service = AuthService()
+
+
+@mcp.resource("widget")
+def widget_resource() -> dict:
+    """Return the widget HTML bundle."""
+    # Locate widget.html relative to project root
+    # In Docker: /app/frontend/dist/widget.html
+    # Local: frontend/dist/widget.html
+    # We use PROJECT_ROOT from config
+    
+    widget_path = PROJECT_ROOT / "frontend" / "dist" / "widget.html"
+    
+    if not widget_path.exists():
+        # Fallback for local dev if not built? Or just error.
+        # Apps SDK expects specific structure.
+        return {
+            "contents": [{
+                "uri": "ui://widget/note.html",
+                "mimeType": "text/plain",
+                "text": "Widget build not found."
+            }]
+        }
+        
+    html_content = widget_path.read_text(encoding="utf-8")
+    
+    return {
+        "contents": [{
+            "uri": "ui://widget/note.html",
+            "mimeType": "text/html+skybridge",
+            "text": html_content
+        }]
+    }
 
 
 def _current_user_id() -> str:
@@ -120,12 +152,24 @@ def list_notes(
     ]
 
 
-@mcp.tool(name="read_note", description="Read a Markdown note with metadata and body.")
+@mcp.tool(
+    name="read_note", 
+    description="Read a Markdown note with metadata and body.",
+    _meta={
+        "openai": {
+            "outputTemplate": "ui://widget/note.html",
+            "toolInvocation": {
+                "invoking": "Opening note...",
+                "invoked": "Note opened."
+            }
+        }
+    }
+)
 def read_note(
     path: str = Field(
         ..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."
     ),
-) -> Dict[str, Any]:
+) -> dict:
     start_time = time.time()
     user_id = _current_user_id()
 
@@ -142,12 +186,45 @@ def read_note(
         },
     )
 
-    return _note_to_response(note)
+    structured_note = {
+        "title": note["title"],
+        "note_path": note["path"],
+        "body": note["body"],
+        "metadata": note["metadata"],
+        "updated": note["modified"].isoformat(),
+    }
+
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": f"Read note: {note['title']}"
+            }
+        ],
+        "structuredContent": {
+            "note": structured_note
+        },
+        "_meta": {
+            "openai": {
+                "outputTemplate": "ui://widget/note.html"
+            }
+        },
+        "isError": False
+    }
 
 
 @mcp.tool(
     name="write_note",
     description="Create or update a note. Automatically updates frontmatter timestamps and search index.",
+    _meta={
+        "openai": {
+            "outputTemplate": "ui://widget/note.html",
+            "toolInvocation": {
+                "invoking": "Saving note...",
+                "invoked": "Note saved."
+            }
+        }
+    }
 )
 def write_note(
     path: str = Field(
@@ -174,9 +251,6 @@ def write_note(
         body=body,
     )
     indexer_service.index_note(user_id, note)
-
-    config = get_config()
-    widget_url = f"{config.hf_space_url}/widget.html"
 
     duration_ms = (time.time() - start_time) * 1000
     logger.info(
@@ -209,11 +283,7 @@ def write_note(
         },
         "_meta": {
             "openai": {
-                "outputTemplate": widget_url,
-                "toolInvocation": {
-                    "invoking": f"Saving {path}...",
-                    "invoked": f"Saved {path}"
-                }
+                "outputTemplate": "ui://widget/note.html"
             }
         },
         "isError": False
@@ -246,13 +316,69 @@ def delete_note(
     return {"status": "ok"}
 
 
-@mcp.tool()
-def search_notes(query: str) -> list[str]:
-    """Search for notes in the vault."""
+@mcp.tool(
+    name="search_notes",
+    description="Full-text search with snippets and recency-aware scoring.",
+    _meta={
+        "openai": {
+            "outputTemplate": "ui://widget/note.html",
+            "toolInvocation": {
+                "invoking": "Searching...",
+                "invoked": "Search complete."
+            }
+        }
+    }
+)
+def search_notes(
+    query: str = Field(..., description="Non-empty search query (bm25 + recency)."),
+    limit: int = Field(50, ge=1, le=100, description="Result cap between 1 and 100."),
+) -> dict:
+    start_time = time.time()
     user_id = _current_user_id()
-    indexer = IndexerService()
-    results = indexer.search_notes(user_id, query)
-    return [f"{r['title']} ({r['path']})" for r in results]
+
+    results = indexer_service.search_notes(user_id, query, limit=limit)
+
+    duration_ms = (time.time() - start_time) * 1000
+    logger.info(
+        "MCP tool called",
+        extra={
+            "tool_name": "search_notes",
+            "user_id": user_id,
+            "query": query,
+            "limit": limit,
+            "result_count": len(results),
+            "duration_ms": f"{duration_ms:.2f}",
+        },
+    )
+
+    # Structure results for the widget
+    structured_results = []
+    for r in results:
+        structured_results.append({
+            "title": r["title"],
+            "note_path": r["path"],
+            "snippet": r["snippet"],
+            "score": r["score"],
+            "updated": r["updated"] if isinstance(r["updated"], str) else r["updated"].isoformat()
+        })
+
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": f"Found {len(results)} notes matching '{query}'."
+            }
+        ],
+        "structuredContent": {
+            "results": structured_results
+        },
+        "_meta": {
+            "openai": {
+                "outputTemplate": "ui://widget/note.html"
+            }
+        },
+        "isError": False
+    }
 
 
 
