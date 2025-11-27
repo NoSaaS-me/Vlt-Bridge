@@ -18,7 +18,7 @@ load_dotenv()  # Add this line at the top, before other imports
 # from fastapi.routing import ASGIRoute
 from starlette.responses import Response
 
-from fastmcp.server.http import StreamableHTTPSessionManager
+from fastmcp.server.http import StreamableHTTPSessionManager, set_http_request
 from fastapi.responses import FileResponse
 
 from .routes import auth, index, notes, search, graph, demo
@@ -123,7 +123,8 @@ async def mcp_http_bridge(request: Request) -> Response:
         await send_queue.put(message)
 
     try:
-        await session_manager.handle_request(request.scope, request.receive, send)
+        with set_http_request(request):
+            await session_manager.handle_request(request.scope, request.receive, send)
     except Exception as exc:
         logger.exception("FastMCP session manager crashed: %s", exc)
         raise HTTPException(status_code=500, detail=f"MCP Bridge Error: {exc}")
