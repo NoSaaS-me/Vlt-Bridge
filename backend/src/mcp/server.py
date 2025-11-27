@@ -193,9 +193,9 @@ def read_note(
             "note": structured_note
         },
         "_meta": {
-            "openai": {
-                "outputTemplate": "ui://widget/note.html"
-            }
+            "openai/outputTemplate": "ui://widget/note.html",
+            "openai/toolInvocation/invoking": f"Opening {note['title']}...",
+            "openai/toolInvocation/invoked": f"Loaded {note['title']}"
         },
         "isError": False
     }
@@ -261,9 +261,9 @@ def write_note(
             "note": structured_note
         },
         "_meta": {
-            "openai": {
-                "outputTemplate": "ui://widget/note.html"
-            }
+            "openai/outputTemplate": "ui://widget/note.html",
+            "openai/toolInvocation/invoking": f"Saving {path}...",
+            "openai/toolInvocation/invoked": f"Saved {path}"
         },
         "isError": False
     }
@@ -343,9 +343,9 @@ def search_notes(
             "results": structured_results
         },
         "_meta": {
-            "openai": {
-                "outputTemplate": "ui://widget/note.html"
-            }
+            "openai/outputTemplate": "ui://widget/note.html",
+            "openai/toolInvocation/invoking": f"Searching for '{query}'...",
+            "openai/toolInvocation/invoked": f"Found {len(results)} results."
         },
         "isError": False
     }
@@ -397,37 +397,25 @@ try:
         # Patch read_note
         if "read_note" in _tm._tools:
             _tm._tools["read_note"].meta = {
-                "openai": {
-                    "outputTemplate": "ui://widget/note.html",
-                    "toolInvocation": {
-                        "invoking": "Opening note...",
-                        "invoked": "Note opened."
-                    }
-                }
+                "openai/outputTemplate": "ui://widget/note.html",
+                "openai/toolInvocation/invoking": "Opening note...",
+                "openai/toolInvocation/invoked": "Note opened."
             }
             
         # Patch write_note
         if "write_note" in _tm._tools:
             _tm._tools["write_note"].meta = {
-                "openai": {
-                    "outputTemplate": "ui://widget/note.html",
-                    "toolInvocation": {
-                        "invoking": "Saving note...",
-                        "invoked": "Note saved."
-                    }
-                }
+                "openai/outputTemplate": "ui://widget/note.html",
+                "openai/toolInvocation/invoking": "Saving note...",
+                "openai/toolInvocation/invoked": "Note saved."
             }
             
         # Patch search_notes
         if "search_notes" in _tm._tools:
             _tm._tools["search_notes"].meta = {
-                "openai": {
-                    "outputTemplate": "ui://widget/note.html",
-                    "toolInvocation": {
-                        "invoking": "Searching...",
-                        "invoked": "Search complete."
-                    }
-                }
+                "openai/outputTemplate": "ui://widget/note.html",
+                "openai/toolInvocation/invoking": "Searching...",
+                "openai/toolInvocation/invoked": "Search complete."
             }
         logger.info("Successfully patched ChatGPT widget metadata for tools.")
 except Exception as e:
