@@ -52,8 +52,10 @@ def widget_resource() -> dict:
     
     widget_path = PROJECT_ROOT / "frontend" / "dist" / "widget.html"
     
+    logger.info(f"Reading widget from: {widget_path}")
+    
     if not widget_path.exists():
-        # Return error or fallback
+        logger.error(f"Widget path does not exist: {widget_path}")
         return {
             "contents": [{
                 "uri": "ui://widget/note.html",
@@ -62,24 +64,44 @@ def widget_resource() -> dict:
             }]
         }
         
-    html_content = widget_path.read_text(encoding="utf-8")
-    
-    # Replace relative asset paths with absolute URLs for ChatGPT iframe
-    config = get_config()
-    base_url = config.hf_space_url.rstrip("/")
-    
-    # Vite builds usually output /assets/...
-    # We replace both src and href attributes
-    html_content = html_content.replace('src="/assets/', f'src="{base_url}/assets/')
-    html_content = html_content.replace('href="/assets/', f'href="{base_url}/assets/')
-    
-    return {
-        "contents": [{
-            "uri": "ui://widget/note.html",
-            "mimeType": "text/html+skybridge",
-            "text": html_content
-        }]
-    }
+    try:
+        html_content = widget_path.read_text(encoding="utf-8")
+        logger.info(f"Widget content length: {len(html_content)}")
+        if not html_content.strip():
+            logger.error("Widget file is empty!")
+            return {
+                "contents": [{
+                    "uri": "ui://widget/note.html",
+                    "mimeType": "text/plain",
+                    "text": "Widget build file is empty."
+                }]
+            }
+            
+        # Replace relative asset paths with absolute URLs for ChatGPT iframe
+        config = get_config()
+        base_url = config.hf_space_url.rstrip("/")
+        logger.info(f"Injecting base URL: {base_url}")
+        
+        # Vite builds usually output /assets/...
+        html_content = html_content.replace('src="/assets/', f'src="{base_url}/assets/')
+        html_content = html_content.replace('href="/assets/', f'href="{base_url}/assets/')
+        
+        return {
+            "contents": [{
+                "uri": "ui://widget/note.html",
+                "mimeType": "text/html+skybridge",
+                "text": html_content
+            }]
+        }
+    except Exception as e:
+        logger.exception(f"Failed to read widget file: {e}")
+        return {
+            "contents": [{
+                "uri": "ui://widget/note.html",
+                "mimeType": "text/plain",
+                "text": f"Server error reading widget: {e}"
+            }]
+        }
 
 
 def _current_user_id() -> str:
