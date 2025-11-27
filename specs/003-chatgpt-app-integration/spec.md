@@ -22,11 +22,11 @@ Transform the Document-MCP project into a "ChatGPT App" compatible with the Open
     -   Note Viewing (with Markdown rendering and Wikilink support)
     -   Search Results (clean list with snippets)
 -   **Dual-Mode Operation**: Ensure the application continues to function as a standalone web app and standard MCP server while supporting the ChatGPT App mode.
--   **Hackathon Readiness**: Prioritize a functional "demo user" or "service token" auth flow to ensure valid submission for the "Best ChatGPT App" category.
+-   **Hackathon Readiness**: Prioritize a functional integration. We will use "No Authentication" mode for the hackathon submission to bypass OAuth complexity, securing it via obscurity (hidden URL) and "demo-user" isolation.
 
 ### Non-Goals
 -   **Full Obsidian UI in Chat**: We will not iframe the entire application (sidebar, graph view, settings) into ChatGPT.
--   **Production OAuth**: We will not implement a full OIDC provider for multi-tenant public access at this stage; a simplified auth strategy is sufficient for the hackathon.
+-   **Production OAuth**: We will not implement a full OIDC provider. **Future Work**: Implement a "Headless OAuth" provider to secure the endpoint properly using Client Credentials semantics wrapped in Authorization Code flow.
 -   **Complex Graph Viz**: The Graph View widget is out of scope for the initial V1 integration.
 
 ## 4. User Scenarios
@@ -49,7 +49,7 @@ Transform the Document-MCP project into a "ChatGPT App" compatible with the Open
 ### 5.1 Backend & MCP
 -   **Metadata Injection**: The `read_note` and `search_notes` tools must return a `CallToolResult` containing the `_meta.openai.outputTemplate` field to trigger widgets.
 -   **CORS**: The API must allow requests from `https://chatgpt.com` to support iframe loading.
--   **Service Token**: The backend must support a configured `CHATGPT_SERVICE_TOKEN` to allow the OpenAI Apps SDK to authenticate without full user-facing OAuth.
+-   **No Auth Mode**: The backend must support a configured `ENABLE_NOAUTH_MCP` flag. When enabled, MCP tools will default to the "demo-user" context if no Authorization header is present, bypassing strict checks.
 
 ### 5.2 Frontend Widgets
 -   **Widget Entry Point**: A new build target (`widget.html` + `widget.tsx`) must be created to serve simplified UI components.

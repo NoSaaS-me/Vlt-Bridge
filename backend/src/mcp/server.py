@@ -51,8 +51,14 @@ def _current_user_id() -> str:
             request = None
         if request is not None:
             header = request.headers.get("Authorization")
+            
+            # Check for No-Auth mode if header is missing
             if not header:
+                config = get_config()
+                if config.enable_noauth_mcp:
+                    return "demo-user"
                 raise PermissionError("Authorization header required")
+                
             scheme, _, token = header.partition(" ")
             if scheme.lower() != "bearer" or not token:
                 raise PermissionError("Authorization header must be 'Bearer <token>'")
