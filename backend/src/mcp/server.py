@@ -45,37 +45,32 @@ auth_service = AuthService()
 @mcp.resource("ui://widget/note.html")
 def widget_resource() -> dict:
     """Return the widget HTML bundle."""
-    # SMOKE TEST: Return simple HTML to verify wiring
+    # Locate widget.html relative to project root
+    # In Docker: /app/frontend/dist/widget.html
+    # Local: frontend/dist/widget.html
+    # We use PROJECT_ROOT from config
+    
+    widget_path = PROJECT_ROOT / "frontend" / "dist" / "widget.html"
+    
+    if not widget_path.exists():
+        # Return error or fallback
+        return {
+            "contents": [{
+                "uri": "ui://widget/note.html",
+                "mimeType": "text/plain",
+                "text": "Widget build not found. Please run 'npm run build' in frontend directory."
+            }]
+        }
+        
+    html_content = widget_path.read_text(encoding="utf-8")
+    
     return {
         "contents": [{
             "uri": "ui://widget/note.html",
             "mimeType": "text/html+skybridge",
-            "text": """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>body { color: white; background: #111; padding: 20px; font-family: sans-serif; }</style>
-            </head>
-            <body>
-                <h1>Widget Smoke Test</h1>
-                <p>If you see this, the MCP resource wiring is correct.</p>
-                <script>
-                    window.onload = () => {
-                        if(window.openai) {
-                            document.body.insertAdjacentHTML('beforeend', '<p>✅ window.openai is present</p>');
-                        } else {
-                            document.body.insertAdjacentHTML('beforeend', '<p>❌ window.openai missing</p>');
-                        }
-                    }
-                </script>
-            </body>
-            </html>
-            """
+            "text": html_content
         }]
     }
-
-    # Locate widget.html relative to project root
-    # ... (commented out logic)
 
 
 def _current_user_id() -> str:
