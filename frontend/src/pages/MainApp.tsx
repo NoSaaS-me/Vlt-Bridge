@@ -25,6 +25,7 @@ import {
   getIndexHealth,
   createNote,
   moveNote,
+  rebuildIndex,
   type BacklinkResult,
   APIException,
 } from '@/services/api';
@@ -65,6 +66,7 @@ export function MainApp() {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -183,6 +185,22 @@ export function MainApp() {
     setSelectedPath(path);
     setError(null);
     setIsEditMode(false); // Exit edit mode when switching notes
+  };
+
+  // Refresh all views when notes are changed
+  const refreshAll = async () => {
+    try {
+      const [notesList, health] = await Promise.all([
+        listNotes(),
+        rebuildIndex().catch(() => null),  // Don't fail if rebuild errors
+        getIndexHealth().catch(() => null)
+      ]);
+      setNotes(notesList);
+      setIndexHealth(health);
+      setGraphRefreshTrigger(prev => prev + 1);  // Trigger graph refresh
+    } catch (err) {
+      console.error('Error refreshing data:', err);
+    }
   };
 
   // T093: Handle edit button click
@@ -587,10 +605,13 @@ export function MainApp() {
               )}
 
               {isGraphView ? (
-                <GraphView onSelectNote={(path) => {
-                  handleSelectNote(path);
-                  setIsGraphView(false);
-                }} />
+                <GraphView
+                  onSelectNote={(path) => {
+                    handleSelectNote(path);
+                    setIsGraphView(false);
+                  }}
+                  refreshTrigger={graphRefreshTrigger}
+                />
               ) : (
                 isLoadingNote ? (
                   <NoteViewerSkeleton />
@@ -630,7 +651,10 @@ export function MainApp() {
             <>
               <ResizableHandle withHandle />
               <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
-                <ChatPanel onNavigateToNote={handleSelectNote} />
+                <ChatPanel
+                  onNavigateToNote={handleSelectNote}
+                  onNotesChanged={refreshAll}
+                />
               </ResizablePanel>
             </>
           )}

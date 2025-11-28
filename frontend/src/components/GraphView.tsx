@@ -8,9 +8,10 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 interface GraphViewProps {
   onSelectNote: (path: string) => void;
+  refreshTrigger?: number;
 }
 
-export function GraphView({ onSelectNote }: GraphViewProps) {
+export function GraphView({ onSelectNote, refreshTrigger }: GraphViewProps) {
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +72,7 @@ export function GraphView({ onSelectNote }: GraphViewProps) {
       }
     };
     fetchData();
-  }, []);
+  }, [refreshTrigger]);
 
   // Configure forces when data is loaded
   useEffect(() => {

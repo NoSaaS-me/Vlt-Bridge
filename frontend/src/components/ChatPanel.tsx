@@ -10,9 +10,10 @@ import { APIException } from '@/services/api';
 
 interface ChatPanelProps {
   onNavigateToNote: (path: string) => void;
+  onNotesChanged?: () => void;
 }
 
-export function ChatPanel({ onNavigateToNote }: ChatPanelProps) {
+export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -55,6 +56,11 @@ export function ChatPanel({ onNavigateToNote }: ChatPanelProps) {
       };
 
       setMessages(prev => [...prev, assistantMsg]);
+
+      // Trigger refresh if notes were created/updated
+      if (response.notes_written && response.notes_written.length > 0 && onNotesChanged) {
+        onNotesChanged();
+      }
     } catch (err) {
       console.error("Chat error:", err);
       let errorMessage = "Failed to get response from agent";
