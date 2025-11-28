@@ -13,8 +13,15 @@ from llama_index.core import (
     Document,
     Settings
 )
-from llama_index.llms.google_genai import Gemini
-from llama_index.embeddings.google_genai import GeminiEmbedding
+
+try:
+    from llama_index.llms.google_genai import Gemini
+    from llama_index.embeddings.google_genai import GeminiEmbedding
+except ImportError:
+    Gemini = None
+    GeminiEmbedding = None
+    logger.warning("Could not import google_genai modules. RAG features will be disabled.")
+
 from llama_index.core.base.response.schema import Response as LlamaResponse
 from llama_index.core.llms import ChatMessage as LlamaChatMessage, MessageRole
 
@@ -34,6 +41,10 @@ class RAGIndexService:
 
     def _setup_gemini(self):
         """Configure global LlamaIndex settings for Gemini."""
+        if not Gemini or not GeminiEmbedding:
+            logger.error("Google GenAI modules not loaded. RAG setup skipped.")
+            return
+
         if not self.config.google_api_key:
             logger.warning("GOOGLE_API_KEY not set. RAG features will fail.")
             return
