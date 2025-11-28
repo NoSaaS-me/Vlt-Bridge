@@ -28,7 +28,19 @@ class AppConfig(BaseModel):
     )
     local_dev_token: Optional[str] = Field(
         default="local-dev-token",
-        description="Static token accepted in local mode for development",
+        description="Static token accepted in local mode (maps to 'demo-user')",
+    )
+    chatgpt_service_token: Optional[str] = Field(
+        default=None,
+        description="Static token for ChatGPT Apps SDK auth",
+    )
+    chatgpt_cors_origin: str = Field(
+        default="https://chatgpt.com",
+        description="Allowed CORS origin for ChatGPT",
+    )
+    enable_noauth_mcp: bool = Field(
+        default=False,
+        description="DANGEROUS: Allow unauthenticated MCP access as demo-user (for hackathon)",
     )
     vault_base_path: Path = Field(..., description="Base directory for per-user vaults")
     hf_oauth_client_id: Optional[str] = Field(
@@ -86,11 +98,17 @@ def get_config() -> AppConfig:
         "no",
     }
     local_dev_token = _read_env("LOCAL_DEV_TOKEN", "local-dev-token")
+    chatgpt_service_token = _read_env("CHATGPT_SERVICE_TOKEN")
+    chatgpt_cors_origin = _read_env("CHATGPT_CORS_ORIGIN", "https://chatgpt.com")
+    enable_noauth_mcp = _read_env("ENABLE_NOAUTH_MCP", "false").lower() in {"true", "1", "yes"}
 
     config = AppConfig(
         jwt_secret_key=jwt_secret,
         enable_local_mode=enable_local_mode,
         local_dev_token=local_dev_token,
+        chatgpt_service_token=chatgpt_service_token,
+        chatgpt_cors_origin=chatgpt_cors_origin,
+        enable_noauth_mcp=enable_noauth_mcp,
         vault_base_path=vault_base,
         hf_oauth_client_id=hf_client_id,
         hf_oauth_client_secret=hf_client_secret,

@@ -15,6 +15,7 @@ import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_T
 import { getIndexHealth, rebuildIndex, type RebuildResponse } from '@/services/api';
 import type { User } from '@/types/user';
 import type { IndexHealth } from '@/types/search';
+import { SystemLogs } from '@/components/SystemLogs';
 
 export function Settings() {
   const navigate = useNavigate();
@@ -326,6 +327,9 @@ export function Settings() {
             description="Full-text search index status and maintenance"
           />
         )}
+
+        {/* System Logs */}
+        <SystemLogs />
       </div>
     </div>
   );

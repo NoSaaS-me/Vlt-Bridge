@@ -18,14 +18,23 @@ load_dotenv()  # Add this line at the top, before other imports
 # from fastapi.routing import ASGIRoute
 from starlette.responses import Response
 
-from fastmcp.server.http import StreamableHTTPSessionManager
+from fastmcp.server.http import StreamableHTTPSessionManager, set_http_request
 from fastapi.responses import FileResponse
 
-from .routes import auth, index, notes, search, graph, demo
+from .routes import auth, index, notes, search, graph, demo, system
 from ..mcp.server import mcp
 from ..services.seed import init_and_seed
+from ..services.config import get_config
 
 logger = logging.getLogger(__name__)
+
+# Hosted MCP HTTP endpoint (mounted Starlette app)
+session_manager = StreamableHTTPSessionManager(
+    app=mcp._mcp_server,
+    event_store=None,
+    json_response=False,
+    stateless=True,
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -37,7 +46,10 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.exception("Startup failed: %s", exc)
         logger.error("App starting without demo data due to initialization error")
-    yield
+    
+    # Initialize FastMCP session manager task group
+    async with session_manager.run():
+        yield
 
 
 app = FastAPI(
@@ -47,6 +59,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+config = get_config()
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -54,6 +68,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:3000",
         "https://huggingface.co",
+        config.chatgpt_cors_origin,
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -96,15 +111,7 @@ app.include_router(search.router, tags=["search"])
 app.include_router(index.router, tags=["index"])
 app.include_router(graph.router, tags=["graph"])
 app.include_router(demo.router, tags=["demo"])
-
-# Hosted MCP HTTP endpoint (mounted Starlette app)
-
-session_manager = StreamableHTTPSessionManager(
-    app=mcp._mcp_server,
-    event_store=None,
-    json_response=False,
-    stateless=True,
-)
+app.include_router(system.router, tags=["system"])
 
 
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"])
@@ -116,7 +123,13 @@ async def mcp_http_bridge(request: Request) -> Response:
     async def send(message):
         await send_queue.put(message)
 
-    await session_manager.handle_request(request.scope, request.receive, send)
+    try:
+        with set_http_request(request):
+            await session_manager.handle_request(request.scope, request.receive, send)
+    except Exception as exc:
+        logger.exception("FastMCP session manager crashed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"MCP Bridge Error: {exc}")
+
     await send_queue.put(None)
 
     result_body = b""
@@ -169,6 +182,14 @@ if frontend_dist.exists():
         ):
             # Let FastAPI's 404 handler take over
             raise HTTPException(status_code=404, detail="Not found")
+
+        # Serve widget entry point
+        if full_path == "widget.html" or full_path.startswith("widget"):
+            widget_path = frontend_dist / "widget.html"
+            if widget_path.is_file():
+                # ChatGPT requires specific MIME type for widgets
+                return FileResponse(widget_path, media_type="text/html+skybridge")
+            logger.warning("widget.html requested but not found")
 
         # If the path looks like a file (has extension), try to serve it
         file_path = frontend_dist / full_path

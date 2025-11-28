@@ -9,6 +9,8 @@ from fastapi import Header, HTTPException, status
 
 from ...models.auth import JWTPayload
 from ...services.auth import AuthError, AuthService
+from ...services.config import get_config
+from datetime import datetime, timezone
 
 auth_service = AuthService()
 
@@ -38,6 +40,17 @@ def get_auth_context(
     Raises HTTPException if the header is missing/invalid.
     """
     if not authorization:
+        # Check for No-Auth mode (Hackathon/Demo)
+        config = get_config()
+        if config.enable_noauth_mcp:
+            # Create a dummy payload for demo user
+            payload = JWTPayload(
+                sub="demo-user",
+                iat=int(datetime.now(timezone.utc).timestamp()),
+                exp=int(datetime.now(timezone.utc).timestamp()) + 3600
+            )
+            return AuthContext(user_id="demo-user", token="no-auth", payload=payload)
+            
         raise _unauthorized("Authorization header required")
 
     scheme, _, token = authorization.partition(" ")

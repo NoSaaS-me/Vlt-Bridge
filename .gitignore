@@ -53,3 +53,12 @@ data/
 reproduce_auth_500.py
 debug_list_notes.py
 DEPLOY_TO_HF.md
+
+# Documentation
+docs/fastmcp/
+
+# Images (binary files not allowed in HF Spaces)
+*.png
+*.jpg
+*.jpeg
+*.gif

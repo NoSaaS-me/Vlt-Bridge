@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from fastmcp.tools.tool import ToolResult
+from mcp.types import TextContent
 from pydantic import Field
 
 # Load environment variables from .env file
@@ -16,6 +18,7 @@ load_dotenv()
 
 from ..services import IndexerService, VaultNote, VaultService
 from ..services.auth import AuthError, AuthService
+from ..services.config import get_config, PROJECT_ROOT
 
 try:
     from fastmcp.server.http import _current_http_request  # type: ignore
@@ -41,6 +44,50 @@ indexer_service = IndexerService()
 auth_service = AuthService()
 
 
+@mcp.resource("ui://widget/note.html", mime_type="text/html+skybridge")
+def widget_resource() -> str:
+    """Return the widget HTML bundle."""
+    # Locate widget.html relative to project root
+    # In Docker: /app/frontend/dist/widget.html
+    # Local: frontend/dist/widget.html
+    # We use PROJECT_ROOT from config
+    
+    widget_path = PROJECT_ROOT / "frontend" / "dist" / "widget.html"
+    
+    logger.info(f"Reading widget from: {widget_path}")
+    
+    if not widget_path.exists():
+        logger.error(f"Widget path does not exist: {widget_path}")
+        return "Widget build not found. Please run 'npm run build' in frontend directory."
+        
+    try:
+        html_content = widget_path.read_text(encoding="utf-8")
+        logger.info(f"Widget content length: {len(html_content)}")
+        if not html_content.strip():
+            logger.error("Widget file is empty!")
+            return "Widget build file is empty."
+            
+        # Replace relative asset paths with absolute URLs for ChatGPT iframe
+        config = get_config()
+        base_url = config.hf_space_url.rstrip("/")
+        logger.info(f"Injecting base URL: {base_url}")
+        
+        # Inject API_BASE_URL global for the widget to use
+        html_content = html_content.replace(
+            '<head>', 
+            f'<head><script>window.API_BASE_URL = "{base_url}";</script>'
+        )
+        
+        # Vite builds usually output /assets/...
+        html_content = html_content.replace('src="/assets/', f'src="{base_url}/assets/')
+        html_content = html_content.replace('href="/assets/', f'href="{base_url}/assets/')
+        
+        return html_content
+    except Exception as e:
+        logger.exception(f"Failed to read widget file: {e}")
+        return f"Server error reading widget: {e}"
+
+
 def _current_user_id() -> str:
     """Resolve the acting user ID (local mode defaults to local-dev)."""
     # HTTP transport (hosted) uses Authorization headers
@@ -51,8 +98,14 @@ def _current_user_id() -> str:
             request = None
         if request is not None:
             header = request.headers.get("Authorization")
+            
+            # Check for No-Auth mode if header is missing
             if not header:
+                config = get_config()
+                if config.enable_noauth_mcp:
+                    return "demo-user"
                 raise PermissionError("Authorization header required")
+                
             scheme, _, token = header.partition(" ")
             if scheme.lower() != "bearer" or not token:
                 raise PermissionError("Authorization header must be 'Bearer <token>'")
@@ -118,7 +171,8 @@ def read_note(
     path: str = Field(
         ..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."
     ),
-) -> Dict[str, Any]:
+) -> dict:
+    print(f"!!! READ_NOTE CALLED: {path} !!!", flush=True)
     start_time = time.time()
     user_id = _current_user_id()
 
@@ -135,7 +189,24 @@ def read_note(
         },
     )
 
-    return _note_to_response(note)
+    structured_note = {
+        "title": note["title"],
+        "note_path": note["path"],
+        "body": note["body"],
+        "metadata": note["metadata"],
+        "updated": note["modified"].isoformat(),
+    }
+
+    return ToolResult(
+        content=[TextContent(type="text", text=f"Read note: {note['title']}")],
+        structured_content={"note": structured_note},
+        meta={
+            "openai/outputTemplate": "ui://widget/note.html",
+            "openai/resultCanProduceWidget": True,
+            "openai/toolInvocation/invoking": f"Opening {note['title']}...",
+            "openai/toolInvocation/invoked": f"Loaded {note['title']}"
+        }
+    )
 
 
 @mcp.tool(
@@ -155,7 +226,7 @@ def write_note(
         default=None,
         description="Optional frontmatter dict (tags arrays of strings; 'version' reserved).",
     ),
-) -> Dict[str, Any]:
+) -> dict:
     start_time = time.time()
     user_id = _current_user_id()
 
@@ -179,7 +250,24 @@ def write_note(
         },
     )
 
-    return {"status": "ok", "path": path}
+    structured_note = {
+        "title": note["title"],
+        "note_path": note["path"],
+        "body": note["body"],
+        "metadata": note["metadata"],
+        "updated": note["modified"].isoformat(),
+    }
+
+    return ToolResult(
+        content=[TextContent(type="text", text=f"Successfully saved note: {path}")],
+        structured_content={"note": structured_note},
+        meta={
+            "openai/outputTemplate": "ui://widget/note.html",
+            "openai/resultCanProduceWidget": True,
+            "openai/toolInvocation/invoking": f"Saving {path}...",
+            "openai/toolInvocation/invoked": f"Saved {path}"
+        }
+    )
 
 
 @mcp.tool(name="delete_note", description="Delete a note and remove it from the index.")
@@ -211,11 +299,16 @@ def delete_note(
 @mcp.tool(
     name="search_notes",
     description="Full-text search with snippets and recency-aware scoring.",
+    meta={
+        "openai/outputTemplate": "ui://widget/note.html",
+        "openai/toolInvocation/invoking": "Searching...",
+        "openai/toolInvocation/invoked": "Search complete."
+    }
 )
 def search_notes(
     query: str = Field(..., description="Non-empty search query (bm25 + recency)."),
     limit: int = Field(50, ge=1, le=100, description="Result cap between 1 and 100."),
-) -> List[Dict[str, Any]]:
+) -> ToolResult:
     start_time = time.time()
     user_id = _current_user_id()
 
@@ -234,14 +327,28 @@ def search_notes(
         },
     )
 
-    return [
-        {
-            "path": row["path"],
-            "title": row["title"],
-            "snippet": row["snippet"],
+    # Structure results for the widget
+    structured_results = []
+    for r in results:
+        structured_results.append({
+            "title": r["title"],
+            "note_path": r["path"],
+            "snippet": r["snippet"],
+            "score": r["score"],
+            "updated": r["updated"] if isinstance(r["updated"], str) else r["updated"].isoformat()
+        })
+
+    return ToolResult(
+        content=[TextContent(type="text", text=f"Found {len(results)} notes matching '{query}'.")],
+        structured_content={"results": structured_results},
+        meta={
+            "openai/outputTemplate": "ui://widget/note.html",
+            "openai/resultCanProduceWidget": True,
+            "openai/toolInvocation/invoking": f"Searching for '{query}'...",
+            "openai/toolInvocation/invoked": f"Found {len(results)} results."
         }
-        for row in results
-    ]
+    )
+
 
 
 @mcp.tool(
