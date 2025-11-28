@@ -74,7 +74,7 @@ export function MainApp() {
   const ttsUrlRef = useRef<string | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
   // T007: Initialize font size state management
-  const { fontSize, setFontSize } = useFontSize();
+  const { fontSize, setFontSize, isFontReady } = useFontSize();
   const {
     status: ttsPlayerStatus,
     error: ttsPlayerError,
@@ -729,7 +729,7 @@ export function MainApp() {
                   refreshTrigger={graphRefreshTrigger}
                 />
               ) : (
-                isLoadingNote ? (
+                isLoadingNote || !isFontReady ? (
                   <NoteViewerSkeleton />
                 ) : currentNote ? (
                   isEditMode ? (

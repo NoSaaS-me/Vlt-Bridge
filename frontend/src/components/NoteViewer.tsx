@@ -117,17 +117,17 @@ export function NoteViewer({
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-3 mb-1">
-              <h1 className="text-3xl font-bold truncate animate-slide-in-up" style={{ animationDelay: '0.1s' }}>{note.title}</h1>
+              <h1 className="text-3xl font-bold truncate animate-slide-in-up">{note.title}</h1>
               {/* T035: Render Badge with "X min read" near note title */}
               {readingTime && (
-                <Badge variant="secondary" className="flex-shrink-0 animate-fade-in" style={{ animationDelay: '0.15s' }}>
+                <Badge variant="secondary" className="flex-shrink-0 animate-fade-in">
                   {readingTime}
                 </Badge>
               )}
             </div>
-            <p className="text-sm text-muted-foreground mt-1 animate-fade-in" style={{ animationDelay: '0.2s' }}>{note.note_path}</p>
+            <p className="text-sm text-muted-foreground mt-1 animate-fade-in">{note.note_path}</p>
           </div>
-          <div className="flex gap-2 animate-fade-in" style={{ animationDelay: '0.15s' }}>
+          <div className="flex gap-2 animate-fade-in">
             {onTtsToggle && (
               <div className="flex gap-2">
                 <Button
@@ -238,7 +238,7 @@ export function NoteViewer({
         {/* Main content panel */}
         <ResizablePanel defaultSize={isTocOpen ? 75 : 100}>
           <ScrollArea className="h-full p-6">
-            <div className="prose prose-slate dark:prose-invert max-w-none animate-fade-in-smooth" style={{ animationDelay: '0.1s' }}>
+            <div className="prose prose-slate dark:prose-invert max-w-none animate-fade-in-smooth">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={markdownComponents}
@@ -251,7 +251,7 @@ export function NoteViewer({
             <Separator className="my-8" />
 
             {/* Metadata Footer */}
-            <div className="space-y-4 text-sm animate-fade-in" style={{ animationDelay: '0.4s' }}>
+            <div className="space-y-4 text-sm animate-fade-in">
               {/* Tags */}
               {note.metadata.tags && note.metadata.tags.length > 0 && (
                 <div className="flex items-start gap-2">
