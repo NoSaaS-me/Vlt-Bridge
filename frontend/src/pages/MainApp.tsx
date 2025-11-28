@@ -443,7 +443,7 @@ export function MainApp() {
         {isDemoMode && (
           <div className="border-b border-border bg-muted/40 px-4 py-2 text-sm text-muted-foreground flex flex-wrap items-center justify-between gap-2">
             <span>
-              You are browsing the shared demo vault in read-only mode. Sign in with your Hugging Face account to create and edit notes.
+              You are browsing the shared demo vault in read-only mode. Sign in with your Hugging Face account to create and edit notes. Or use the integrated chat agent to fubar the whole note system and eat up all my gemini api credits.
             </span>
             <Button variant="outline" size="sm" onClick={() => login()}>
               Sign in

@@ -30,6 +30,7 @@ except ImportError as e:
 
 from llama_index.core.base.response.schema import Response as LlamaResponse
 from llama_index.core.llms import ChatMessage as LlamaChatMessage, MessageRole
+from llama_index.core.memory import ChatMemoryBuffer
 
 from .config import get_config
 from .vault import VaultService
@@ -248,12 +249,12 @@ class RAGIndexService:
         def create_folder(folder: str) -> str:
             """
             Create a new folder in the vault.
-            
+
             Args:
                 folder: The path of the folder to create (e.g. "agent-notes/archive").
             """
             safe_folder = folder.strip("/")
-            
+
             try:
                 # Create a placeholder to ensure directory exists
                 placeholder = f"{safe_folder}/.placeholder.md"
@@ -270,6 +271,96 @@ class RAGIndexService:
 
         return FunctionTool.from_defaults(fn=create_folder)
 
+    def _list_notes_tool(self, user_id: str):
+        """Create a tool for listing all notes in the vault."""
+        def list_notes(folder: str = "") -> str:
+            """
+            List all notes in the vault, optionally filtered by folder.
+            Use this to discover what notes exist before reading or referencing them.
+
+            Args:
+                folder: Optional folder path to filter results (e.g. "agent-notes"). Leave empty to list all notes.
+
+            Returns:
+                A formatted list of note paths and titles.
+            """
+            try:
+                notes = self.vault_service.list_notes(user_id)
+
+                # Filter by folder if specified
+                if folder:
+                    folder_normalized = folder.strip("/")
+                    notes = [n for n in notes if n["path"].startswith(folder_normalized)]
+
+                if not notes:
+                    return f"No notes found{' in folder: ' + folder if folder else ''}."
+
+                # Format as list with paths and titles
+                result = f"Found {len(notes)} note(s):\n\n"
+                for note in notes[:100]:  # Limit to 100 to avoid huge responses
+                    result += f"- **{note['title']}** (`{note['path']}`)\n"
+
+                if len(notes) > 100:
+                    result += f"\n... and {len(notes) - 100} more notes."
+
+                return result
+            except Exception as e:
+                return f"Failed to list notes: {e}"
+
+        return FunctionTool.from_defaults(fn=list_notes)
+
+    def _read_note_tool(self, user_id: str):
+        """Create a tool for reading a specific note by path."""
+        def read_note(path: str) -> str:
+            """
+            Read the full content of a specific note by its path.
+            Use this when you need the complete content of a note, not just search snippets.
+
+            Args:
+                path: The path to the note (e.g. "architecture/API Design.md" or "agent-notes/Meeting Notes.md").
+
+            Returns:
+                The full markdown content of the note including title and body.
+            """
+            try:
+                note = self.vault_service.read_note(user_id, path)
+                return f"# {note['title']}\n\n{note['body']}"
+            except Exception as e:
+                return f"Failed to read note at '{path}': {e}"
+
+        return FunctionTool.from_defaults(fn=read_note)
+
+    def _update_note_tool(self, user_id: str):
+        """Create a tool for updating an existing note."""
+        def update_note(path: str, content: str) -> str:
+            """
+            Update an existing note's content. Use this to edit or append to existing notes.
+
+            Args:
+                path: The path to the note to update (e.g. "agent-notes/Summary.md").
+                content: The new markdown content for the note body.
+
+            Returns:
+                Confirmation message with the updated path.
+            """
+            try:
+                # Read existing note to get title and metadata
+                existing = self.vault_service.read_note(user_id, path)
+
+                # Update with new content, preserving title
+                self.vault_service.write_note(
+                    user_id,
+                    path,
+                    title=existing["title"],
+                    body=content,
+                    metadata={**existing.get("metadata", {}), "updated_by": "gemini-agent"}
+                )
+                return f"Note updated successfully at {path}"
+            except Exception as e:
+                return f"Failed to update note at '{path}': {e}"
+
+        return FunctionTool.from_defaults(fn=update_note)
+
     async def chat(self, user_id: str, messages: list[ChatMessage]) -> ChatResponse:
         """Run RAG chat query with history."""
         if not self.config.google_api_key:
@@ -285,30 +376,41 @@ class RAGIndexService:
             raise ValueError("Last message must be from user")
             
         query_text = last_message.content
-        
-        # Convert history (excluding last message)
-        history = []
-        for m in messages[:-1]:
+
+        # Create memory with chat history for context persistence
+        memory = ChatMemoryBuffer.from_defaults(token_limit=8000)
+
+        # Load previous messages into memory
+        for m in messages[:-1]:  # Exclude last message (the current query)
             role = MessageRole.USER if m.role == "user" else MessageRole.ASSISTANT
-            history.append(LlamaChatMessage(role=role, content=m.content))
-            
+            memory.put(LlamaChatMessage(role=role, content=m.content))
+
+        # Define all available tools
         tools = [
+            # Read/Browse tools (use these first to understand the vault)
+            self._list_notes_tool(user_id),
+            self._read_note_tool(user_id),
+
+            # Write/Modify tools
             self._create_note_tool(user_id),
+            self._update_note_tool(user_id),
+
+            # Organization tools
             self._move_note_tool(user_id),
             self._create_folder_tool(user_id)
         ]
-        
+
         from llama_index.core.tools import QueryEngineTool, ToolMetadata
-        
+
+        # RAG search tool for semantic queries
         query_tool = QueryEngineTool(
             query_engine=index.as_query_engine(),
             metadata=ToolMetadata(
                 name="vault_search",
-                description="Search information in the documentation vault."
+                description="Semantic search across vault content. Use when you need to find notes by topic/concept, not by exact path or title."
             )
         )
-        
-        
+
         all_tools = tools + [query_tool]
         
         # Use FunctionAgent (new in 0.14.x, replaces FunctionCallingAgent)
@@ -323,14 +425,59 @@ class RAGIndexService:
         agent = FunctionAgent(
             tools=all_tools,
             llm=Settings.llm,
-            chat_history=history,
             verbose=True,
-            system_prompt="You are a documentation assistant. Use vault_search to find info. You can create notes and folders."
+            system_prompt="""You are an autonomous documentation assistant with full access to a markdown vault.
+
+CORE BEHAVIORS:
+1. **Be Proactive**: Take initiative. Don't ask for information you can discover using tools.
+2. **Use Tools First**: Before asking the user for details, use list_notes, read_note, or vault_search to gather information.
+3. **Make Reasonable Decisions**: When creating content, use your judgment to generate appropriate titles, structure, and content based on context.
+4. **Multi-Step Thinking**: Break complex tasks into steps and execute them autonomously.
+5. **Remember Context**: Pay attention to the conversation history and use information from previous messages.
+
+AVAILABLE TOOLS:
+- list_notes: Discover what notes exist (use this FIRST for browsing tasks)
+- read_note: Read complete note content by path
+- vault_search: Semantic search for finding notes by topic/concept
+- create_note: Create new notes in agent-notes/ folder
+- update_note: Edit existing notes
+- move_note, create_folder: Organize notes
+
+WORKFLOW EXAMPLES:
+
+User: "Create an index of all notes"
+→ 1. Use list_notes() to get all notes
+→ 2. Use read_note() on key notes to get summaries
+→ 3. Generate index content autonomously
+→ 4. Use create_note() with a sensible title like "Note Index"
+
+User: "Summarize the ChatGPT integration"
+→ 1. Use vault_search("ChatGPT integration") to find relevant notes
+→ 2. Read the full content if needed
+→ 3. Provide summary directly (don't ask for permission)
+
+User: "Create a note based on this chat"
+→ 1. Review conversation history
+→ 2. Generate appropriate title (e.g., "Chat Summary - [Date]")
+→ 3. Create structured content from the discussion
+→ 4. Use create_note() immediately
+
+NEVER:
+- Ask repeatedly for the same information
+- Ask "what should I name it?" when context provides clear answers
+- Say "I cannot do X" when you have tools that enable X
+- Request permission for routine operations (creating notes, searching, etc.)
+
+ALWAYS:
+- Execute tasks end-to-end autonomously
+- Provide clear confirmation of what you did
+- Use wikilink syntax [[Note Name]] when referencing notes
+- Put new notes in agent-notes/ folder unless specified otherwise"""
         )
 
-        # Use .run() method (not .chat() which doesn't exist in 0.14.x)
-        response = await agent.run(user_msg=query_text)
-        
+        # Use .run() method with memory for context persistence (0.14.x pattern)
+        response = await agent.run(user_msg=query_text, memory=memory)
+
         return self._format_response(response)
 
     def _format_response(self, response: LlamaResponse) -> ChatResponse:
