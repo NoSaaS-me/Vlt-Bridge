@@ -66,3 +66,6 @@ Ai-notes/
 *.jpg
 *.jpeg
 *.gif
+
+# Generated reports
+AUDIT_REPORT.md
