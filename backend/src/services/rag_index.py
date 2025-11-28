@@ -53,9 +53,14 @@ class RAGIndexService:
     def __init__(self):
         if getattr(self, "_initialized", False):
             return
-            
+
         self.vault_service = VaultService()
         self.config = get_config()
+
+        # Import here to avoid circular dependency
+        from .indexer import IndexerService
+        from .database import DatabaseService
+        self.indexer_service = IndexerService(DatabaseService())
         self._index_lock = threading.Lock() # Per-instance lock for index ops
         self._setup_gemini()
         self._initialized = True
@@ -209,13 +214,22 @@ class RAGIndexService:
             path = f"{safe_folder}/{title}.md"
             
             try:
-                self.vault_service.write_note(
+                written_note = self.vault_service.write_note(
                     user_id,
                     path,
                     title=title,
                     body=content,
                     metadata={"created_by": "gemini-agent"}
                 )
+
+                # Index the note immediately so graph view updates
+                try:
+                    self.indexer_service.index_note(user_id, written_note)
+                    logger.info(f"[RAG] Indexed note after creation: {path}")
+                except Exception as idx_err:
+                    logger.warning(f"[RAG] Failed to index note {path}: {idx_err}")
+                    # Continue even if indexing fails
+
                 return f"Note created successfully at {path}"
             except Exception as e:
                 return f"Failed to create note: {e}"
@@ -350,13 +364,21 @@ class RAGIndexService:
                 existing = self.vault_service.read_note(user_id, path)
 
                 # Update with new content, preserving title
-                self.vault_service.write_note(
+                updated_note = self.vault_service.write_note(
                     user_id,
                     path,
                     title=existing["title"],
                     body=content,
                     metadata={**existing.get("metadata", {}), "updated_by": "gemini-agent"}
                 )
+
+                # Index the note immediately so graph view updates
+                try:
+                    self.indexer_service.index_note(user_id, updated_note)
+                    logger.info(f"[RAG] Indexed note after update: {path}")
+                except Exception as idx_err:
+                    logger.warning(f"[RAG] Failed to index note {path}: {idx_err}")
+
                 return f"Note updated successfully at {path}"
             except Exception as e:
                 return f"Failed to update note at '{path}': {e}"
