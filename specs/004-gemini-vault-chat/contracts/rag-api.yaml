@@ -1,0 +1,219 @@
+openapi: 3.0.3
+info:
+  title: Document-MCP RAG Chat API
+  description: Gemini-powered RAG chat endpoints for vault content querying
+  version: 1.0.0
+
+paths:
+  /api/rag/chat:
+    post:
+      summary: Send a message and get AI-generated response
+      description: |
+        Accepts conversation history and returns an AI-synthesized answer
+        based on vault content, along with source references.
+      operationId: ragChat
+      tags:
+        - RAG
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+            example:
+              messages:
+                - role: user
+                  content: "How does authentication work in this project?"
+      responses:
+        '200':
+          description: Successful response with answer and sources
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+              example:
+                answer: "Authentication in this project uses JWT tokens..."
+                sources:
+                  - path: "API Documentation.md"
+                    title: "API Documentation"
+                    snippet: "The system uses JWT-based authentication..."
+                    score: 0.92
+                notes_written: []
+        '400':
+          description: Invalid request (empty messages, invalid format)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: AI service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "AI service temporarily unavailable"
+                code: "SERVICE_UNAVAILABLE"
+
+  /api/rag/status:
+    get:
+      summary: Check RAG service status
+      description: Returns whether the index is ready and service is operational
+      operationId: ragStatus
+      tags:
+        - RAG
+      responses:
+        '200':
+          description: Service status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+components:
+  schemas:
+    ChatMessage:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+          description: Message author
+        content:
+          type: string
+          maxLength: 10000
+          description: Message text
+        timestamp:
+          type: string
+          format: date-time
+          description: When message was created
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceReference'
+          description: Referenced notes (assistant messages only)
+        notes_written:
+          type: array
+          items:
+            $ref: '#/components/schemas/NoteWritten'
+          description: Notes created by agent (Phase 2)
+
+    SourceReference:
+      type: object
+      required:
+        - path
+        - title
+        - snippet
+      properties:
+        path:
+          type: string
+          description: Relative path in vault
+          example: "guides/authentication.md"
+        title:
+          type: string
+          description: Note title
+          example: "Authentication Guide"
+        snippet:
+          type: string
+          maxLength: 500
+          description: Relevant text excerpt
+        score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Relevance score
+
+    NoteWritten:
+      type: object
+      required:
+        - path
+        - title
+        - action
+      properties:
+        path:
+          type: string
+          description: Path to created/updated note
+          pattern: "^agent-notes/.+\\.md$"
+        title:
+          type: string
+          description: Note title
+        action:
+          type: string
+          enum: [created, updated]
+          description: What the agent did
+
+    ChatRequest:
+      type: object
+      required:
+        - messages
+      properties:
+        messages:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+          description: Conversation history, last message must be from user
+
+    ChatResponse:
+      type: object
+      required:
+        - answer
+        - sources
+        - notes_written
+      properties:
+        answer:
+          type: string
+          description: AI-generated response
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceReference'
+          description: Notes used in response
+        notes_written:
+          type: array
+          items:
+            $ref: '#/components/schemas/NoteWritten'
+          description: Notes created (Phase 2, may be empty)
+
+    StatusResponse:
+      type: object
+      required:
+        - status
+        - index_ready
+      properties:
+        status:
+          type: string
+          enum: [ready, initializing, error]
+        index_ready:
+          type: boolean
+          description: Whether the vector index is loaded
+        documents_indexed:
+          type: integer
+          description: Number of documents in index
+        error_message:
+          type: string
+          description: Error details if status is error
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - code
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+          enum:
+            - INVALID_REQUEST
+            - EMPTY_MESSAGES
+            - SERVICE_UNAVAILABLE
+            - INDEX_NOT_READY
+            - RATE_LIMITED
+

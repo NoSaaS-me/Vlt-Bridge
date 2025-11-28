@@ -271,3 +271,10 @@ Current active feature: `001-obsidian-docs-viewer`
 ```
 
 Obtain JWT: `POST /api/tokens` after HF OAuth login.
+
+## Active Technologies
+- Python 3.11+ (backend), TypeScript (frontend) + FastAPI, LlamaIndex, llama-index-llms-google-genai, llama-index-embeddings-google-genai, React 18+, Tailwind CSS, Shadcn/UI (004-gemini-vault-chat)
+- Filesystem vault (existing), LlamaIndex persisted vector store (new, under `data/llamaindex/`) (004-gemini-vault-chat)
+
+## Recent Changes
+- 004-gemini-vault-chat: Added Python 3.11+ (backend), TypeScript (frontend) + FastAPI, LlamaIndex, llama-index-llms-google-genai, llama-index-embeddings-google-genai, React 18+, Tailwind CSS, Shadcn/UI
