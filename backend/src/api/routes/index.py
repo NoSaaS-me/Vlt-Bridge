@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 
 from ...models.index import IndexHealth
@@ -120,7 +123,7 @@ async def rebuild_index(auth: AuthContext = Depends(get_auth_context)):
                 indexer_service.index_note(user_id, note_data)
                 indexed_count += 1
             except Exception as e:
-                print(f"Failed to index {note['path']}: {e}")
+                logger.error(f"Failed to index {note['path']}: {e}")
         
         # Update index health
         conn = db_service.connect()

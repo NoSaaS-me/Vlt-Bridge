@@ -31,7 +31,7 @@ uv pip install -e .
 uv pip install -e ".[dev]"
 
 # Run FastAPI HTTP server (for UI)
-uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 
 # Run MCP STDIO server (for Claude Desktop/Code)
 uv run python src/mcp/server.py
@@ -76,7 +76,7 @@ npm run preview               # Serve dist/ (after npm run build)
 # Manual reset (WARNING: destroys all data)
 cd backend
 rm -f ../data/index.db
-uv run python -c "from src.services.database import DatabaseService; DatabaseService().init_schema()"
+uv run python -c "from src.services.database import DatabaseService; DatabaseService().initialize()"
 ```
 
 ## Architecture Deep Dive
@@ -107,7 +107,7 @@ uv run python -c "from src.services.database import DatabaseService; DatabaseSer
    - `database.py`: SQLite connection manager + schema DDL
 
 3. **API/MCP** (`backend/src/api/` and `backend/src/mcp/`):
-   - `api/routes/`: FastAPI endpoints (11 routes: auth, notes CRUD, search, backlinks, tags, index health/rebuild)
+   - `api/routes/`: FastAPI endpoints (18 routes: auth, notes CRUD, search, backlinks, tags, index health/rebuild, graph, demo, system)
    - `api/middleware/auth_middleware.py`: JWT Bearer token validation
    - `mcp/server.py`: FastMCP tools (7 tools: list, read, write, delete, search, backlinks, tags)
 

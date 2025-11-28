@@ -172,7 +172,6 @@ def read_note(
         ..., description="Relative '.md' path ≤256 chars (no '..' or '\\')."
     ),
 ) -> dict:
-    print(f"!!! READ_NOTE CALLED: {path} !!!", flush=True)
     start_time = time.time()
     user_id = _current_user_id()
 

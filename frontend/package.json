@@ -1,8 +1,10 @@
 {
-  "name": "frontend",
+  "name": "document-mcp-frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "description": "React frontend for Document-MCP - Multi-tenant documentation viewer with AI integration",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
