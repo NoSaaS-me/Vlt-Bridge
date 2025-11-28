@@ -275,6 +275,8 @@ Obtain JWT: `POST /api/tokens` after HF OAuth login.
 ## Active Technologies
 - Python 3.11+ (backend), TypeScript (frontend) + FastAPI, LlamaIndex, llama-index-llms-google-genai, llama-index-embeddings-google-genai, React 18+, Tailwind CSS, Shadcn/UI (004-gemini-vault-chat)
 - Filesystem vault (existing), LlamaIndex persisted vector store (new, under `data/llamaindex/`) (004-gemini-vault-chat)
+- TypeScript 5.x, React 18+ (006-ui-polish)
+- localStorage for user preferences (font size, TOC panel state) (006-ui-polish)
 
 ## Recent Changes
 - 004-gemini-vault-chat: Added Python 3.11+ (backend), TypeScript (frontend) + FastAPI, LlamaIndex, llama-index-llms-google-genai, llama-index-embeddings-google-genai, React 18+, Tailwind CSS, Shadcn/UI
