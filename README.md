@@ -14,7 +14,7 @@ An Obsidian-style documentation system where AI agents and humans collaborate on
 
 ## ⚠️ Demo Mode
 
-**This is a demonstration instance with ephemeral storage.**
+**This is a demonstration instance hosted on HuggingFace with ephemeral storage.**
 
 - All data is temporary and resets on server restart
 - Demo content is automatically seeded on each startup
