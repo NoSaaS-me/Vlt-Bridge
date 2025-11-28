@@ -28,7 +28,14 @@ export async function synthesizeTts(text: string, options: TtsOptions = {}): Pro
     let message = `TTS failed (HTTP ${response.status})`;
     try {
       const data = await response.json();
-      message = data?.message || data?.detail?.message || message;
+      // FastAPI HTTPException with detail dict returns: { detail: { error: "...", message: "..." } }
+      if (typeof data?.detail === 'object' && data.detail.message) {
+        message = data.detail.message;
+      } else if (typeof data?.detail === 'string') {
+        message = data.detail;
+      } else if (data?.message) {
+        message = data.message;
+      }
     } catch {
       // ignore parse errors
     }
