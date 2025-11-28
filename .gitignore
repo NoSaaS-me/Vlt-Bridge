@@ -63,6 +63,10 @@ generate_jwt_token.py
 # Documentation
 docs/fastmcp/
 
+# AI notes (personal workspace)
+ai-notes/
+Ai-notes/
+
 # Images (binary files not allowed in HF Spaces)
 *.png
 *.jpg
