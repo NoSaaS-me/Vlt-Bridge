@@ -2,6 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from ..middleware import AuthContext, get_auth_context
 from ...models.rag import ChatRequest, ChatResponse, StatusResponse
 from ...services.rag_index import RAGIndexService
+import logging
+import traceback
+import sys
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/rag", tags=["rag"])
 
@@ -17,31 +22,21 @@ async def get_status(
     return rag_service.get_status(auth.user_id)
 
 @router.post("/chat", response_model=ChatResponse)
-
 async def chat(
-
     request: ChatRequest,
-
     auth: AuthContext = Depends(get_auth_context),
-
     rag_service: RAGIndexService = Depends(get_rag_service)
-
 ):
-
     """
-
     Chat with the vault RAG agent.
-
     """
-
     try:
-
         return await rag_service.chat(auth.user_id, request.messages)
-
     except ValueError as e:
-
         raise HTTPException(status_code=400, detail=str(e))
-
     except Exception as e:
-
+        # Log full traceback
+        logger.exception("RAG Chat failed")
+        traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=f"RAG Error: {str(e)}")
+
