@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import type { Components } from 'react-markdown';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
-import { getNote } from '@/services/api';
+import { getNote, searchNotes } from '@/services/api';
 
 export interface WikilinkComponentProps {
   linkText: string;
@@ -87,7 +87,21 @@ function WikilinkPreview({
 
     const fetchPreview = async () => {
       try {
-        const note = await getNote(linkText);
+        // First search for the note by title/content to find its actual path
+        const searchResults = await searchNotes(linkText);
+
+        if (searchResults.length === 0) {
+          // No results found - broken link
+          setIsBroken(true);
+          setPreview(null);
+          setIsLoading(false);
+          return;
+        }
+
+        // Get the first matching note
+        const notePath = searchResults[0].note_path;
+        const note = await getNote(notePath);
+
         // T024: Extract first 150 characters from note body
         const previewText = note.body
           .replace(/\[\[([^\]]+)\]\]/g, '$1') // Remove wikilinks

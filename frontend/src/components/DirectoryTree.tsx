@@ -1,7 +1,7 @@
 /**
  * T077: Directory tree component with collapsible folders
  */
-import { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ChevronRight, ChevronDown, Folder, File } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -99,7 +99,15 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote, for
   const [isDragOver, setIsDragOver] = useState(false);
 
   // T014: Use forceExpandState if provided, otherwise use local isOpen state
+  // Sync local state with force state when it changes
   const effectiveIsOpen = forceExpandState ?? isOpen;
+
+  // Update local state when force state is applied
+  useEffect(() => {
+    if (forceExpandState !== undefined) {
+      setIsOpen(forceExpandState);
+    }
+  }, [forceExpandState]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();

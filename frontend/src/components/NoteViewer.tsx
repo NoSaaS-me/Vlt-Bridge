@@ -319,11 +319,11 @@ export function NoteViewer({
           </ScrollArea>
         </ResizablePanel>
 
-        {/* T045: TOC panel */}
+        {/* T045: TOC panel with slide-in animation */}
         {isTocOpen && (
           <>
             <ResizableHandle withHandle />
-            <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
+            <ResizablePanel defaultSize={25} minSize={15} maxSize={40} className="animate-slide-in">
               <TableOfContents headings={headings} onHeadingClick={scrollToHeading} />
             </ResizablePanel>
           </>
