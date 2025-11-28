@@ -19,6 +19,7 @@ import { NoteEditor } from '@/components/NoteEditor';
 import { ChatPanel } from '@/components/ChatPanel';
 import { useToast } from '@/hooks/useToast';
 import { GraphView } from '@/components/GraphView';
+import { GlowParticleEffect } from '@/components/GlowParticleEffect';
 import {
   listNotes,
   getNote,
@@ -525,7 +526,8 @@ export function MainApp() {
   const ttsDisabledReason = undefined;
 
   return (
-    <div className="h-screen flex flex-col">
+    <GlowParticleEffect config="vibrant" triggerSelector="button">
+      <div className="h-screen flex flex-col">
       {/* Demo warning banner */}
       <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
         <AlertDescription className="text-center">
@@ -814,7 +816,8 @@ export function MainApp() {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </GlowParticleEffect>
   );
 }
 
