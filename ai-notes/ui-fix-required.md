@@ -9,7 +9,7 @@ PostCSS is still loading cached Tailwind CSS v4 modules even though we've downgr
 ```bash
 # Stop the current dev server (Ctrl+C)
 # Then restart:
-cd /home/wolfe/Projects/Document-MCP/frontend
+cd $PROJECT_ROOT/frontend
 npm run dev
 ```
 

@@ -98,7 +98,7 @@ Want persistent storage and full control? Deploy your own instance:
 3. Configure environment variables
 4. Deploy to HF Spaces or any Docker host
 
-See [DEPLOYMENT.md](https://github.com/YOUR_REPO/Document-MCP/blob/main/DEPLOYMENT.md) for detailed instructions.
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed instructions.
 
 ## 🔒 Privacy & Data
 

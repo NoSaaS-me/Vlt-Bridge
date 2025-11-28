@@ -75,14 +75,14 @@ You'll need to add these secrets in HF Space settings:
 JWT_SECRET_KEY=<generate with: openssl rand -hex 32>
 HF_OAUTH_CLIENT_ID=<from your OAuth app>
 HF_OAUTH_CLIENT_SECRET=<from your OAuth app>
-HF_SPACE_URL=https://huggingface.co/spaces/bigwolfe/Document-MCP
+HF_SPACE_URL=https://huggingface.co/spaces/YOUR_USERNAME/Document-MCP
 ```
 
 ### 2. Push to HF Space
 
 ```bash
 # Clone your HF Space repo
-git clone https://huggingface.co/spaces/bigwolfe/Document-MCP
+git clone https://huggingface.co/spaces/YOUR_USERNAME/Document-MCP
 cd Document-MCP
 
 # Copy project files
@@ -100,7 +100,7 @@ git push
 ### 3. Test the Deployment
 
 1. Wait for HF Spaces to build (5-10 minutes)
-2. Visit: `https://bigwolfe-document-mcp.hf.space` (or your actual URL)
+2. Visit: `https://YOUR_USERNAME-document-mcp.hf.space` (or your actual URL)
 3. Click "Sign in with Hugging Face"
 4. Browse the demo notes
 5. Go to Settings to get your API token
@@ -111,7 +111,7 @@ git push
 After deployment, test MCP access:
 
 ```bash
-curl -X POST "https://bigwolfe-document-mcp.hf.space/mcp/list_notes" \
+curl -X POST "https://YOUR_USERNAME-document-mcp.hf.space/mcp/list_notes" \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json"
 ```

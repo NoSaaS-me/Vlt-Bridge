@@ -1,9 +1,11 @@
 [project]
-name = "Documentation-MCP"
+name = "document-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-tenant Obsidian-like documentation viewer with AI-first workflow via MCP"
 readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = ["mcp", "documentation", "obsidian", "ai-agents", "fastapi", "fastmcp"]
 dependencies = [
     "fastapi>=0.121.2",
     "fastmcp>=2.13.1",

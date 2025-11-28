@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Test MCP HTTP tools end-to-end")
     parser.add_argument(
         "--url",
-        default=os.environ.get("MCP_URL", "https://bigwolfe-document-mcp.hf.space/mcp"),
+        default=os.environ.get("MCP_URL", "https://YOUR_USERNAME-document-mcp.hf.space/mcp"),
         help="Hosted MCP endpoint base URL",
     )
     parser.add_argument(

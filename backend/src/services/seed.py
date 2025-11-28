@@ -270,7 +270,7 @@ For **HTTP mode** (HF Space), use:
 {
   "mcpServers": {
     "obsidian-docs": {
-      "url": "https://huggingface.co/spaces/bigwolfe/Document-MCP/mcp",
+      "url": "https://huggingface.co/spaces/YOUR_USERNAME/Document-MCP/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_JWT_TOKEN"
       }

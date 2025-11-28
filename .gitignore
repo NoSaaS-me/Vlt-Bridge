@@ -54,6 +54,12 @@ reproduce_auth_500.py
 debug_list_notes.py
 DEPLOY_TO_HF.md
 
+# Debug and inspection scripts
+debug_*.py
+inspect_*.py
+test_remote_mcp.py
+generate_jwt_token.py
+
 # Documentation
 docs/fastmcp/
 
@@ -62,3 +68,4 @@ docs/fastmcp/
 *.jpg
 *.jpeg
 *.gif
+AUDIT_REPORT.md
