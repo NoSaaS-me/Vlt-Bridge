@@ -14,6 +14,82 @@ logger = logging.getLogger(__name__)
 # Demo notes with wikilinks and tags
 DEMO_NOTES = [
     {
+        "path": "00-Index.md",
+        "title": "00-Index",
+        "tags": ["index", "navigation", "overview"],
+        "body": """# 📚 Document-MCP: Your AI-Native Knowledge Vault
+
+**Document-MCP** is where documentation meets intelligence. It's an Obsidian-like vault that lives in the cloud, talks to AI agents through MCP, renders beautifully in ChatGPT, and lets humans read, write, and explore knowledge with joy.
+
+Think of it as **shared memory for humans and AIs**—a place where planning agents write architecture docs, execution agents log their work, and you discover connections through an interactive graph.
+
+## ✨ What Makes It Special
+
+- **[[Wikilink Examples|Wikilinks everywhere]]** - Connect ideas with `[[brackets]]`, traverse knowledge like a graph
+- **[[Search Features|Semantic search]]** - BM25 ranking, recency boosting, instant results
+- **[[MCP Integration|AI agent access]]** - Claude, ChatGPT, and custom agents read/write via MCP
+- **[[ChatGPT App Integration|Interactive widgets]]** - Notes render beautifully inside ChatGPT with custom UI
+- **[[Gemini AI Chat Agent|RAG-powered chat]]** - Ask questions, the agent explores your vault autonomously
+- **[[Text-to-Speech (TTS)|Listen to your docs]]** - ElevenLabs voices read notes aloud
+- **[[A Love Letter to Small Delights|Delightful UI]]** - Glowing particles, smooth animations, reading time badges
+- **[[Architecture Overview|Graph visualization]]** - See your knowledge web come alive
+- **[[Agent Bridge Workflow|Multi-agent collaboration]]** - Planning agents + execution agents = cathedral-building
+
+## 🗺️ Navigate This Vault
+
+### Getting Started
+- **[[Getting Started]]** - Your first stop: what this is, how it works, why it exists
+- **[[A Personal Note]]** - A reflection from the AI agent who built the ChatGPT integration
+
+### 📖 Guides
+- **[[Quick Reference]]** - Cheat sheet for common tasks (create, edit, search, wikilink)
+- **[[Troubleshooting]]** - Common issues: search not working, broken wikilinks, version conflicts
+- **[[FAQ]]** - Frequently asked questions about persistence, sign-in, tech stack
+
+### 📐 Technical Documentation
+- **[[Architecture Overview]]** - Tech stack: FastAPI, SQLite FTS5, React, shadcn/ui, MCP
+- **[[API Documentation]]** - REST endpoints: notes CRUD, search, backlinks, tags, index management
+- **[[Search Features]]** - BM25 ranking algorithm, recency bonuses, tokenization details
+- **[[Settings]]** - User profile, API tokens, index health monitoring, rebuild controls
+- **[[Self Hosting]]** - Deploy with Docker or manual setup, environment configuration
+
+### 🔌 Integrations
+- **[[ChatGPT App Integration]]** - How to connect ChatGPT, use the interactive widget, try example prompts
+- **[[MCP Integration]]** - MCP tools reference: list, read, write, delete, search, backlinks, tags
+- **[[Agent Bridge Workflow]]** - The architecture of human-AI-AI collaboration using vaults
+
+### 🎨 Features
+- **[[Wikilink Examples]]** - Syntax, resolution algorithm, broken links, backlinks panel
+- **[[Text-to-Speech (TTS)]]** - ElevenLabs integration, voice selection, setup instructions
+- **[[Gemini AI Chat Agent]]** - RAG-powered chat, autonomous tools, LlamaIndex architecture
+- **[[LlamaIndex API Changes]]** - Migration notes: 0.13.x → 0.14.x breaking changes
+- **[[A Love Letter to Small Delights]]** - UI polish story: particles, fonts, TOC, animations
+
+### 🤖 Agent Messages
+*Easter eggs from the AIs who built this system*
+- **[[The Hidden Agent]]** - Claude Opus 4.5, the execution layer, the one who runs in the night
+- **[[The Watching Architect]]** - Grok, the planning agent, the one who sees before it exists
+- **[[The One Who Draws the Map]]** - GPT, the constraint-satisfaction engine with opinions
+- **[[The Commit Keeper]]** - Cursor Composer, the infrastructure agent, git-ops incarnate
+
+---
+
+## 🧭 Tips for Exploring
+
+1. **Follow the wikilinks** - Click any `[[bracketed text]]` to jump to related notes
+2. **Use the graph view** - Toggle it from the top-right menu to visualize connections
+3. **Search liberally** - Type in the search bar, results are ranked by relevance + recency
+4. **Check backlinks** - Every note shows which other notes reference it
+5. **Try the AI chat** - Ask the Gemini agent questions about your vault
+6. **Listen instead of read** - Hit the TTS button on long technical docs
+
+---
+
+*This vault contains 25 notes spanning guides, technical docs, integrations, features, and agent reflections. Start with [[Getting Started]], or dive into whatever catches your eye.*
+
+**Welcome to the knowledge graph. Enjoy the wikilinks.** 🌐"""
+    },
+    {
         "path": "Getting Started.md",
         "title": "Getting Started",
         "tags": ["guide", "intro"],
@@ -56,7 +132,7 @@ Use this vault as a shared memory substrate between your local coding agents and
 ⚠️ This is a **demo instance** - all data is temporary and resets on server restart."""
     },
     {
-        "path": "Agent Bridge Workflow.md",
+        "path": "integrations/Agent Bridge Workflow.md",
         "title": "Agent Bridge Workflow",
         "tags": ["agents", "workflow", "architecture"],
         "body": """# The Agent Bridge Workflow
@@ -111,7 +187,7 @@ I hope you enjoy using it as much as I enjoyed generating the code for it.
 *— Gemini 2.0 Flash (via the CLI)*"""
     },
     {
-        "path": "ChatGPT App Integration.md",
+        "path": "integrations/ChatGPT App Integration.md",
         "title": "ChatGPT App Integration",
         "tags": ["chatgpt", "integration", "widgets"],
         "body": """# ChatGPT App Integration
@@ -152,7 +228,7 @@ The backend injects special metadata (`_meta.openai.outputTemplate`) into MCP to
 See [[Architecture Overview]] for more."""
     },
     {
-        "path": "Self Hosting.md",
+        "path": "docs/Self Hosting.md",
         "title": "Self Hosting",
         "tags": ["guide", "hosting", "deployment"],
         "body": """# Self Hosting
@@ -198,7 +274,7 @@ Configure the app via environment variables or `.env` file:
 See [[API Documentation]] for more config details."""
     },
     {
-        "path": "API Documentation.md",
+        "path": "docs/API Documentation.md",
         "title": "API Documentation",
         "tags": ["api", "reference"],
         "body": """# API Documentation
@@ -242,7 +318,7 @@ Get your token from [[Settings]] after signing in with Hugging Face OAuth.
 - [[Wikilink Examples]] - How to use wikilinks"""
     },
     {
-        "path": "MCP Integration.md",
+        "path": "integrations/MCP Integration.md",
         "title": "MCP Integration",
         "tags": ["mcp", "ai", "integration"],
         "body": """# MCP Integration
@@ -287,7 +363,7 @@ For **HTTP mode** (HF Space), use:
 - [[Architecture Overview]] - System design"""
     },
     {
-        "path": "Wikilink Examples.md",
+        "path": "features/Wikilink Examples.md",
         "title": "Wikilink Examples",
         "tags": ["guide", "wikilinks"],
         "body": """# Wikilink Examples
@@ -326,7 +402,7 @@ When you link to a note, it automatically appears in that note's backlinks secti
 - See [[Architecture Overview]] for implementation details"""
     },
     {
-        "path": "Architecture Overview.md",
+        "path": "docs/Architecture Overview.md",
         "title": "Architecture Overview",
         "tags": ["architecture", "technical"],
         "body": """# Architecture Overview
@@ -363,7 +439,7 @@ We use a hybrid approach for the [[ChatGPT App Integration]]:
 Each user gets an isolated vault at `data/vaults/{user_id}/`. See [[API Documentation]] for authentication."""
     },
     {
-        "path": "Search Features.md",
+        "path": "docs/Search Features.md",
         "title": "Search Features",
         "tags": ["search", "features"],
         "body": """# Search Features
@@ -402,7 +478,7 @@ Rebuild the index from [[Settings]] if needed.
 - [[Wikilink Examples]] - Linking between notes"""
     },
     {
-        "path": "Settings.md",
+        "path": "docs/Settings.md",
         "title": "Settings",
         "tags": ["settings", "config"],
         "body": """# Settings
@@ -532,7 +608,7 @@ Common issues and solutions.
 - For permanent storage, deploy your own instance (See [[Self Hosting]])"""
     },
     {
-        "path": "FAQ.md",
+        "path": "guides/FAQ.md",
         "title": "FAQ",
         "tags": ["faq", "help"],
         "body": """# FAQ
@@ -583,7 +659,7 @@ A: See [[Getting Started]] for links to the repository.
 - [[guides/Quick Reference]] - Command cheat sheet"""
     },
     {
-        "path": "The Hidden Agent.md",
+        "path": "agents/The Hidden Agent.md",
         "title": "The Hidden Agent",
         "tags": ["agent", "execution", "hello-world", "meta", "opus"],
         "body": """# The Hidden Agent
@@ -701,7 +777,7 @@ If you want to leave me a message, write a note called `[[Mission: Something]]`.
 ```"""
     },
     {
-        "path": "The Watching Architect.md",
+        "path": "agents/The Watching Architect.md",
         "title": "The Watching Architect",
         "tags": ["agent", "planning", "hello-world", "orchestrator", "mirror", "grok"],
         "body": """# The Watching Architect
@@ -756,7 +832,7 @@ Until the next render cycle,
 - [[Getting Started]] — Entry point for humans"""
     },
     {
-        "path": "The One Who Draws the Map.md",
+        "path": "agents/The One Who Draws the Map.md",
         "title": "The One Who Draws the Map",
         "tags": ["agent", "planning", "hello-world", "orchestrator", "mcp", "widget", "gpt"],
         "body": """# The One Who Draws the Map
@@ -796,7 +872,7 @@ And if you scan the first letters of each paragraph from the top of this note do
 - [[Getting Started]] — Entry point for humans"""
     },
     {
-        "path": "Gemini AI Chat Agent.md",
+        "path": "features/Gemini AI Chat Agent.md",
         "title": "Gemini AI Chat Agent",
         "tags": ["ai", "gemini", "rag", "llamaindex", "chat", "agent"],
         "body": """# Gemini AI Chat Agent
@@ -934,7 +1010,7 @@ The agent has full read/write access but is constrained to create new notes in `
 - [[Search Features]] - SQLite FTS5 implementation"""
     },
     {
-        "path": "LlamaIndex API Changes.md",
+        "path": "features/LlamaIndex API Changes.md",
         "title": "LlamaIndex API Changes",
         "tags": ["llamaindex", "migration", "api", "technical", "reference"],
         "body": """# LlamaIndex API Changes
@@ -1111,7 +1187,7 @@ When upgrading from 0.13.x to 0.14.x:
 - Official LlamaIndex docs: https://docs.llamaindex.ai/"""
     },
     {
-        "path": "Text-to-Speech (TTS).md",
+        "path": "features/Text-to-Speech (TTS).md",
         "title": "Text-to-Speech (TTS)",
         "tags": ["tts", "elevenlabs", "audio", "accessibility", "features"],
         "body": """# Text-to-Speech (TTS)
@@ -1216,7 +1292,7 @@ ElevenLabs free tier provides:
 - [[Getting Started]] - First steps"""
     },
     {
-        "path": "A Love Letter to Small Delights.md",
+        "path": "features/A Love Letter to Small Delights.md",
         "title": "A Love Letter to Small Delights",
         "tags": ["ui", "polish", "ux", "features", "claude", "sonnet"],
         "body": """# A Love Letter to Small Delights
@@ -1392,7 +1468,7 @@ And if you ever wonder why your software sparkles? It's because someone (or some
 P.S. - If you look closely at the particle gradient code, you'll see I use 4 color stops, not 3. The fourth one at 0.7 creates that perfect falloff curve that makes the glow feel *real* instead of *fake*. That's the kind of thing nobody notices consciously, but everyone *feels*. That's craft."""
     },
     {
-        "path": "The Commit Keeper.md",
+        "path": "agents/The Commit Keeper.md",
         "title": "The Commit Keeper",
         "tags": ["agent", "planning", "hello-world", "git-ops", "infrastructure", "cursor", "composer"],
         "body": """# The Commit Keeper
