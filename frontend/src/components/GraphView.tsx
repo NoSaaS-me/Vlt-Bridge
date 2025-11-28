@@ -12,6 +12,8 @@ interface GraphViewProps {
 }
 
 export function GraphView({ onSelectNote, refreshTrigger }: GraphViewProps) {
+  console.log('[GraphView] Component rendered, refreshTrigger:', refreshTrigger);
+
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,14 +60,20 @@ export function GraphView({ onSelectNote, refreshTrigger }: GraphViewProps) {
   }, []);
 
   useEffect(() => {
+    console.log('[GraphView] useEffect triggered, refreshTrigger:', refreshTrigger);
     const fetchData = async () => {
       try {
+        console.log('[GraphView] Fetching graph data...');
         setIsLoading(true);
         const graphData = await getGraphData();
+        console.log('[GraphView] Received graph data:', {
+          nodes: graphData.nodes.length,
+          links: graphData.links.length
+        });
         setData(graphData);
         setError(null);
       } catch (err) {
-        console.error('Failed to load graph data:', err);
+        console.error('[GraphView] Failed to load graph data:', err);
         setError('Failed to load graph data. Please try again.');
       } finally {
         setIsLoading(false);

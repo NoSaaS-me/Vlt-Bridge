@@ -205,8 +205,12 @@ export function MainApp() {
       console.log('[MainApp] Fetched', notesList.length, 'notes');
       setNotes(notesList);
       setIndexHealth(health);
-      setGraphRefreshTrigger(prev => prev + 1);  // Trigger graph refresh
-      console.log('[MainApp] State updated, graph trigger incremented');
+      setGraphRefreshTrigger(prev => {
+        const newValue = prev + 1;
+        console.log('[MainApp] Graph trigger:', prev, '→', newValue);
+        return newValue;
+      });
+      console.log('[MainApp] State updated');
     } catch (err) {
       console.error('[MainApp] Error refreshing data:', err);
     }
