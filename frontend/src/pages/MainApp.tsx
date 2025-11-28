@@ -75,10 +75,12 @@ export function MainApp() {
   const {
     status: ttsPlayerStatus,
     error: ttsPlayerError,
+    volume: ttsVolume,
     play: playAudio,
     pause: pauseAudio,
     resume: resumeAudio,
     stop: stopAudio,
+    setVolume: setTtsVolume,
   } = useAudioPlayer();
   const stopTts = () => {
     if (ttsAbortRef.current) {
@@ -743,6 +745,8 @@ export function MainApp() {
                       onTtsToggle={handleTtsToggle}
                       onTtsStop={handleTtsStop}
                       ttsDisabledReason={ttsDisabledReason}
+                      ttsVolume={ttsVolume}
+                      onTtsVolumeChange={setTtsVolume}
                     />
                   )
                 ) : (

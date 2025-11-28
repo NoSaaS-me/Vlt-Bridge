@@ -5,10 +5,12 @@ type PlayerStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
 interface AudioPlayer {
   status: PlayerStatus;
   error: string | null;
+  volume: number;
   play: (src: string) => void;
   pause: () => void;
   resume: () => void;
   stop: () => void;
+  setVolume: (level: number) => void;
 }
 
 /**
@@ -18,6 +20,10 @@ export function useAudioPlayer(): AudioPlayer {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [status, setStatus] = useState<PlayerStatus>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [volume, setVolumeState] = useState<number>(() => {
+    const saved = localStorage.getItem('tts-volume');
+    return saved ? parseFloat(saved) : 0.7;
+  });
 
   const cleanup = () => {
     const audio = audioRef.current;
@@ -38,6 +44,7 @@ export function useAudioPlayer(): AudioPlayer {
     cleanup();
     setStatus('loading');
     const audio = new Audio(src);
+    audio.volume = volume;
     audioRef.current = audio;
 
     audio.oncanplay = () => {
@@ -72,11 +79,20 @@ export function useAudioPlayer(): AudioPlayer {
     }
   };
 
+  const setVolume = (level: number) => {
+    const clamped = Math.max(0, Math.min(1, level));
+    setVolumeState(clamped);
+    localStorage.setItem('tts-volume', clamped.toString());
+    if (audioRef.current) {
+      audioRef.current.volume = clamped;
+    }
+  };
+
   useEffect(() => {
     return () => {
       cleanup();
     };
   }, []);
 
-  return { status, error, play, pause, resume, stop };
+  return { status, error, volume, play, pause, resume, stop, setVolume };
 }

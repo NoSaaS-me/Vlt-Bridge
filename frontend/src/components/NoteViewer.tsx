@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { Slider } from '@/components/ui/slider';
 import type { Note } from '@/types/note';
 import type { BacklinkResult } from '@/services/api';
 import { createWikilinkComponent } from '@/lib/markdown.tsx';
@@ -24,6 +25,8 @@ interface NoteViewerProps {
   onTtsToggle?: () => void;
   onTtsStop?: () => void;
   ttsDisabledReason?: string;
+  ttsVolume?: number;
+  onTtsVolumeChange?: (volume: number) => void;
 }
 
 export function NoteViewer({
@@ -36,6 +39,8 @@ export function NoteViewer({
   onTtsToggle,
   onTtsStop,
   ttsDisabledReason,
+  ttsVolume = 0.7,
+  onTtsVolumeChange,
 }: NoteViewerProps) {
   // Create custom markdown components with wikilink handler
   const markdownComponents = useMemo(
@@ -106,6 +111,22 @@ export function NoteViewer({
                   <Button variant="ghost" size="sm" onClick={onTtsStop} title="Stop TTS">
                     <Square className="h-4 w-4" />
                   </Button>
+                )}
+                {onTtsVolumeChange && (
+                  <div className="flex items-center gap-2 ml-2 min-w-[120px]">
+                    <Volume2 className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                    <Slider
+                      value={[ttsVolume * 100]}
+                      onValueChange={(val: number[]) => onTtsVolumeChange(val[0] / 100)}
+                      max={100}
+                      step={1}
+                      className="w-20"
+                      title={`Volume: ${Math.round(ttsVolume * 100)}%`}
+                    />
+                    <span className="text-xs text-muted-foreground w-8 flex-shrink-0">
+                      {Math.round(ttsVolume * 100)}%
+                    </span>
+                  </div>
                 )}
               </div>
             )}
