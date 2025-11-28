@@ -5,7 +5,7 @@
 import { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Edit, Trash2, Calendar, Tag as TagIcon, ArrowLeft } from 'lucide-react';
+import { Edit, Trash2, Calendar, Tag as TagIcon, ArrowLeft, Volume2, Pause, Play, Square } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -20,6 +20,10 @@ interface NoteViewerProps {
   onEdit?: () => void;
   onDelete?: () => void;
   onWikilinkClick: (linkText: string) => void;
+  ttsStatus?: 'idle' | 'loading' | 'playing' | 'paused' | 'error';
+  onTtsToggle?: () => void;
+  onTtsStop?: () => void;
+  ttsDisabledReason?: string;
 }
 
 export function NoteViewer({
@@ -28,6 +32,10 @@ export function NoteViewer({
   onEdit,
   onDelete,
   onWikilinkClick,
+  ttsStatus = 'idle',
+  onTtsToggle,
+  onTtsStop,
+  ttsDisabledReason,
 }: NoteViewerProps) {
   // Create custom markdown components with wikilink handler
   const markdownComponents = useMemo(
@@ -70,6 +78,37 @@ export function NoteViewer({
             <p className="text-sm text-muted-foreground mt-1 animate-fade-in" style={{ animationDelay: '0.2s' }}>{note.note_path}</p>
           </div>
           <div className="flex gap-2 animate-fade-in" style={{ animationDelay: '0.15s' }}>
+            {onTtsToggle && (
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onTtsToggle}
+                  disabled={Boolean(ttsDisabledReason) || ttsStatus === 'loading'}
+                  title={ttsDisabledReason || undefined}
+                >
+                  {ttsStatus === 'playing' ? (
+                    <Pause className="h-4 w-4 mr-2" />
+                  ) : ttsStatus === 'paused' ? (
+                    <Play className="h-4 w-4 mr-2" />
+                  ) : (
+                    <Volume2 className="h-4 w-4 mr-2" />
+                  )}
+                  {ttsStatus === 'playing'
+                    ? 'Pause TTS'
+                    : ttsStatus === 'paused'
+                    ? 'Resume TTS'
+                    : ttsStatus === 'loading'
+                    ? 'Loading...'
+                    : 'TTS Mode'}
+                </Button>
+                {(ttsStatus === 'playing' || ttsStatus === 'paused' || ttsStatus === 'error') && onTtsStop && (
+                  <Button variant="ghost" size="sm" onClick={onTtsStop} title="Stop TTS">
+                    <Square className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            )}
             {onEdit && (
               <Button variant="outline" size="sm" onClick={onEdit}>
                 <Edit className="h-4 w-4 mr-2" />

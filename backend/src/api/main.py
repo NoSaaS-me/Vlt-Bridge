@@ -21,7 +21,7 @@ from starlette.responses import Response
 from fastmcp.server.http import StreamableHTTPSessionManager, set_http_request
 from fastapi.responses import FileResponse
 
-from .routes import auth, index, notes, search, graph, demo, system, rag
+from .routes import auth, index, notes, search, graph, demo, system, rag, tts
 from ..mcp.server import mcp
 from ..services.seed import init_and_seed
 from ..services.config import get_config
@@ -111,20 +111,9 @@ app.include_router(search.router, tags=["search"])
 app.include_router(index.router, tags=["index"])
 app.include_router(graph.router, tags=["graph"])
 app.include_router(demo.router, tags=["demo"])
-<<<<<<< HEAD
 app.include_router(system.router, tags=["system"])
 app.include_router(rag.router, tags=["rag"])
-=======
-
-# Hosted MCP HTTP endpoint (mounted Starlette app)
-
-session_manager = StreamableHTTPSessionManager(
-    app=mcp._mcp_server,
-    event_store=None,
-    json_response=False,
-    stateless=True,
-)
->>>>>>> origin/004-OpenAI
+app.include_router(tts.router, tags=["tts"])
 
 
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"])

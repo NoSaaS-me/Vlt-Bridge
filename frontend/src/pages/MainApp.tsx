@@ -2,7 +2,7 @@
  * T080, T083-T084: Main application layout with two-pane design
  * Loads directory tree on mount and note + backlinks when path changes
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle } from 'lucide-react';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
@@ -46,6 +46,9 @@ import type { Note, NoteSummary } from '@/types/note';
 import { normalizeSlug } from '@/lib/wikilink';
 import { Network } from 'lucide-react';
 import { AUTH_TOKEN_CHANGED_EVENT, isDemoSession, login } from '@/services/auth';
+import { synthesizeTts } from '@/services/tts';
+import { markdownToPlainText } from '@/lib/markdownToText';
+import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 
 export function MainApp() {
   const navigate = useNavigate();
@@ -69,6 +72,29 @@ export function MainApp() {
   const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
+  const [isSynthesizingTts, setIsSynthesizingTts] = useState(false);
+  const ttsUrlRef = useRef<string | null>(null);
+  const ttsAbortRef = useRef<AbortController | null>(null);
+  const {
+    status: ttsPlayerStatus,
+    error: ttsPlayerError,
+    play: playAudio,
+    pause: pauseAudio,
+    resume: resumeAudio,
+    stop: stopAudio,
+  } = useAudioPlayer();
+  const stopTts = () => {
+    if (ttsAbortRef.current) {
+      ttsAbortRef.current.abort();
+      ttsAbortRef.current = null;
+    }
+    stopAudio();
+    if (ttsUrlRef.current) {
+      URL.revokeObjectURL(ttsUrlRef.current);
+      ttsUrlRef.current = null;
+    }
+    setIsSynthesizingTts(false);
+  };
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -83,6 +109,12 @@ export function MainApp() {
       window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, handleAuthChange);
     };
   }, []);
+
+  useEffect(() => {
+    if (ttsPlayerError) {
+      toast.error(ttsPlayerError);
+    }
+  }, [ttsPlayerError, toast]);
 
   // T083: Load directory tree on mount
   // T119: Load index health
@@ -117,6 +149,17 @@ export function MainApp() {
     };
 
     loadData();
+  }, []);
+
+  useEffect(() => {
+    // Stop TTS when switching notes
+    stopTts();
+  }, [selectedPath]);
+
+  useEffect(() => {
+    return () => {
+      stopTts();
+    };
   }, []);
 
   // T084: Load note and backlinks when path changes
@@ -181,6 +224,57 @@ export function MainApp() {
       console.log('Note not found for wikilink:', linkText);
       setError(`Note not found: ${linkText}`);
     }
+  };
+
+  const handleTtsToggle = async () => {
+    if (!currentNote || isSynthesizingTts) {
+      return;
+    }
+
+    if (ttsPlayerStatus === 'playing') {
+      pauseAudio();
+      return;
+    }
+
+    if (ttsPlayerStatus === 'paused') {
+      resumeAudio();
+      return;
+    }
+
+    const plainText = markdownToPlainText(currentNote.body);
+    if (!plainText) {
+      toast.error('No readable content in this note.');
+      return;
+    }
+
+    if (ttsAbortRef.current) {
+      ttsAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    ttsAbortRef.current = controller;
+    setIsSynthesizingTts(true);
+    try {
+      const blob = await synthesizeTts(plainText, { signal: controller.signal });
+      if (ttsUrlRef.current) {
+        URL.revokeObjectURL(ttsUrlRef.current);
+      }
+      const url = URL.createObjectURL(blob);
+      ttsUrlRef.current = url;
+      playAudio(url);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Failed to generate speech.';
+      toast.error(message);
+    } finally {
+      ttsAbortRef.current = null;
+      setIsSynthesizingTts(false);
+    }
+  };
+
+  const handleTtsStop = () => {
+    stopTts();
   };
 
   const handleSelectNote = (path: string) => {
@@ -425,6 +519,9 @@ export function MainApp() {
     }
   };
 
+  const ttsStatus = isSynthesizingTts ? 'loading' : ttsPlayerStatus;
+  const ttsDisabledReason = undefined;
+
   return (
     <div className="h-screen flex flex-col">
       {/* Demo warning banner */}
@@ -659,6 +756,10 @@ export function MainApp() {
                       backlinks={backlinks}
                       onEdit={isDemoMode ? undefined : handleEdit}
                       onWikilinkClick={handleWikilinkClick}
+                      ttsStatus={ttsStatus}
+                      onTtsToggle={handleTtsToggle}
+                      onTtsStop={handleTtsStop}
+                      ttsDisabledReason={ttsDisabledReason}
                     />
                   )
                 ) : (
