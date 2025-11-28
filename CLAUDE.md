@@ -107,7 +107,7 @@ uv run python -c "from src.services.database import DatabaseService; DatabaseSer
    - `database.py`: SQLite connection manager + schema DDL
 
 3. **API/MCP** (`backend/src/api/` and `backend/src/mcp/`):
-   - `api/routes/`: FastAPI endpoints (17 routes: auth, notes CRUD, search, backlinks, tags, index health/rebuild)
+   - `api/routes/`: FastAPI endpoints (18 routes: auth, notes CRUD, search, backlinks, tags, index health/rebuild, graph, demo, system)
    - `api/middleware/auth_middleware.py`: JWT Bearer token validation
    - `mcp/server.py`: FastMCP tools (7 tools: list, read, write, delete, search, backlinks, tags)
 
