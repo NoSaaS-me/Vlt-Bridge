@@ -197,7 +197,7 @@ def read_note(
     }
 
     return ToolResult(
-        content=[TextContent(type="text", text=f"Read note: {note['title']}")],
+        content=[TextContent(type="text", text=f"Read note: {note['title']}\n\n{note['body']}")],
         structured_content={"note": structured_note},
         meta={
             "openai/outputTemplate": "ui://widget/note.html",
