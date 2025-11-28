@@ -77,11 +77,11 @@ class RAGIndexService:
         try:
             # Configure global settings
             Settings.llm = Gemini(
-                model="models/gemini-1.5-flash", 
+                model="gemini-2.0-flash", 
                 api_key=self.config.google_api_key
             )
             Settings.embed_model = GeminiEmbedding(
-                model_name="models/embedding-001", 
+                model_name="models/text-embedding-004", 
                 api_key=self.config.google_api_key
             )
         except Exception as e:
