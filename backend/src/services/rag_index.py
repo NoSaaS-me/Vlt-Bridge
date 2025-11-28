@@ -490,11 +490,6 @@ ALWAYS:
         sources = []
         notes_written = []
 
-        # Debug: log all response attributes
-        response_attrs = [attr for attr in dir(response) if not attr.startswith('_')]
-        logger.info(f"[RAG] Response attributes: {response_attrs}")
-        logger.info(f"[RAG] Response type: {type(response)}")
-        
         # Handle source nodes (RAG retrieval)
         if hasattr(response, "source_nodes"):
             for node_with_score in response.source_nodes:
@@ -506,37 +501,37 @@ ALWAYS:
                     snippet=node.get_content()[:500], # Truncate snippet
                     score=node_with_score.score
                 ))
-        
-        # Handle tool outputs (Agent actions)
-        if hasattr(response, "sources"):
-            logger.info(f"[RAG] Processing {len(response.sources)} tool outputs")
-            for tool_output in response.sources:
-                logger.info(f"[RAG] Tool: {tool_output.tool_name}")
-                if tool_output.tool_name == "create_note":
-                    args = tool_output.raw_input
-                    if args and "title" in args:
+
+        # Handle tool calls (Agent actions) - LlamaIndex 0.14.x uses 'tool_calls'
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            logger.info(f"[RAG] Processing {len(response.tool_calls)} tool calls")
+            for tool_call in response.tool_calls:
+                tool_name = tool_call.tool_name
+                tool_kwargs = tool_call.tool_kwargs
+                logger.info(f"[RAG] Tool: {tool_name}, args: {tool_kwargs}")
+
+                if tool_name == "create_note":
+                    if "title" in tool_kwargs:
                         notes_written.append(NoteWritten(
-                            path=f"agent-notes/{args['title']}.md",
-                            title=args["title"],
+                            path=f"agent-notes/{tool_kwargs['title']}.md",
+                            title=tool_kwargs["title"],
                             action="created"
                         ))
-                elif tool_output.tool_name == "update_note":
-                    args = tool_output.raw_input
-                    if args and "path" in args:
+                elif tool_name == "update_note":
+                    if "path" in tool_kwargs:
                         notes_written.append(NoteWritten(
-                            path=args["path"],
-                            title=os.path.basename(args["path"]).replace(".md", ""),
+                            path=tool_kwargs["path"],
+                            title=os.path.basename(tool_kwargs["path"]).replace(".md", ""),
                             action="updated"
                         ))
-                elif tool_output.tool_name == "move_note":
-                    args = tool_output.raw_input
-                    if args and "path" in args:
+                elif tool_name == "move_note":
+                    if "path" in tool_kwargs:
                         notes_written.append(NoteWritten(
-                            path=args.get("target_folder", "") + "/" + os.path.basename(args["path"]),
-                            title=os.path.basename(args["path"]),
+                            path=tool_kwargs.get("target_folder", "") + "/" + os.path.basename(tool_kwargs["path"]),
+                            title=os.path.basename(tool_kwargs["path"]),
                             action="updated"
                         ))
-                elif tool_output.tool_name == "create_folder":
+                elif tool_name == "create_folder":
                     pass
 
         logger.info(f"[RAG] Response formatted: {len(sources)} sources, {len(notes_written)} notes_written")
