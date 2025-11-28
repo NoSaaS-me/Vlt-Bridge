@@ -185,7 +185,7 @@ class RAGIndexService:
                 
         return StatusResponse(status=status, doc_count=doc_count, last_updated=None)
 
-    def chat(self, user_id: str, messages: List[ChatMessage]) -> ChatResponse:
+    async def chat(self, user_id: str, messages: list[ChatMessage]) -> ChatResponse:
         """Run RAG chat query with history."""
         if not self.config.google_api_key:
             raise ValueError("Google API Key is not configured. Please set GOOGLE_API_KEY in settings or env.")
@@ -218,20 +218,21 @@ class RAGIndexService:
             )
         )
         
-        response = chat_engine.chat(query_text, chat_history=history)
+        response = await chat_engine.achat(query_text, chat_history=history)
         
         return self._format_response(response)
 
     def _format_response(self, response: LlamaResponse) -> ChatResponse:
         """Convert LlamaIndex response to ChatResponse."""
         sources = []
-        for node in response.source_nodes:
+        for node_with_score in response.source_nodes:
+            node = node_with_score.node
             metadata = node.metadata
             sources.append(SourceReference(
                 path=metadata.get("path", "unknown"),
                 title=metadata.get("title", "Untitled"),
                 snippet=node.get_content()[:500], # Truncate snippet
-                score=node.score
+                score=node_with_score.score
             ))
             
         return ChatResponse(
