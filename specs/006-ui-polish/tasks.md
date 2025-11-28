@@ -29,9 +29,9 @@ description: "Implementation tasks for UI Polish Pack feature"
 
 **Purpose**: Install dependencies and prepare development environment
 
-- [ ] T001 Install shadcn/ui HoverCard component via `npx shadcn@latest add hover-card` in frontend/
-- [ ] T002 [P] Verify tailwindcss-animate is installed in frontend/package.json (existing dependency)
-- [ ] T003 [P] Verify development server runs successfully via `npm run dev` in frontend/
+- [x] T001 Install shadcn/ui HoverCard component via `npx shadcn@latest add hover-card` in frontend/
+- [x] T002 [P] Verify tailwindcss-animate is installed in frontend/package.json (existing dependency)
+- [x] T003 [P] Verify development server runs successfully via `npm run dev` in frontend/
 
 **Checkpoint**: Dependencies ready, dev server running
 
@@ -55,14 +55,14 @@ description: "Implementation tasks for UI Polish Pack feature"
 
 ### Implementation for User Story 1
 
-- [ ] T004 [P] [US1] Add CSS custom property `--content-font-size: 1rem;` to `:root` in frontend/src/index.css
-- [ ] T005 [P] [US1] Apply `font-size: var(--content-font-size)` to `.prose` class in frontend/src/index.css
-- [ ] T006 [US1] Create useFontSize hook in frontend/src/hooks/useFontSize.ts with localStorage persistence
-- [ ] T007 [US1] Add font size state management to MainApp component in frontend/src/pages/MainApp.tsx
-- [ ] T008 [US1] Pass fontSize props to NoteViewer in frontend/src/pages/MainApp.tsx
-- [ ] T009 [US1] Add font size buttons (A-, A, A+) to NoteViewer toolbar in frontend/src/components/NoteViewer.tsx
-- [ ] T010 [US1] Update CSS variable dynamically when font size changes in frontend/src/hooks/useFontSize.ts
-- [ ] T011 [US1] Verify font size only affects .prose content, not UI chrome (manual test)
+- [x] T004 [P] [US1] Add CSS custom property `--content-font-size: 1rem;` to `:root` in frontend/src/index.css
+- [x] T005 [P] [US1] Apply `font-size: var(--content-font-size)` to `.prose` class in frontend/src/index.css
+- [x] T006 [US1] Create useFontSize hook in frontend/src/hooks/useFontSize.ts with localStorage persistence
+- [x] T007 [US1] Add font size state management to MainApp component in frontend/src/pages/MainApp.tsx
+- [x] T008 [US1] Pass fontSize props to NoteViewer in frontend/src/pages/MainApp.tsx
+- [x] T009 [US1] Add font size buttons (A-, A, A+) to NoteViewer toolbar in frontend/src/components/NoteViewer.tsx
+- [x] T010 [US1] Update CSS variable dynamically when font size changes in frontend/src/hooks/useFontSize.ts
+- [x] T011 [US1] Verify font size only affects .prose content, not UI chrome (manual test)
 
 **Checkpoint**: Font size adjuster complete - text resizes with buttons, preference persists, UI chrome unaffected
 
@@ -76,13 +76,13 @@ description: "Implementation tasks for UI Polish Pack feature"
 
 ### Implementation for User Story 2
 
-- [ ] T012 [P] [US2] Add expandAll state to DirectoryTree component in frontend/src/components/DirectoryTree.tsx
-- [ ] T013 [P] [US2] Add collapseAll state to DirectoryTree component in frontend/src/components/DirectoryTree.tsx
-- [ ] T014 [US2] Add forceExpandState prop to TreeNodeItem recursive component in frontend/src/components/DirectoryTree.tsx
-- [ ] T015 [US2] Implement expand/collapse state propagation logic in frontend/src/components/DirectoryTree.tsx
-- [ ] T016 [US2] Add "Expand All" button above directory tree in frontend/src/components/DirectoryTree.tsx
-- [ ] T017 [US2] Add "Collapse All" button above directory tree in frontend/src/components/DirectoryTree.tsx
-- [ ] T018 [US2] Verify expand all completes in <2s for 100+ folders (performance test)
+- [x] T012 [P] [US2] Add expandAll state to DirectoryTree component in frontend/src/components/DirectoryTree.tsx
+- [x] T013 [P] [US2] Add collapseAll state to DirectoryTree component in frontend/src/components/DirectoryTree.tsx
+- [x] T014 [US2] Add forceExpandState prop to TreeNodeItem recursive component in frontend/src/components/DirectoryTree.tsx
+- [x] T015 [US2] Implement expand/collapse state propagation logic in frontend/src/components/DirectoryTree.tsx
+- [x] T016 [US2] Add "Expand All" button above directory tree in frontend/src/components/DirectoryTree.tsx
+- [x] T017 [US2] Add "Collapse All" button above directory tree in frontend/src/components/DirectoryTree.tsx
+- [x] T018 [US2] Verify expand all completes in <2s for 100+ folders (performance test)
 
 **Checkpoint**: Expand/collapse all buttons work, all folders respond to state changes, performance acceptable
 
@@ -96,16 +96,16 @@ description: "Implementation tasks for UI Polish Pack feature"
 
 ### Implementation for User Story 3
 
-- [ ] T019 [P] [US3] Create wikilink preview cache state (Map<string, string>) in markdown.tsx or NoteViewer component
-- [ ] T020 [P] [US3] Import HoverCard component in frontend/src/lib/markdown.tsx
-- [ ] T021 [US3] Wrap wikilink spans with HoverCard in wikilink renderer in frontend/src/lib/markdown.tsx
-- [ ] T022 [US3] Set HoverCard openDelay={500} and closeDelay={100} in frontend/src/lib/markdown.tsx
-- [ ] T023 [US3] Implement preview fetch logic using existing GET /api/notes/{path} endpoint
-- [ ] T024 [US3] Extract first 150 characters from note body for preview display
-- [ ] T025 [US3] Add loading skeleton during preview fetch in HoverCard content
-- [ ] T026 [US3] Handle broken wikilinks (show "Note not found" message)
-- [ ] T027 [US3] Verify no tooltips appear when mouse moves away before 500ms (flicker prevention test)
-- [ ] T028 [US3] Verify preview cache works (second hover on same link is instant)
+- [x] T019 [P] [US3] Create wikilink preview cache state (Map<string, string>) in markdown.tsx or NoteViewer component
+- [x] T020 [P] [US3] Import HoverCard component in frontend/src/lib/markdown.tsx
+- [x] T021 [US3] Wrap wikilink spans with HoverCard in wikilink renderer in frontend/src/lib/markdown.tsx
+- [x] T022 [US3] Set HoverCard openDelay={500} and closeDelay={100} in frontend/src/lib/markdown.tsx
+- [x] T023 [US3] Implement preview fetch logic using existing GET /api/notes/{path} endpoint
+- [x] T024 [US3] Extract first 150 characters from note body for preview display
+- [x] T025 [US3] Add loading skeleton during preview fetch in HoverCard content
+- [x] T026 [US3] Handle broken wikilinks (show "Note not found" message)
+- [x] T027 [US3] Verify no tooltips appear when mouse moves away before 500ms (flicker prevention test)
+- [x] T028 [US3] Verify preview cache works (second hover on same link is instant)
 
 **Checkpoint**: Wikilink previews appear after 500ms hover, show correct content, handle errors gracefully
 
@@ -119,14 +119,14 @@ description: "Implementation tasks for UI Polish Pack feature"
 
 ### Implementation for User Story 4
 
-- [ ] T029 [P] [US4] Import markdownToPlainText utility in frontend/src/components/NoteViewer.tsx
-- [ ] T030 [P] [US4] Import Badge component from shadcn/ui in frontend/src/components/NoteViewer.tsx
-- [ ] T031 [US4] Create useMemo hook to calculate reading time from note.body in frontend/src/components/NoteViewer.tsx
-- [ ] T032 [US4] Extract word count: plainText.trim().split(/\\s+/).length in reading time calculation
-- [ ] T033 [US4] Calculate minutes: Math.ceil(wordCount / 200) in reading time calculation
-- [ ] T034 [US4] Return null if <1 minute (200 words threshold) in reading time calculation
-- [ ] T035 [US4] Render Badge with "X min read" near note title in frontend/src/components/NoteViewer.tsx
-- [ ] T036 [US4] Verify badge appears only for notes >200 words (manual test)
+- [x] T029 [P] [US4] Import markdownToPlainText utility in frontend/src/components/NoteViewer.tsx
+- [x] T030 [P] [US4] Import Badge component from shadcn/ui in frontend/src/components/NoteViewer.tsx
+- [x] T031 [US4] Create useMemo hook to calculate reading time from note.body in frontend/src/components/NoteViewer.tsx
+- [x] T032 [US4] Extract word count: plainText.trim().split(/\\s+/).length in reading time calculation
+- [x] T033 [US4] Calculate minutes: Math.ceil(wordCount / 200) in reading time calculation
+- [x] T034 [US4] Return null if <1 minute (200 words threshold) in reading time calculation
+- [x] T035 [US4] Render Badge with "X min read" near note title in frontend/src/components/NoteViewer.tsx
+- [x] T036 [US4] Verify badge appears only for notes >200 words (manual test)
 
 **Checkpoint**: Reading time badge displays for long notes, hidden for short notes, estimates accurate within ±20%
 
@@ -140,22 +140,22 @@ description: "Implementation tasks for UI Polish Pack feature"
 
 ### Implementation for User Story 5
 
-- [ ] T037 [P] [US5] Create useTableOfContents hook in frontend/src/hooks/useTableOfContents.ts
-- [ ] T038 [P] [US5] Create TableOfContents component in frontend/src/components/TableOfContents.tsx
-- [ ] T039 [US5] Add heading ID generation to h1/h2/h3 renderers in frontend/src/lib/markdown.tsx
-- [ ] T040 [US5] Implement slugify function: text.toLowerCase().replace(/\\s+/g, '-').replace(/[^\\w-]/g, '') in markdown.tsx
-- [ ] T041 [US5] Extract headings { id, text, level }[] using useRef during render in useTableOfContents hook
-- [ ] T042 [US5] Add TOC panel state (isOpen) to NoteViewer in frontend/src/components/NoteViewer.tsx
-- [ ] T043 [US5] Persist TOC panel state to localStorage key 'toc-panel-open' in useTableOfContents hook
-- [ ] T044 [US5] Add "TOC" button to NoteViewer toolbar in frontend/src/components/NoteViewer.tsx
-- [ ] T045 [US5] Render TableOfContents component as ResizablePanel (right sidebar) in frontend/src/components/NoteViewer.tsx
-- [ ] T046 [US5] Implement scrollToHeading function with smooth scroll behavior in useTableOfContents hook
-- [ ] T047 [US5] Respect prefers-reduced-motion media query in scroll behavior in useTableOfContents hook
-- [ ] T048 [US5] Add hierarchical indentation by heading level in TableOfContents component
-- [ ] T049 [US5] Show "No headings found" message when headings array is empty in TableOfContents component
-- [ ] T050 [US5] Handle duplicate heading text by appending -2, -3 to IDs in slugify function
-- [ ] T051 [US5] Verify TOC panel state persists after reload (manual test)
-- [ ] T052 [US5] Verify TOC generation completes in <500ms for 50 headings (performance test)
+- [x] T037 [P] [US5] Create useTableOfContents hook in frontend/src/hooks/useTableOfContents.ts
+- [x] T038 [P] [US5] Create TableOfContents component in frontend/src/components/TableOfContents.tsx
+- [x] T039 [US5] Add heading ID generation to h1/h2/h3 renderers in frontend/src/lib/markdown.tsx
+- [x] T040 [US5] Implement slugify function: text.toLowerCase().replace(/\\s+/g, '-').replace(/[^\\w-]/g, '') in markdown.tsx
+- [x] T041 [US5] Extract headings { id, text, level }[] using useRef during render in useTableOfContents hook
+- [x] T042 [US5] Add TOC panel state (isOpen) to NoteViewer in frontend/src/components/NoteViewer.tsx
+- [x] T043 [US5] Persist TOC panel state to localStorage key 'toc-panel-open' in useTableOfContents hook
+- [x] T044 [US5] Add "TOC" button to NoteViewer toolbar in frontend/src/components/NoteViewer.tsx
+- [x] T045 [US5] Render TableOfContents component as ResizablePanel (right sidebar) in frontend/src/components/NoteViewer.tsx
+- [x] T046 [US5] Implement scrollToHeading function with smooth scroll behavior in useTableOfContents hook
+- [x] T047 [US5] Respect prefers-reduced-motion media query in scroll behavior in useTableOfContents hook
+- [x] T048 [US5] Add hierarchical indentation by heading level in TableOfContents component
+- [x] T049 [US5] Show "No headings found" message when headings array is empty in TableOfContents component
+- [x] T050 [US5] Handle duplicate heading text by appending -2, -3 to IDs in slugify function
+- [x] T051 [US5] Verify TOC panel state persists after reload (manual test)
+- [x] T052 [US5] Verify TOC generation completes in <500ms for 50 headings (performance test)
 
 **Checkpoint**: TOC panel toggles, headings are clickable, smooth scrolling works, state persists, performance acceptable
 
@@ -169,15 +169,15 @@ description: "Implementation tasks for UI Polish Pack feature"
 
 ### Implementation for User Story 6
 
-- [ ] T053 [P] [US6] Extend Tailwind config with custom transition utilities in frontend/tailwind.config.js
-- [ ] T054 [P] [US6] Add fade-in transition keyframe (300ms) in frontend/tailwind.config.js
-- [ ] T055 [P] [US6] Add slide-in transition keyframe (250ms) in frontend/tailwind.config.js
-- [ ] T056 [US6] Apply fade-in transition to note content container in frontend/src/components/NoteViewer.tsx
-- [ ] T057 [US6] Apply slide-in transition to graph view toggle in frontend/src/pages/MainApp.tsx
-- [ ] T058 [US6] Apply smooth transition to directory tree item selection in frontend/src/components/DirectoryTree.tsx
-- [ ] T059 [US6] Add prefers-reduced-motion media query support to all transitions
-- [ ] T060 [US6] Verify animations maintain 60 FPS (Chrome DevTools Performance tab test)
-- [ ] T061 [US6] Verify animations only use transform/opacity (no layout thrashing)
+- [x] T053 [P] [US6] Extend Tailwind config with custom transition utilities in frontend/tailwind.config.js
+- [x] T054 [P] [US6] Add fade-in transition keyframe (300ms) in frontend/tailwind.config.js
+- [x] T055 [P] [US6] Add slide-in transition keyframe (250ms) in frontend/tailwind.config.js
+- [x] T056 [US6] Apply fade-in transition to note content container in frontend/src/components/NoteViewer.tsx
+- [x] T057 [US6] Apply slide-in transition to graph view toggle in frontend/src/pages/MainApp.tsx
+- [x] T058 [US6] Apply smooth transition to directory tree item selection in frontend/src/components/DirectoryTree.tsx
+- [x] T059 [US6] Add prefers-reduced-motion media query support to all transitions
+- [x] T060 [US6] Verify animations maintain 60 FPS (Chrome DevTools Performance tab test)
+- [x] T061 [US6] Verify animations only use transform/opacity (no layout thrashing)
 
 **Checkpoint**: All transitions smooth, 60 FPS maintained, reduced motion respected
 
@@ -226,9 +226,9 @@ description: "Implementation tasks for UI Polish Pack feature"
 - [ ] T083 [P] Accessibility verification: keyboard navigation, ARIA labels, WCAG 2.2 Level AA
 - [ ] T084 [P] Performance profiling: Chrome DevTools Performance tab
 - [ ] T085 [P] Memory profiling: Check for leaks in preview cache and event listeners
-- [ ] T086 Build production bundle via `npm run build` in frontend/
-- [ ] T087 Preview production build via `npm run preview` and re-test all features
-- [ ] T088 Verify bundle size is reasonable (~400-500KB gzipped)
+- [x] T086 Build production bundle via `npm run build` in frontend/
+- [x] T087 Preview production build via `npm run preview` and re-test all features
+- [x] T088 Verify bundle size is reasonable (~400-500KB gzipped)
 - [ ] T089 Update CLAUDE.md if new patterns established (already done in planning phase)
 - [ ] T090 Commit final changes with message per git commit guidelines
 

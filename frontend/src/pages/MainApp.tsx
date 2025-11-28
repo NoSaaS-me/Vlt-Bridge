@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle } from 'lucide-react';
+import { useFontSize } from '@/hooks/useFontSize';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -72,6 +73,8 @@ export function MainApp() {
   const [isSynthesizingTts, setIsSynthesizingTts] = useState(false);
   const ttsUrlRef = useRef<string | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
+  // T007: Initialize font size state management
+  const { fontSize, setFontSize } = useFontSize();
   const {
     status: ttsPlayerStatus,
     error: ttsPlayerError,
@@ -558,8 +561,9 @@ export function MainApp() {
               size="sm"
               onClick={() => setIsGraphView(!isGraphView)}
               title={isGraphView ? "Switch to Note View" : "Switch to Graph View"}
+              className="transition-all duration-250 ease-out"
             >
-              <Network className="h-4 w-4" />
+              <Network className="h-4 w-4 transition-transform duration-250" />
             </Button>
             <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
               <SettingsIcon className="h-4 w-4" />
@@ -747,6 +751,8 @@ export function MainApp() {
                       ttsDisabledReason={ttsDisabledReason}
                       ttsVolume={ttsVolume}
                       onTtsVolumeChange={setTtsVolume}
+                      fontSize={fontSize}
+                      onFontSizeChange={setFontSize}
                     />
                   )
                 ) : (

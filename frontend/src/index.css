@@ -24,6 +24,7 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 221.2 83.2% 53.3%;
     --radius: 0.5rem;
+    --content-font-size: 1rem;
   }
 
   .dark {
@@ -59,6 +60,13 @@
   }
 }
 
+@layer components {
+  /* Content prose with dynamic font size */
+  .prose {
+    font-size: var(--content-font-size);
+  }
+}
+
 @layer utilities {
   /* Stagger animations for list items */
   .animate-stagger-1 {
@@ -75,5 +83,16 @@
   }
   .animate-stagger-5 {
     animation: fade-in 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 0.8s backwards;
+  }
+
+  /* Respect prefers-reduced-motion: disable animations for users who prefer no motion */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }

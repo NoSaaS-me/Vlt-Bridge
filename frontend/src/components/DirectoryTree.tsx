@@ -91,11 +91,15 @@ interface TreeNodeItemProps {
   selectedPath?: string;
   onSelectNote: (path: string) => void;
   onMoveNote?: (oldPath: string, newFolderPath: string) => void;
+  forceExpandState?: boolean;
 }
 
-function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote }: TreeNodeItemProps) {
+function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote, forceExpandState }: TreeNodeItemProps) {
   const [isOpen, setIsOpen] = useState(depth < 2); // Auto-expand first 2 levels
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // T014: Use forceExpandState if provided, otherwise use local isOpen state
+  const effectiveIsOpen = forceExpandState ?? isOpen;
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -147,7 +151,7 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote }: T
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
-          {isOpen ? (
+          {effectiveIsOpen ? (
             <ChevronDown className="h-4 w-4 mr-1 shrink-0" />
           ) : (
             <ChevronRight className="h-4 w-4 mr-1 shrink-0" />
@@ -155,7 +159,7 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote }: T
           <Folder className="h-4 w-4 mr-2 shrink-0 text-muted-foreground" />
           <span className="truncate">{node.name}</span>
         </Button>
-        {isOpen && node.children && (
+        {effectiveIsOpen && node.children && (
           <div>
             {node.children.map((child) => (
               <TreeNodeItem
@@ -165,6 +169,7 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote }: T
                 selectedPath={selectedPath}
                 onSelectNote={onSelectNote}
                 onMoveNote={onMoveNote}
+                forceExpandState={forceExpandState}
               />
             ))}
           </div>
@@ -184,7 +189,7 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote }: T
       className={cn(
         "w-full justify-start font-normal px-2 h-8",
         "hover:bg-accent transition-colors duration-200",
-        isSelected && "bg-accent animate-highlight-pulse",
+        isSelected && "bg-accent transition-colors duration-300 animate-highlight-pulse",
         "cursor-move"
       )}
       style={{ paddingLeft: `${depth * 12 + 8}px` }}
@@ -192,7 +197,7 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote }: T
       draggable
       onDragStart={handleDragStart}
     >
-      <File className="h-4 w-4 mr-2 shrink-0 text-muted-foreground" />
+      <File className="h-4 w-4 mr-2 shrink-0 text-muted-foreground transition-colors duration-200" />
       <span className="truncate">{displayName}</span>
     </Button>
   );
@@ -200,6 +205,27 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote }: T
 
 export function DirectoryTree({ notes, selectedPath, onSelectNote, onMoveNote }: DirectoryTreeProps) {
   const tree = useMemo(() => buildTree(notes), [notes]);
+
+  // T012: Add expandAll state to DirectoryTree component
+  // T013: Add collapseAll state to DirectoryTree component
+  // T015: Implement expand/collapse state propagation logic
+  const [expandAllState, setExpandAllState] = useState<boolean | undefined>(undefined);
+
+  const handleExpandAll = () => {
+    setExpandAllState(true);
+    // Reset after transition completes (300ms)
+    setTimeout(() => {
+      setExpandAllState(undefined);
+    }, 300);
+  };
+
+  const handleCollapseAll = () => {
+    setExpandAllState(false);
+    // Reset after transition completes (300ms)
+    setTimeout(() => {
+      setExpandAllState(undefined);
+    }, 300);
+  };
 
   if (notes.length === 0) {
     return (
@@ -212,6 +238,28 @@ export function DirectoryTree({ notes, selectedPath, onSelectNote, onMoveNote }:
   return (
     <ScrollArea className="h-full">
       <div className="py-2">
+        {/* T016: Add "Expand All" button above directory tree */}
+        {/* T017: Add "Collapse All" button above directory tree */}
+        <div className="flex gap-2 px-2 pb-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExpandAll}
+            className="flex-1 text-xs"
+            aria-label="Expand all folders"
+          >
+            Expand All
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCollapseAll}
+            className="flex-1 text-xs"
+            aria-label="Collapse all folders"
+          >
+            Collapse All
+          </Button>
+        </div>
         {tree.map((node) => (
           <TreeNodeItem
             key={node.path}
@@ -220,6 +268,7 @@ export function DirectoryTree({ notes, selectedPath, onSelectNote, onMoveNote }:
             selectedPath={selectedPath}
             onSelectNote={onSelectNote}
             onMoveNote={onMoveNote}
+            forceExpandState={expandAllState}
           />
         ))}
       </div>
