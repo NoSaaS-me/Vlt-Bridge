@@ -17,6 +17,7 @@ from llama_index.core import (
     Document,
     Settings
 )
+from llama_index.core.tools import FunctionTool
 
 # Try to import Gemini, handle missing dependency gracefully
 try:
@@ -57,16 +58,6 @@ class RAGIndexService:
         self._index_lock = threading.Lock() # Per-instance lock for index ops
         self._setup_gemini()
         self._initialized = True
-
-    Document,
-    Settings
-)
-from llama_index.core.tools import FunctionTool
-
-# Try to import Gemini, handle missing dependency gracefully
-# ...
-
-# ...
 
     def _setup_gemini(self):
         # ... (existing)
