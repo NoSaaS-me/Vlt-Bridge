@@ -310,11 +310,11 @@ class RAGIndexService:
         
         all_tools = tools + [query_tool]
         
-        # Use FunctionCallingAgent for Gemini (native tool support)
-        from llama_index.core.agent import FunctionCallingAgent
-        agent = FunctionCallingAgent.from_tools(
-            all_tools, 
-            llm=Settings.llm, 
+        # Use AgentRunner (factory for best agent type)
+        from llama_index.core.agent import AgentRunner
+        agent = AgentRunner.from_llm(
+            llm=Settings.llm,
+            tools=all_tools,
             chat_history=history,
             verbose=True,
             system_prompt="You are a documentation assistant. Use vault_search to find info. You can create notes and folders."
