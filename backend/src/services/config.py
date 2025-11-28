@@ -42,6 +42,14 @@ class AppConfig(BaseModel):
         default=False,
         description="DANGEROUS: Allow unauthenticated MCP access as demo-user (for hackathon)",
     )
+    google_api_key: Optional[str] = Field(
+        default=None,
+        description="Google Gemini API key for RAG features"
+    )
+    llamaindex_persist_dir: Path = Field(
+        default=PROJECT_ROOT / "data" / "llamaindex",
+        description="Directory for persisting vector index"
+    )
     vault_base_path: Path = Field(..., description="Base directory for per-user vaults")
     hf_oauth_client_id: Optional[str] = Field(
         None, description="Hugging Face OAuth client ID (optional)"
@@ -101,6 +109,8 @@ def get_config() -> AppConfig:
     chatgpt_service_token = _read_env("CHATGPT_SERVICE_TOKEN")
     chatgpt_cors_origin = _read_env("CHATGPT_CORS_ORIGIN", "https://chatgpt.com")
     enable_noauth_mcp = _read_env("ENABLE_NOAUTH_MCP", "false").lower() in {"true", "1", "yes"}
+    google_api_key = _read_env("GOOGLE_API_KEY")
+    llamaindex_persist_dir = _read_env("LLAMAINDEX_PERSIST_DIR", str(PROJECT_ROOT / "data" / "llamaindex"))
 
     config = AppConfig(
         jwt_secret_key=jwt_secret,
@@ -109,13 +119,16 @@ def get_config() -> AppConfig:
         chatgpt_service_token=chatgpt_service_token,
         chatgpt_cors_origin=chatgpt_cors_origin,
         enable_noauth_mcp=enable_noauth_mcp,
+        google_api_key=google_api_key,
+        llamaindex_persist_dir=llamaindex_persist_dir,
         vault_base_path=vault_base,
         hf_oauth_client_id=hf_client_id,
         hf_oauth_client_secret=hf_client_secret,
         hf_space_url=hf_space_url,
     )
-    # Ensure vault base directory exists for downstream services.
+    # Ensure vault base directory and index persist directory exist for downstream services.
     config.vault_base_path.mkdir(parents=True, exist_ok=True)
+    config.llamaindex_persist_dir.mkdir(parents=True, exist_ok=True)
     return config
 
 

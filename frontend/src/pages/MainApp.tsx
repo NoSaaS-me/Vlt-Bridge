@@ -4,7 +4,7 @@
  */
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Settings as SettingsIcon, FolderPlus } from 'lucide-react';
+import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle } from 'lucide-react';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -15,6 +15,7 @@ import { SearchBar } from '@/components/SearchBar';
 import { NoteViewer } from '@/components/NoteViewer';
 import { NoteViewerSkeleton } from '@/components/NoteViewerSkeleton';
 import { NoteEditor } from '@/components/NoteEditor';
+import { ChatPanel } from '@/components/ChatPanel';
 import { useToast } from '@/hooks/useToast';
 import { GraphView } from '@/components/GraphView';
 import {
@@ -63,6 +64,7 @@ export function MainApp() {
   const [newFolderName, setNewFolderName] = useState('');
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -414,6 +416,14 @@ export function MainApp() {
               </Button>
             )}
             <Button
+              variant={isChatOpen ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setIsChatOpen(!isChatOpen)}
+              title={isChatOpen ? "Close Chat" : "Open AI Planning Agent"}
+            >
+              <MessageCircle className="h-4 w-4" />
+            </Button>
+            <Button
               variant={isGraphView ? "secondary" : "ghost"}
               size="sm"
               onClick={() => setIsGraphView(!isGraphView)}
@@ -615,6 +625,15 @@ export function MainApp() {
               )}
             </div>
           </ResizablePanel>
+
+          {isChatOpen && (
+            <>
+              <ResizableHandle withHandle />
+              <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
+                <ChatPanel onNavigateToNote={handleSelectNote} />
+              </ResizablePanel>
+            </>
+          )}
         </ResizablePanelGroup>
       </div>
 
