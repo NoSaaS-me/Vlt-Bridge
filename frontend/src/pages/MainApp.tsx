@@ -537,9 +537,9 @@ export function MainApp() {
       </Alert>
       
       {/* Top bar */}
-      <div className="border-b border-border p-4 animate-fade-in">
+      <div className="border-b border-border p-2 animate-fade-in">
         <div className="relative flex items-center justify-center">
-          <img src={vaultLogo} alt="Vault.MCP" className="w-14 h-14" />
+          <img src={vaultLogo} alt="Vault.MCP" className="w-16 h-16" />
           <div className="absolute right-0 flex gap-2">
             {isDemoMode && (
               <Button
