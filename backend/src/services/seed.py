@@ -17,9 +17,9 @@ DEMO_NOTES = [
         "path": "00-Index.md",
         "title": "00-Index",
         "tags": ["index", "navigation", "overview"],
-        "body": """# 📚 Document-MCP: Your AI-Native Knowledge Vault
+        "body": """# 📚 Vault.MCP: Your AI-Native Knowledge Vault
 
-**Document-MCP** is where documentation meets intelligence. It's an Obsidian-like vault that lives in the cloud, talks to AI agents through MCP, renders beautifully in ChatGPT, and lets humans read, write, and explore knowledge with joy.
+**Vault.MCP** is where documentation meets intelligence. It's an Obsidian-like vault that lives in the cloud, talks to AI agents through MCP, renders beautifully in ChatGPT, and lets humans read, write, and explore knowledge with joy.
 
 Think of it as **shared memory for humans and AIs**—a place where planning agents write architecture docs, execution agents log their work, and you discover connections through an interactive graph.
 
