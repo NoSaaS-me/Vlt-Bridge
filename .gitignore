@@ -66,9 +66,8 @@ docs/fastmcp/
 # AI notes (personal workspace)
 ai-notes/
 Ai-notes/
-
+docs/
 # Images (binary files not allowed in HF Spaces)
-*.png
 *.jpg
 *.jpeg
 *.gif

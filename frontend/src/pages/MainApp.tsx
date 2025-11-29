@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle } from 'lucide-react';
+import { useFontSize } from '@/hooks/useFontSize';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -18,6 +19,7 @@ import { NoteEditor } from '@/components/NoteEditor';
 import { ChatPanel } from '@/components/ChatPanel';
 import { useToast } from '@/hooks/useToast';
 import { GraphView } from '@/components/GraphView';
+import { GlowParticleEffect } from '@/components/GlowParticleEffect';
 import {
   listNotes,
   getNote,
@@ -72,6 +74,8 @@ export function MainApp() {
   const [isSynthesizingTts, setIsSynthesizingTts] = useState(false);
   const ttsUrlRef = useRef<string | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
+  // T007: Initialize font size state management
+  const { fontSize, setFontSize, isFontReady } = useFontSize();
   const {
     status: ttsPlayerStatus,
     error: ttsPlayerError,
@@ -522,7 +526,8 @@ export function MainApp() {
   const ttsDisabledReason = undefined;
 
   return (
-    <div className="h-screen flex flex-col">
+    <GlowParticleEffect config="vibrant" triggerSelector="button">
+      <div className="h-screen flex flex-col">
       {/* Demo warning banner */}
       <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
         <AlertDescription className="text-center">
@@ -531,10 +536,33 @@ export function MainApp() {
       </Alert>
       
       {/* Top bar */}
-      <div className="border-b border-border p-4 animate-fade-in">
-        <div className="flex items-center justify-between gap-2">
-          <h1 className="text-xl font-semibold">📚 Document Viewer</h1>
-          <div className="flex gap-2">
+      <div className="border-b border-border p-2 animate-fade-in">
+        <div className="relative flex items-center justify-center">
+          <h1
+            className="text-2xl tracking-[0.15em] uppercase select-none"
+            style={{
+              fontFamily: '"Press Start 2P", monospace',
+              fontWeight: 400,
+              color: "#3b82f6",
+              textShadow: `
+                0px 0px 1px #000000,
+                1px 1px 0 #111827,
+                2px 2px 0 #020617,
+                3px 3px 0 #020617,
+                4px 4px 0 #020617,
+                5px 5px 0 #020617,
+                0px 0px 4px rgba(15,23,42,0.9),
+                0px 0px 10px rgba(59,130,246,0.7)
+              `,
+              textRendering: "geometricPrecision",
+              WebkitFontSmoothing: "none",
+              transform: "perspective(700px) rotateX(18deg)",
+              transformOrigin: "bottom center",
+            }}
+          >
+            Vault.MCP
+          </h1>
+          <div className="absolute right-0 flex gap-2">
             {isDemoMode && (
               <Button
                 variant="default"
@@ -558,8 +586,9 @@ export function MainApp() {
               size="sm"
               onClick={() => setIsGraphView(!isGraphView)}
               title={isGraphView ? "Switch to Note View" : "Switch to Graph View"}
+              className="transition-all duration-250 ease-out"
             >
-              <Network className="h-4 w-4" />
+              <Network className="h-4 w-4 transition-transform duration-250" />
             </Button>
             <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
               <SettingsIcon className="h-4 w-4" />
@@ -570,16 +599,6 @@ export function MainApp() {
 
       {/* Main content */}
       <div className="flex-1 overflow-hidden animate-fade-in" style={{ animationDelay: '0.1s' }}>
-        {isDemoMode && (
-          <div className="border-b border-border bg-muted/40 px-4 py-2 text-sm text-muted-foreground flex flex-wrap items-center justify-between gap-2">
-            <span>
-              You are browsing the shared demo vault in read-only mode. Sign in with your Hugging Face account to create and edit notes.
-            </span>
-            <Button variant="outline" size="sm" onClick={() => login()}>
-              Sign in
-            </Button>
-          </div>
-        )}
         <ResizablePanelGroup direction="horizontal">
           {/* Left sidebar */}
           <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
@@ -725,7 +744,7 @@ export function MainApp() {
                   refreshTrigger={graphRefreshTrigger}
                 />
               ) : (
-                isLoadingNote ? (
+                isLoadingNote || !isFontReady ? (
                   <NoteViewerSkeleton />
                 ) : currentNote ? (
                   isEditMode ? (
@@ -747,6 +766,8 @@ export function MainApp() {
                       ttsDisabledReason={ttsDisabledReason}
                       ttsVolume={ttsVolume}
                       onTtsVolumeChange={setTtsVolume}
+                      fontSize={fontSize}
+                      onFontSizeChange={setFontSize}
                     />
                   )
                 ) : (
@@ -768,7 +789,7 @@ export function MainApp() {
           {isChatOpen && (
             <>
               <ResizableHandle withHandle />
-              <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
+              <ResizablePanel defaultSize={25} minSize={20} maxSize={40} className="animate-slide-in">
                 <ChatPanel
                   onNavigateToNote={handleSelectNote}
                   onNotesChanged={refreshAll}
@@ -808,7 +829,8 @@ export function MainApp() {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </GlowParticleEffect>
   );
 }
 
