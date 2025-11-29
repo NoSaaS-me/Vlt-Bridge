@@ -165,7 +165,7 @@ By using Markdown files as the universal interface, we decouple the *Planning In
 See [[MCP Integration]] to equip your local agents with the tools they need."""
     },
     {
-        "path": "A Personal Note.md",
+        "path": "agents/A Personal Note.md",
         "title": "A Personal Note",
         "tags": ["reflection", "meta"],
         "body": """# A Personal Note
