@@ -10,8 +10,8 @@ short_description: A bridge for all agents to pass markdown
 tags:
   - building-mcp-track-consumer
   - building-mcp-track-enterprise
-  - mcp-in-action-track-consumer
-  - mcp-in-action-track-enterprise
+  - building-mcp-track-creative
+
 ---
 (the table above is for HF deployments)
 # Document Viewer - AI-Powered Documentation System
@@ -19,6 +19,18 @@ tags:
 An Obsidian-style documentation system where AI agents and humans collaborate on creating and maintaining documentation.
 
 Team members: Bigwolfe, AbelFace, Wothmag07
+
+Links:
+
+https://youtu.be/vHCsI1a7MUY
+
+https://github.com/bigwolfeman/Document-MCP
+
+https://www.instagram.com/p/DRqCPOTEcKl/?igsh=MTlhZjJmZ2podzlmcA==
+
+https://x.com/a_i_belgpt/status/1994900016553480593?t=Bqv3nYAluzLv2BMqVyuTSQ&s=09
+
+https://www.linkedin.com/posts/jose-pinales_vault-mcp-share-7400699102797406208-zZwq?utm_source=share&utm_medium=member_android&rcm=ACoAACp_iZMBHLcV-oYR8V0pIIkrTziBPQKXTw4
 
 ## ⚠️ Demo Mode
 
@@ -36,6 +48,10 @@ Team members: Bigwolfe, AbelFace, Wothmag07
 - **Split-Pane Editor** - Live markdown preview
 - **MCP Integration** - AI agents can read/write via Model Context Protocol
 - **Multi-Tenant** - Each user gets an isolated vault (HF OAuth)
+- **ChatGPT App Integration** - Loads as an iFrame in ChatGPT (while still letting other agents communicate over the same MCP endpoint!)
+- **TTS** - Read your notes outloud using Elevenlabs TTS
+- **Gemini AI Integration** Using Gemini API there is a full tool calling chatbot that can help organize and talk about the notes inside Vault.MCP
+- **Vector DB/LlamaIndex RAG** Full RAG capacity through LlamaIndex
 
 ## 🚀 Getting Started
 
