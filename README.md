@@ -22,6 +22,8 @@ Team members: Bigwolfe, AbelFace, Wothmag07
 
 Links:
 
+https://huggingface.co/spaces/MCP-1st-Birthday/Vault.MCP
+
 https://youtu.be/vHCsI1a7MUY
 
 https://github.com/bigwolfeman/Document-MCP
