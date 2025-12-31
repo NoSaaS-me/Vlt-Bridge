@@ -51,17 +51,20 @@ export async function streamOracle(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let chunkCounter = 0;
 
   try {
     while (true) {
       const { done, value } = await reader.read();
 
       if (done) {
+        console.debug('[SSE] Stream complete');
         break;
       }
 
       // Append to buffer and process complete lines
-      buffer += decoder.decode(value, { stream: true });
+      const decoded = decoder.decode(value, { stream: true });
+      buffer += decoded;
       const lines = buffer.split('\n');
 
       // Keep incomplete line in buffer
@@ -81,6 +84,13 @@ export async function streamOracle(
 
           try {
             const chunk = JSON.parse(data) as OracleStreamChunk;
+            chunkCounter++;
+            // Debug logging to trace chunk duplication issue
+            console.debug(
+              `[SSE #${chunkCounter}] type=${chunk.type} content_preview=${
+                chunk.content?.substring(0, 50) || 'N/A'
+              }`
+            );
             onChunk(chunk);
           } catch (err) {
             console.error('Failed to parse SSE chunk:', data, err);

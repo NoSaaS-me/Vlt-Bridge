@@ -225,6 +225,7 @@ async def query_oracle_stream(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         """Generate SSE events from OracleAgent stream."""
+        chunk_counter = 0
         try:
             logger.info(f"Oracle Agent query from user {auth.user_id}: {request.question[:100]}")
 
@@ -235,8 +236,15 @@ async def query_oracle_stream(
                 thinking=request.thinking,
                 max_tokens=request.max_tokens,
             ):
+                chunk_counter += 1
+                chunk_json = chunk.model_dump(exclude_none=True)
+                # Debug logging to trace chunk duplication issue
+                logger.debug(
+                    f"[SSE #{chunk_counter}] type={chunk.type} "
+                    f"content_preview={str(chunk.content)[:50] if chunk.content else 'N/A'}"
+                )
                 # OracleAgent yields OracleStreamChunk objects directly
-                yield json.dumps(chunk.model_dump(exclude_none=True))
+                yield json.dumps(chunk_json)
 
         except OracleAgentError as e:
             logger.error(f"Oracle agent error: {e.message}")

@@ -211,6 +211,9 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
     // Create abort controller for this request
     abortControllerRef.current = new AbortController();
 
+    // Track chunks processed for debugging duplication issues
+    let chunkProcessedCount = 0;
+
     try {
       await streamOracle(
         {
@@ -221,8 +224,19 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
           thinking: modelSettings?.thinking_enabled,
         },
         (chunk: OracleStreamChunk) => {
+          chunkProcessedCount++;
+          // Debug logging to trace chunk duplication
+          console.debug(
+            `[ChatPanel #${chunkProcessedCount}] Processing chunk type=${chunk.type}`
+          );
+
           setMessages((prev) => {
-            const updated = [...prev];
+            // Create a deep copy to avoid mutation issues with React StrictMode
+            // StrictMode runs updater functions twice with the same initial state,
+            // so in-place mutation causes content to be appended twice.
+            const updated = prev.map((msg, idx) =>
+              idx === prev.length - 1 ? { ...msg } : msg
+            );
             const lastMsg = updated[updated.length - 1];
 
             if (lastMsg.role === 'assistant') {
@@ -233,8 +247,8 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
               } else if (chunk.type === 'content') {
                 lastMsg.content += chunk.content || '';
               } else if (chunk.type === 'source' && chunk.source) {
-                if (!lastMsg.sources) lastMsg.sources = [];
-                lastMsg.sources.push(chunk.source);
+                // Deep copy sources array to avoid mutation
+                lastMsg.sources = [...(lastMsg.sources || []), chunk.source];
               } else if (chunk.type === 'done') {
                 lastMsg.model = chunk.model_used;
                 setStatusMessage('');
@@ -254,7 +268,10 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
       if (err instanceof Error && err.name === 'AbortError') {
         // User cancelled - update the message to show it was stopped
         setMessages((prev) => {
-          const updated = [...prev];
+          // Deep copy last message to avoid StrictMode mutation issues
+          const updated = prev.map((msg, idx) =>
+            idx === prev.length - 1 ? { ...msg } : msg
+          );
           const lastMsg = updated[updated.length - 1];
           if (lastMsg.role === 'assistant' && !lastMsg.content) {
             lastMsg.content = 'Query stopped by user.';
@@ -268,7 +285,10 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
       const errorMessage = err instanceof Error ? err.message : 'Failed to get response';
 
       setMessages((prev) => {
-        const updated = [...prev];
+        // Deep copy last message to avoid StrictMode mutation issues
+        const updated = prev.map((msg, idx) =>
+          idx === prev.length - 1 ? { ...msg } : msg
+        );
         const lastMsg = updated[updated.length - 1];
         if (lastMsg.role === 'assistant') {
           lastMsg.is_error = true;

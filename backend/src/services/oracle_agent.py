@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -61,6 +62,144 @@ def _get_prompt_loader():
         from .prompt_loader import PromptLoader
         _prompt_loader = PromptLoader()
     return _prompt_loader
+
+
+def _parse_xml_tool_calls(content: str) -> Tuple[List[Dict[str, Any]], str]:
+    """Parse XML-style function calls from content.
+
+    Some models (like DeepSeek) don't properly support OpenAI function calling
+    and instead output XML-style tool invocations in their text response.
+
+    This function extracts those pseudo-tool-calls and returns them in the
+    standard OpenAI tool_calls format so the agent loop can process them.
+
+    Supported formats:
+        <function_calls>
+        <invoke name="tool_name">
+        <parameter name="param_name">value</parameter>
+        </invoke>
+        </function_calls>
+
+        Also handles: <function_calls>, <invoke>, <parameter>
+
+    Args:
+        content: The text content that may contain XML function calls
+
+    Returns:
+        Tuple of (tool_calls_list, cleaned_content) where:
+        - tool_calls_list: List of tool calls in OpenAI format
+        - cleaned_content: Content with XML blocks removed
+    """
+    tool_calls: List[Dict[str, Any]] = []
+
+    # Match various XML function call formats
+    # Pattern for <function_calls> or <function_calls> blocks
+    function_calls_pattern = re.compile(
+        r'<(?:antml:)?function_calls>\s*(.*?)\s*</(?:antml:)?function_calls>',
+        re.DOTALL | re.IGNORECASE
+    )
+
+    # Pattern for individual <invoke> or <invoke> elements
+    invoke_pattern = re.compile(
+        r'<(?:antml:)?invoke\s+name=["\']([^"\']+)["\']\s*>\s*(.*?)\s*</(?:antml:)?invoke>',
+        re.DOTALL | re.IGNORECASE
+    )
+
+    # Pattern for <parameter> or <parameter> elements
+    param_pattern = re.compile(
+        r'<(?:antml:)?parameter\s+name=["\']([^"\']+)["\'](?:\s+[^>]*)?>([^<]*)</(?:antml:)?parameter>',
+        re.DOTALL | re.IGNORECASE
+    )
+
+    cleaned_content = content
+
+    # Find all function_calls blocks
+    for fc_match in function_calls_pattern.finditer(content):
+        block_content = fc_match.group(1)
+        cleaned_content = cleaned_content.replace(fc_match.group(0), '')
+
+        # Find all invoke elements within this block
+        for invoke_match in invoke_pattern.finditer(block_content):
+            tool_name = invoke_match.group(1)
+            params_content = invoke_match.group(2)
+
+            # Extract parameters
+            arguments: Dict[str, Any] = {}
+            for param_match in param_pattern.finditer(params_content):
+                param_name = param_match.group(1)
+                param_value = param_match.group(2).strip()
+
+                # Try to parse as JSON, otherwise keep as string
+                try:
+                    # Handle boolean and numeric values
+                    if param_value.lower() in ('true', 'false'):
+                        arguments[param_name] = param_value.lower() == 'true'
+                    elif param_value.isdigit():
+                        arguments[param_name] = int(param_value)
+                    else:
+                        try:
+                            arguments[param_name] = json.loads(param_value)
+                        except json.JSONDecodeError:
+                            arguments[param_name] = param_value
+                except Exception:
+                    arguments[param_name] = param_value
+
+            # Create tool call in OpenAI format
+            tool_call = {
+                "id": f"xml_call_{uuid.uuid4().hex[:8]}",
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(arguments),
+                },
+            }
+            tool_calls.append(tool_call)
+
+    # Also check for standalone invoke elements (not wrapped in function_calls)
+    if not tool_calls:
+        for invoke_match in invoke_pattern.finditer(content):
+            tool_name = invoke_match.group(1)
+            params_content = invoke_match.group(2)
+            cleaned_content = cleaned_content.replace(invoke_match.group(0), '')
+
+            arguments: Dict[str, Any] = {}
+            for param_match in param_pattern.finditer(params_content):
+                param_name = param_match.group(1)
+                param_value = param_match.group(2).strip()
+
+                try:
+                    if param_value.lower() in ('true', 'false'):
+                        arguments[param_name] = param_value.lower() == 'true'
+                    elif param_value.isdigit():
+                        arguments[param_name] = int(param_value)
+                    else:
+                        try:
+                            arguments[param_name] = json.loads(param_value)
+                        except json.JSONDecodeError:
+                            arguments[param_name] = param_value
+                except Exception:
+                    arguments[param_name] = param_value
+
+            tool_call = {
+                "id": f"xml_call_{uuid.uuid4().hex[:8]}",
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(arguments),
+                },
+            }
+            tool_calls.append(tool_call)
+
+    # Clean up extra whitespace in the cleaned content
+    cleaned_content = re.sub(r'\n{3,}', '\n\n', cleaned_content.strip())
+
+    if tool_calls:
+        logger.info(
+            f"Parsed {len(tool_calls)} XML-style tool call(s) from content",
+            extra={"tool_names": [tc["function"]["name"] for tc in tool_calls]},
+        )
+
+    return tool_calls, cleaned_content
 
 
 class OracleAgentError(Exception):
@@ -410,22 +549,42 @@ class OracleAgent:
                 yield chunk
 
         elif finish_reason == "stop" or (content_buffer and not tool_calls_buffer):
-            # Final response without tool calls
-            messages.append({"role": "assistant", "content": content_buffer})
+            # Check if the model output XML-style tool calls in content
+            # (Some models like DeepSeek don't support proper function calling)
+            xml_tool_calls, cleaned_content = _parse_xml_tool_calls(content_buffer)
 
-            # Yield sources
-            for source in self._collected_sources:
-                yield OracleStreamChunk(
-                    type="source",
-                    source=source,
+            if xml_tool_calls:
+                # Model used XML-style tool calls instead of proper function calling
+                logger.warning(
+                    f"Model {self.model} output {len(xml_tool_calls)} XML-style tool call(s) "
+                    "instead of using proper function calling. Parsing and executing."
                 )
 
-            # Done
-            yield OracleStreamChunk(
-                type="done",
-                tokens_used=None,  # Could extract from response headers
-                model_used=self.model,
-            )
+                # Add assistant message with the parsed tool calls
+                assistant_msg = {"role": "assistant", "content": cleaned_content or None}
+                assistant_msg["tool_calls"] = xml_tool_calls
+                messages.append(assistant_msg)
+
+                # Execute tools and yield results
+                async for chunk in self._execute_tools(xml_tool_calls, messages, user_id):
+                    yield chunk
+            else:
+                # Final response without tool calls
+                messages.append({"role": "assistant", "content": content_buffer})
+
+                # Yield sources
+                for source in self._collected_sources:
+                    yield OracleStreamChunk(
+                        type="source",
+                        source=source,
+                    )
+
+                # Done
+                yield OracleStreamChunk(
+                    type="done",
+                    tokens_used=None,  # Could extract from response headers
+                    model_used=self.model,
+                )
 
     async def _process_response(
         self,
@@ -467,29 +626,56 @@ class OracleAgent:
                 yield chunk
 
         else:
-            # Final response
-            if content:
-                yield OracleStreamChunk(
-                    type="content",
-                    content=content,
+            # Check for XML-style tool calls in content
+            # (Some models like DeepSeek don't support proper function calling)
+            xml_tool_calls, cleaned_content = _parse_xml_tool_calls(content)
+
+            if xml_tool_calls:
+                # Model used XML-style tool calls instead of proper function calling
+                logger.warning(
+                    f"Model {self.model} output {len(xml_tool_calls)} XML-style tool call(s) "
+                    "instead of using proper function calling. Parsing and executing."
                 )
 
-            messages.append({"role": "assistant", "content": content})
+                # Yield the cleaned content if any
+                if cleaned_content:
+                    yield OracleStreamChunk(
+                        type="content",
+                        content=cleaned_content,
+                    )
 
-            # Yield sources
-            for source in self._collected_sources:
+                # Add assistant message with the parsed tool calls
+                assistant_msg = {"role": "assistant", "content": cleaned_content or None}
+                assistant_msg["tool_calls"] = xml_tool_calls
+                messages.append(assistant_msg)
+
+                # Execute tools
+                async for chunk in self._execute_tools(xml_tool_calls, messages, user_id):
+                    yield chunk
+            else:
+                # Final response without tool calls
+                if content:
+                    yield OracleStreamChunk(
+                        type="content",
+                        content=content,
+                    )
+
+                messages.append({"role": "assistant", "content": content})
+
+                # Yield sources
+                for source in self._collected_sources:
+                    yield OracleStreamChunk(
+                        type="source",
+                        source=source,
+                    )
+
+                # Done - only when no XML tool calls were found
+                usage = data.get("usage", {})
                 yield OracleStreamChunk(
-                    type="source",
-                    source=source,
+                    type="done",
+                    tokens_used=usage.get("total_tokens"),
+                    model_used=self.model,
                 )
-
-            # Done
-            usage = data.get("usage", {})
-            yield OracleStreamChunk(
-                type="done",
-                tokens_used=usage.get("total_tokens"),
-                model_used=self.model,
-            )
 
     async def _execute_tools(
         self,
