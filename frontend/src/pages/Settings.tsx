@@ -88,11 +88,13 @@ export function Settings() {
         console.error('Error loading model settings:', err);
         // Set defaults if API fails
         setModelSettings({
-          oracle_model: 'deepseek/deepseek-chat',
+          oracle_model: 'deepseek/deepseek-chat:free',
           oracle_provider: 'openrouter',
           subagent_model: 'google/gemini-2.0-flash-exp:free',
           subagent_provider: 'openrouter',
           thinking_enabled: false,
+          openrouter_api_key: null,
+          openrouter_api_key_set: false,
         });
       }
     } catch (err) {
@@ -545,6 +547,50 @@ export function Settings() {
                 </div>
               </div>
 
+              <Separator />
+
+              {/* OpenRouter API Key */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">OpenRouter API Key</label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Required for paid models. Get your key at{' '}
+                  <a
+                    href="https://openrouter.ai/keys"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    openrouter.ai/keys
+                  </a>
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    type="password"
+                    placeholder={modelSettings.openrouter_api_key_set ? '••••••••••••••••' : 'sk-or-...'}
+                    value={modelSettings.openrouter_api_key || ''}
+                    onChange={(e) =>
+                      setModelSettings({ ...modelSettings, openrouter_api_key: e.target.value })
+                    }
+                    className="font-mono text-xs"
+                  />
+                  {modelSettings.openrouter_api_key_set && !modelSettings.openrouter_api_key && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setModelSettings({ ...modelSettings, openrouter_api_key: '' })}
+                      title="Clear saved API key"
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
+                {modelSettings.openrouter_api_key_set && (
+                  <p className="text-xs text-green-600 dark:text-green-400">
+                    ✓ API key is configured
+                  </p>
+                )}
+              </div>
+
               {modelsSaved && (
                 <Alert>
                   <AlertDescription>
@@ -563,7 +609,7 @@ export function Settings() {
 
               <div className="text-xs text-muted-foreground">
                 These settings control which AI models are used for Oracle queries and subagent operations.
-                Free models are recommended for cost-effective operations.
+                Your API key is stored securely and never exposed in responses.
               </div>
             </CardContent>
           </Card>

@@ -33,6 +33,14 @@ class ModelSettings(BaseModel):
         default=False,
         description="Enable extended thinking mode (adds :thinking suffix for supported models)"
     )
+    openrouter_api_key: Optional[str] = Field(
+        default=None,
+        description="User's OpenRouter API key for accessing paid models"
+    )
+    openrouter_api_key_set: bool = Field(
+        default=False,
+        description="Whether an OpenRouter API key has been configured (key itself is not returned)"
+    )
 
 
 class ModelInfo(BaseModel):
@@ -67,3 +75,7 @@ class ModelSettingsUpdateRequest(BaseModel):
     subagent_model: Optional[str] = None
     subagent_provider: Optional[ModelProvider] = None
     thinking_enabled: Optional[bool] = None
+    openrouter_api_key: Optional[str] = Field(
+        default=None,
+        description="OpenRouter API key (set to empty string to clear)"
+    )

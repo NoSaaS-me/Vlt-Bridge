@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import sys
 from collections import defaultdict
@@ -136,6 +137,7 @@ class OracleBridge:
         thinking: bool = False,
         project: Optional[str] = None,
         max_tokens: int = 16000,
+        openrouter_api_key: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Ask Oracle a question with streaming response.
@@ -149,6 +151,7 @@ class OracleBridge:
             thinking: Enable thinking mode (append :thinking suffix to model)
             project: Project ID (auto-detected if None)
             max_tokens: Maximum tokens for context assembly
+            openrouter_api_key: User's OpenRouter API key (passed as env var)
 
         Yields:
             Streaming chunks as dictionaries
@@ -184,11 +187,18 @@ class OracleBridge:
             # Store question in conversation history
             self._add_to_history(user_id, "user", question)
 
+            # Build environment with API key if provided
+            env = os.environ.copy()
+            if openrouter_api_key:
+                env["VLT_OPENROUTER_API_KEY"] = openrouter_api_key
+                logger.debug("Passing OpenRouter API key to vlt subprocess")
+
             # Start subprocess
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
 
             # Simulate streaming chunks

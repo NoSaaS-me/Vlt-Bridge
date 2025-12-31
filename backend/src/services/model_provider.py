@@ -42,84 +42,6 @@ GOOGLE_MODELS = [
     ),
 ]
 
-# Priority models to always include in the list (regardless of free status)
-# These are popular models users likely want quick access to
-PRIORITY_OPENROUTER_MODELS = {
-    # Free models
-    "deepseek/deepseek-chat:free",
-    "deepseek/deepseek-r1:free",
-    "google/gemini-2.0-flash-exp:free",
-    "google/gemini-2.5-flash-preview-05-20:free",
-    "google/gemini-2.0-flash-thinking-exp:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "qwen/qwen-2.5-72b-instruct:free",
-    # Premium models (will be marked as not free)
-    "anthropic/claude-sonnet-4",
-    "anthropic/claude-4-opus",
-    "openai/gpt-4.1",
-    "openai/o3",
-    "google/gemini-2.5-pro-preview",
-    "deepseek/deepseek-r1",
-    "x-ai/grok-3-beta",
-}
-
-# Fallback models when OpenRouter API is unavailable
-FALLBACK_OPENROUTER_MODELS = [
-    ModelInfo(
-        id="deepseek/deepseek-chat",
-        name="DeepSeek Chat",
-        provider=ModelProvider.OPENROUTER,
-        is_free=True,
-        supports_thinking=False,
-        context_length=128000,
-        description="DeepSeek's powerful chat model"
-    ),
-    ModelInfo(
-        id="deepseek/deepseek-r1",
-        name="DeepSeek R1",
-        provider=ModelProvider.OPENROUTER,
-        is_free=True,
-        supports_thinking=True,
-        context_length=128000,
-        description="DeepSeek's reasoning model with extended thinking"
-    ),
-    ModelInfo(
-        id="google/gemini-2.0-flash-exp:free",
-        name="Gemini 2.0 Flash (Free via OpenRouter)",
-        provider=ModelProvider.OPENROUTER,
-        is_free=True,
-        supports_thinking=False,
-        context_length=1000000,
-        description="Google's Gemini 2.0 Flash via OpenRouter free tier"
-    ),
-    ModelInfo(
-        id="google/gemini-2.0-flash-thinking-exp:free",
-        name="Gemini 2.0 Flash Thinking (Free)",
-        provider=ModelProvider.OPENROUTER,
-        is_free=True,
-        supports_thinking=True,
-        context_length=1000000,
-        description="Gemini 2.0 with thinking mode via OpenRouter"
-    ),
-    ModelInfo(
-        id="meta-llama/llama-3.3-70b-instruct",
-        name="Llama 3.3 70B Instruct",
-        provider=ModelProvider.OPENROUTER,
-        is_free=True,
-        supports_thinking=False,
-        context_length=131072,
-        description="Meta's latest Llama model with 70B parameters"
-    ),
-    ModelInfo(
-        id="qwen/qwen-2.5-72b-instruct",
-        name="Qwen 2.5 72B Instruct",
-        provider=ModelProvider.OPENROUTER,
-        is_free=True,
-        supports_thinking=False,
-        context_length=131072,
-        description="Alibaba's Qwen 2.5 large model"
-    ),
-]
 
 
 class ModelProviderService:
@@ -162,8 +84,7 @@ class ModelProviderService:
                     model_id = model_data.get("id", "")
 
                     # Check actual pricing to determine if model is free
-                    # Free models have both prompt and completion cost of "0"
-                    # OR have :free suffix in model ID
+                    # Free models have :free suffix OR both prompt and completion cost of "0"
                     pricing = model_data.get("pricing", {})
                     prompt_price = str(pricing.get("prompt", "1"))
                     completion_price = str(pricing.get("completion", "1"))
@@ -173,16 +94,11 @@ class ModelProviderService:
                         or (prompt_price == "0" and completion_price == "0")
                     )
 
-                    # Include model if it's free OR in priority list
-                    is_priority = model_id in PRIORITY_OPENROUTER_MODELS
-                    if not is_free and not is_priority:
-                        continue
-
-                    # Check if model supports thinking mode
-                    # Models with :thinking suffix or "reasoning" in name
+                    # Check if model supports thinking/reasoning mode
                     supports_thinking = (
                         ":thinking" in model_id.lower()
-                        or "reasoning" in model_data.get("name", "").lower()
+                        or "thinking" in model_data.get("name", "").lower()
+                        or "-r1" in model_id.lower()
                         or "/r1" in model_id.lower()
                         or "/o1" in model_id.lower()
                         or "/o3" in model_id.lower()
@@ -192,16 +108,16 @@ class ModelProviderService:
                         id=model_id,
                         name=model_data.get("name", model_id),
                         provider=ModelProvider.OPENROUTER,
-                        is_free=is_free,  # Actual free status, not just inclusion
+                        is_free=is_free,
                         supports_thinking=supports_thinking,
                         context_length=model_data.get("context_length"),
                         description=model_data.get("description")
                     ))
 
-                # Sort by priority models first, then alphabetically
+                # Sort: free models first, then by name
                 models.sort(
                     key=lambda m: (
-                        m.id not in PRIORITY_OPENROUTER_MODELS,
+                        not m.is_free,  # Free first
                         m.name.lower()
                     )
                 )
@@ -210,11 +126,11 @@ class ModelProviderService:
                 return models
 
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to fetch OpenRouter models, using fallback: {e}")
-            return FALLBACK_OPENROUTER_MODELS.copy()
+            logger.error(f"Failed to fetch OpenRouter models: {e}")
+            return []
         except Exception as e:
-            logger.warning(f"Unexpected error fetching OpenRouter models, using fallback: {e}")
-            return FALLBACK_OPENROUTER_MODELS.copy()
+            logger.error(f"Unexpected error fetching OpenRouter models: {e}")
+            return []
 
     def get_google_models(self) -> List[ModelInfo]:
         """

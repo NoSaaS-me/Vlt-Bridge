@@ -1,0 +1,30 @@
+[project]
+name = "vlt-bridge"
+id = "vlt-bridge"
+description = ""
+
+[coderag]
+include = ["src/**/*.py", "lib/**/*.py", "tests/**/*.py"]
+exclude = ["**/node_modules/**", "**/__pycache__/**", "**/.git/**"]
+languages = ["python", "typescript", "javascript"]
+
+[coderag.embedding]
+model = "qwen/qwen3-embedding-8b"
+batch_size = 10
+
+[coderag.repomap]
+max_tokens = 4000
+include_signatures = true
+include_docstrings = false
+
+[coderag.delta]
+file_threshold = 5
+line_threshold = 1000
+timeout_seconds = 300
+jit_indexing = true
+
+[oracle]
+vault_url = "http://localhost:8000"
+synthesis_model = "anthropic/claude-sonnet-4"
+rerank_model = "openai/gpt-4o-mini"
+max_context_tokens = 16000

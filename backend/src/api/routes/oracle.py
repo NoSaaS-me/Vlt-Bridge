@@ -20,6 +20,7 @@ from ...models.oracle import (
     SourceReference,
 )
 from ...services.oracle_bridge import OracleBridge, OracleBridgeError
+from ...services.user_settings import UserSettingsService, get_user_settings_service
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,7 @@ async def query_oracle_stream(
     request: OracleRequest,
     auth: AuthContext = Depends(get_auth_context),
     oracle: OracleBridge = Depends(get_oracle_bridge),
+    settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """
     Query the oracle with streaming response (Server-Sent Events).
@@ -127,6 +129,8 @@ async def query_oracle_stream(
     data: {"type": "content", "content": "Based on the code..."}
     ```
     """
+    # Get user's OpenRouter API key
+    openrouter_api_key = settings_service.get_openrouter_api_key(auth.user_id)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         """Generate SSE events from oracle stream."""
@@ -142,6 +146,7 @@ async def query_oracle_stream(
                 thinking=request.thinking,
                 project=None,  # Auto-detect project
                 max_tokens=request.max_tokens,
+                openrouter_api_key=openrouter_api_key,
             ):
                 # Validate chunk against schema
                 try:

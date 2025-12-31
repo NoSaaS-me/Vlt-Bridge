@@ -119,7 +119,7 @@ async def update_model_settings(
     Update user's model preferences.
 
     Allows partial updates - only provided fields will be updated.
-    Returns the updated settings.
+    Returns the updated settings (API key is never returned, only openrouter_api_key_set flag).
     """
     try:
         updated_settings = settings_service.update_settings(
@@ -128,7 +128,8 @@ async def update_model_settings(
             oracle_provider=request.oracle_provider,
             subagent_model=request.subagent_model,
             subagent_provider=request.subagent_provider,
-            thinking_enabled=request.thinking_enabled
+            thinking_enabled=request.thinking_enabled,
+            openrouter_api_key=request.openrouter_api_key
         )
         return updated_settings
     except Exception as e:

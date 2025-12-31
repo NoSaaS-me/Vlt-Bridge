@@ -21,6 +21,8 @@ export interface ModelSettings {
   subagent_model: string;
   subagent_provider: ModelProvider;
   thinking_enabled: boolean;
+  openrouter_api_key?: string | null;
+  openrouter_api_key_set: boolean;
 }
 
 export interface ModelsResponse {

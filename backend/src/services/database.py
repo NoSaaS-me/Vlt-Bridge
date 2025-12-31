@@ -78,10 +78,17 @@ DDL_STATEMENTS: tuple[str, ...] = (
         subagent_model TEXT NOT NULL DEFAULT 'gemini-2.0-flash-exp',
         subagent_provider TEXT NOT NULL DEFAULT 'google',
         thinking_enabled INTEGER NOT NULL DEFAULT 0,
+        openrouter_api_key TEXT,
         created TEXT NOT NULL,
         updated TEXT NOT NULL
     )
     """,
+)
+
+# Migration statements for existing databases
+MIGRATION_STATEMENTS: tuple[str, ...] = (
+    # Add openrouter_api_key column if it doesn't exist
+    "ALTER TABLE user_settings ADD COLUMN openrouter_api_key TEXT",
 )
 
 
@@ -108,6 +115,13 @@ class DatabaseService:
             with conn:  # Transactional apply of DDL
                 for statement in statements or DDL_STATEMENTS:
                     conn.execute(statement)
+            # Run migrations for existing databases (ignore errors for already-applied migrations)
+            for migration in MIGRATION_STATEMENTS:
+                try:
+                    conn.execute(migration)
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    pass  # Column/table already exists
         finally:
             conn.close()
         return self.db_path
