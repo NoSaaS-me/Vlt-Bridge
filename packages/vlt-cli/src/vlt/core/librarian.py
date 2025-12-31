@@ -39,9 +39,10 @@ class ServerLibrarian:
     with centralized API key management.
     """
 
-    def __init__(self, db: Session = None):
+    def __init__(self, db: Session = None, project_id: str = None):
         self._db = db
         self._settings = Settings()
+        self._project_id = project_id
 
     @property
     def db(self) -> Session:
@@ -64,19 +65,31 @@ class ServerLibrarian:
         """Get the sync token for authentication."""
         return self._settings.sync_token
 
+    @property
+    def project_id(self) -> Optional[str]:
+        """Get the project ID for scoping operations."""
+        if self._project_id:
+            return self._project_id
+        # Try to load from vlt.toml if not explicitly set
+        from .identity import load_project_identity
+        identity = load_project_identity()
+        return identity.id if identity else None
+
     async def sync_all_threads_to_server(self) -> dict:
         """
-        Sync all local threads to the server before summarization.
+        Sync project threads to the server before summarization.
 
         This ensures threads exist on the server before we request summarization.
         The server needs to have the thread entries to generate summaries.
+
+        Only syncs threads belonging to the current project (from vlt.toml).
 
         Returns:
             Dict with sync statistics
         """
         from vlt.core.sync import sync_all_threads
 
-        return await sync_all_threads(self.db)
+        return await sync_all_threads(self.db, project_id=self.project_id)
 
     async def summarize_thread_on_server(self, thread_id: str, current_summary: Optional[str] = None) -> dict:
         """
@@ -136,9 +149,11 @@ class ServerLibrarian:
         """
         Process pending nodes by calling the backend for summarization.
 
-        This first syncs ALL threads to the server, then triggers server-side
+        This first syncs project threads to the server, then triggers server-side
         summarization for each thread with pending nodes. The server handles
         all LLM operations.
+
+        Only processes threads belonging to the current project (from vlt.toml).
 
         Returns:
             Number of nodes processed
@@ -146,9 +161,16 @@ class ServerLibrarian:
         import asyncio
         processed_count = 0
 
-        # STEP 1: Sync all threads to the server first
+        # Get project scope
+        current_project = self.project_id
+        if current_project:
+            print(f"[bold]Project scope:[/bold] {current_project}")
+        else:
+            print("[yellow]Warning: No project scope (no vlt.toml found). Processing all threads.[/yellow]")
+
+        # STEP 1: Sync project threads to the server first
         # This ensures the server has all entries before we request summarization
-        print("Syncing all threads to server...")
+        print("Syncing threads to server...")
         sync_stats = asyncio.run(self.sync_all_threads_to_server())
 
         # Show sync errors prominently
@@ -174,8 +196,11 @@ class ServerLibrarian:
             print("[dim]Check your sync token: vlt config set-key <token>[/dim]")
             return 0
 
-        # STEP 2: Get all threads with pending nodes
-        threads = self.db.scalars(select(Thread)).all()
+        # STEP 2: Get threads with pending nodes (scoped to project if set)
+        query = select(Thread)
+        if current_project:
+            query = query.where(Thread.project_id == current_project)
+        threads = self.db.scalars(query).all()
 
         for thread in threads:
             # Get current state

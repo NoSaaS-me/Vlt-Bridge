@@ -291,26 +291,33 @@ def push_thought(
     node = service.add_thought(thread_id=thread_slug, content=content, author=effective_author)
     print(f"[bold green]OK:[/bold green] {node.thread_id}/{node.sequence_id}")
 
-    # Sync to backend (async, non-blocking)
+    # Sync to backend if configured
     from vlt.core.sync import sync_thread_entry
+    from vlt.config import settings
     import asyncio
 
-    # Get thread info for sync
-    try:
-        thread_info = service.get_thread_state(thread_slug, limit=1)
-        if thread_info:
-            asyncio.run(sync_thread_entry(
-                thread_id=thread_slug,
-                project_id=thread_info.project_id,
-                name=thread_info.thread_id,
-                entry_id=node.id,
-                sequence_id=node.sequence_id,
-                content=content,
-                author=effective_author,
-            ))
-    except Exception as e:
-        # Don't fail push if sync fails
-        logger.debug(f"Sync failed (non-fatal): {e}")
+    # Only attempt sync if server is configured
+    if settings.is_server_configured:
+        try:
+            thread_info = service.get_thread_state(thread_slug, limit=1)
+            if thread_info:
+                synced = asyncio.run(sync_thread_entry(
+                    thread_id=thread_slug,
+                    project_id=thread_info.project_id,
+                    name=thread_info.thread_id,
+                    entry_id=node.id,
+                    sequence_id=node.sequence_id,
+                    content=content,
+                    author=effective_author,
+                ))
+                if synced:
+                    print("[dim]Synced to server[/dim]")
+                else:
+                    print("[dim yellow]Queued for sync (will retry)[/dim yellow]")
+        except Exception as e:
+            # Don't fail push if sync fails
+            logger.debug(f"Sync failed (non-fatal): {e}")
+            print("[dim yellow]Sync pending (will retry later)[/dim yellow]")
 
     if effective_author == "user" and not os.environ.get("VLT_AUTHOR"):
         print("[dim](Tip: Use --author to sign your thoughts)[/dim]")

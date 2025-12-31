@@ -108,10 +108,45 @@ class LibrarianService:
                 "error": None,
             }
 
-        # Get user settings
+        # Get user settings - use subagent settings (not oracle)
+        # The librarian is a background task, so it uses the subagent model
         settings = self.user_settings.get_settings(user_id)
-        model = model_override or settings.oracle_model
-        provider = provider_override or settings.oracle_provider
+        model = model_override or settings.subagent_model
+        provider = provider_override or settings.subagent_provider
+
+        # Check if the required API key is available for the chosen provider
+        # If not, try to fall back to the other provider
+        google_key = os.getenv("GOOGLE_API_KEY")
+        openrouter_key = self.user_settings.get_openrouter_api_key(user_id) or os.getenv("OPENROUTER_API_KEY")
+
+        if provider == ModelProvider.GOOGLE and not google_key:
+            if openrouter_key:
+                logger.info(f"No Google API key, falling back to OpenRouter for user {user_id}")
+                provider = ModelProvider.OPENROUTER
+                # Use a default OpenRouter model if the current model is Google-specific
+                if model.startswith("gemini") or model.startswith("models/"):
+                    model = "deepseek/deepseek-chat"  # Free, capable model
+            else:
+                return {
+                    "summary": current_summary or "Summarization unavailable.",
+                    "model": None,
+                    "tokens_used": 0,
+                    "success": False,
+                    "error": "No API key configured. Set GOOGLE_API_KEY or configure OpenRouter in settings.",
+                }
+        elif provider == ModelProvider.OPENROUTER and not openrouter_key:
+            if google_key:
+                logger.info(f"No OpenRouter API key, falling back to Google for user {user_id}")
+                provider = ModelProvider.GOOGLE
+                model = "gemini-2.0-flash-exp"
+            else:
+                return {
+                    "summary": current_summary or "Summarization unavailable.",
+                    "model": None,
+                    "tokens_used": 0,
+                    "success": False,
+                    "error": "No API key configured. Set GOOGLE_API_KEY or configure OpenRouter in settings.",
+                }
 
         # Format new content from entries
         new_content = "\n".join([

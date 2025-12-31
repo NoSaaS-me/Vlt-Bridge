@@ -430,15 +430,16 @@ async def sync_thread_entry(
         return False
 
 
-async def sync_all_threads(db: Session) -> Dict[str, Any]:
+async def sync_all_threads(db: Session, project_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Sync ALL local threads to the server.
+    Sync local threads to the server.
 
     This is used by the librarian to ensure all threads are available
     on the server before requesting summarization.
 
     Args:
         db: Database session
+        project_id: Optional project ID to filter threads. If None, syncs ALL threads.
 
     Returns:
         Dict with sync statistics:
@@ -446,7 +447,8 @@ async def sync_all_threads(db: Session) -> Dict[str, Any]:
             "threads_synced": int,
             "threads_failed": int,
             "total_entries": int,
-            "errors": list of error messages
+            "errors": list of error messages,
+            "project_id": str or None
         }
     """
     from .models import Thread
@@ -459,16 +461,21 @@ async def sync_all_threads(db: Session) -> Dict[str, Any]:
             "threads_failed": 0,
             "total_entries": 0,
             "errors": ["No sync token configured. Run: vlt config set-key <token>"],
+            "project_id": project_id,
         }
 
-    # Get all threads
-    threads = db.scalars(select(Thread)).all()
+    # Get threads, optionally filtered by project_id
+    query = select(Thread)
+    if project_id:
+        query = query.where(Thread.project_id == project_id)
+    threads = db.scalars(query).all()
 
     stats = {
         "threads_synced": 0,
         "threads_failed": 0,
         "total_entries": 0,
         "errors": [],
+        "project_id": project_id,
     }
 
     for thread in threads:
