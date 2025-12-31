@@ -74,9 +74,11 @@ app = typer.Typer(name="vlt", help=APP_HELP, no_args_is_help=True)
 thread_app = typer.Typer(name="thread", help=THREAD_HELP)
 config_app = typer.Typer(name="config", help="Manage configuration and keys.")
 sync_app = typer.Typer(name="sync", help="Sync commands for remote backend.")
+daemon_app = typer.Typer(name="daemon", help="Background sync daemon management.")
 app.add_typer(thread_app, name="thread")
 app.add_typer(config_app, name="config")
 app.add_typer(sync_app, name="sync")
+app.add_typer(daemon_app, name="daemon")
 
 service = SqliteVaultService()
 
@@ -165,16 +167,215 @@ def sync_retry():
 
     Attempts to sync all pending entries in the queue to the remote backend.
     Entries that exceed max retries are skipped but kept for manual review.
+
+    If the daemon is running, routes the retry through it for better connection
+    management. Falls back to direct sync if daemon is not available.
     """
+    from vlt.daemon.client import DaemonClient
     from vlt.core.sync import ThreadSyncClient
+    from vlt.config import settings
     import asyncio
 
-    client = ThreadSyncClient()
-    result = asyncio.run(client.retry_queue())
+    async def do_retry():
+        # Try daemon first if enabled
+        if settings.daemon_enabled:
+            client = DaemonClient(settings.daemon_url)
+            if await client.is_running():
+                result = await client.retry_sync()
+                if result.success:
+                    return {
+                        "success": result.synced,
+                        "failed": result.failed,
+                        "skipped": result.skipped,
+                        "via_daemon": True,
+                    }
+                # If daemon call failed, fall through to direct
+
+        # Fallback to direct sync
+        sync_client = ThreadSyncClient()
+        result = await sync_client.retry_queue()
+        result["via_daemon"] = False
+        return result
+
+    result = asyncio.run(do_retry())
+
+    if result.get("via_daemon"):
+        print("[dim](via daemon)[/dim]")
 
     print(f"[green]Success: {result['success']}[/green]")
     print(f"[red]Failed: {result['failed']}[/red]")
     print(f"[yellow]Skipped (max retries): {result['skipped']}[/yellow]")
+
+
+# ============================================================================
+# Daemon Commands
+# ============================================================================
+
+@daemon_app.command("start")
+def daemon_start(
+    port: int = typer.Option(8765, "--port", "-p", help="Port for daemon to listen on"),
+    foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground (blocking)")
+):
+    """
+    Start the background sync daemon.
+
+    The daemon provides:
+    - Persistent HTTP connection to backend (no connection overhead per CLI call)
+    - Fast CLI responses (queue and return immediately)
+    - Background sync with automatic retry
+
+    By default, runs as a background process. Use --foreground for debugging.
+
+    Examples:
+        vlt daemon start                    # Start in background
+        vlt daemon start --foreground       # Run in foreground (for debugging)
+        vlt daemon start --port 9000        # Use custom port
+    """
+    from vlt.daemon.manager import DaemonManager
+
+    manager = DaemonManager(port=port)
+    result = manager.start(foreground=foreground)
+
+    if result["success"]:
+        if foreground:
+            # Foreground mode - this will only print after server stops
+            print(f"[green]{result['message']}[/green]")
+        else:
+            print(f"[green]{result['message']}[/green]")
+            print(f"PID: {result.get('pid')}")
+            print(f"[dim]Log file: ~/.vlt/daemon.log[/dim]")
+    else:
+        print(f"[red]{result['message']}[/red]")
+        raise typer.Exit(code=1)
+
+
+@daemon_app.command("stop")
+def daemon_stop():
+    """
+    Stop the background sync daemon.
+
+    Sends SIGTERM for graceful shutdown. If the daemon doesn't stop within
+    3 seconds, it will be force killed with SIGKILL.
+    """
+    from vlt.daemon.manager import DaemonManager
+    from vlt.config import settings
+
+    manager = DaemonManager(port=settings.daemon_port)
+    result = manager.stop()
+
+    if result["success"]:
+        print(f"[green]{result['message']}[/green]")
+    else:
+        print(f"[yellow]{result['message']}[/yellow]")
+
+
+@daemon_app.command("status")
+def daemon_status(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON")
+):
+    """
+    Show daemon status and statistics.
+
+    Displays:
+    - Running state and PID
+    - Uptime
+    - Backend connection status
+    - Sync queue size
+    """
+    from vlt.daemon.manager import DaemonManager
+    from vlt.config import settings
+
+    manager = DaemonManager(port=settings.daemon_port)
+    status = manager.status()
+
+    if json_output:
+        print(json.dumps(status, indent=2))
+        return
+
+    if status["running"]:
+        print(f"[bold green]Daemon is running[/bold green]")
+        print(f"  PID: {status.get('pid')}")
+        print(f"  Port: {status.get('port')}")
+
+        uptime = status.get("uptime_seconds", 0)
+        if uptime > 3600:
+            uptime_str = f"{uptime / 3600:.1f} hours"
+        elif uptime > 60:
+            uptime_str = f"{uptime / 60:.1f} minutes"
+        else:
+            uptime_str = f"{uptime:.0f} seconds"
+        print(f"  Uptime: {uptime_str}")
+
+        backend_status = "[green]connected[/green]" if status.get("backend_connected") else "[yellow]disconnected[/yellow]"
+        print(f"  Backend: {status.get('backend_url')} ({backend_status})")
+        print(f"  Queue size: {status.get('queue_size', 0)}")
+    else:
+        print(f"[dim]Daemon is not running[/dim]")
+        if status.get("message"):
+            print(f"  {status['message']}")
+        if status.get("error"):
+            print(f"  Error: {status['error']}")
+
+
+@daemon_app.command("restart")
+def daemon_restart():
+    """
+    Restart the daemon.
+
+    Stops the daemon if running, then starts it again.
+    """
+    from vlt.daemon.manager import DaemonManager
+    from vlt.config import settings
+
+    manager = DaemonManager(port=settings.daemon_port)
+    result = manager.restart()
+
+    if result["success"]:
+        print(f"[green]{result['message']}[/green]")
+        if result.get("pid"):
+            print(f"PID: {result['pid']}")
+    else:
+        print(f"[red]{result['message']}[/red]")
+        raise typer.Exit(code=1)
+
+
+@daemon_app.command("logs")
+def daemon_logs(
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output"),
+    lines: int = typer.Option(20, "--lines", "-n", help="Number of lines to show")
+):
+    """
+    Show daemon logs.
+
+    Displays the daemon log file contents. Use --follow to watch for new entries.
+    """
+    import subprocess
+    from pathlib import Path
+
+    log_file = Path.home() / ".vlt" / "daemon.log"
+
+    if not log_file.exists():
+        print("[yellow]No daemon log file found[/yellow]")
+        print(f"[dim]Expected at: {log_file}[/dim]")
+        return
+
+    if follow:
+        # Use tail -f to follow
+        try:
+            subprocess.run(["tail", "-f", "-n", str(lines), str(log_file)])
+        except KeyboardInterrupt:
+            pass
+    else:
+        # Just show last N lines
+        try:
+            result = subprocess.run(
+                ["tail", "-n", str(lines), str(log_file)],
+                capture_output=True,
+                text=True
+            )
+            print(result.stdout)
+        except Exception as e:
+            print(f"[red]Error reading log file: {e}[/red]")
 
 
 # ...
@@ -270,18 +471,22 @@ def push_thought(
 ):
     """
     The Cognitive Loop: Commit a thought to permanent memory.
-    
+
     Fire-and-forget logging. Use this to offload intermediate reasoning steps so you
     can free up context window space.
+
+    If the daemon is running, sync is routed through it for better performance
+    (persistent connection, immediate queue response). Falls back to direct sync
+    if daemon is not available.
     """
     # Resolve Author
     effective_author = author or state["author"]
 
-    # Assuming thread_id format is project/thread or just thread if unique? 
+    # Assuming thread_id format is project/thread or just thread if unique?
     # For MVP assume we pass just thread slug or handle project/thread splitting if needed.
     # The spec examples show `vlt thread push crypto-bot/optim-strategy`.
     # Our DB stores thread_id as slug.
-    
+
     # Simple parsing if composite ID is passed
     if "/" in thread_id:
         _, thread_slug = thread_id.split("/")
@@ -292,28 +497,69 @@ def push_thought(
     print(f"[bold green]OK:[/bold green] {node.thread_id}/{node.sequence_id}")
 
     # Sync to backend if configured
-    from vlt.core.sync import sync_thread_entry
     from vlt.config import settings
     import asyncio
+    from datetime import datetime
 
     # Only attempt sync if server is configured
     if settings.is_server_configured:
         try:
             thread_info = service.get_thread_state(thread_slug, limit=1)
             if thread_info:
-                synced = asyncio.run(sync_thread_entry(
-                    thread_id=thread_slug,
-                    project_id=thread_info.project_id,
-                    name=thread_info.thread_id,
-                    entry_id=node.id,
-                    sequence_id=node.sequence_id,
-                    content=content,
-                    author=effective_author,
-                ))
+                entry = {
+                    "entry_id": node.id,
+                    "sequence_id": node.sequence_id,
+                    "content": content,
+                    "author": effective_author,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+
+                # Try daemon first if enabled
+                synced = False
+                via_daemon = False
+
+                if settings.daemon_enabled:
+                    from vlt.daemon.client import DaemonClient
+
+                    async def try_daemon():
+                        client = DaemonClient(settings.daemon_url)
+                        if await client.is_running():
+                            result = await client.enqueue_sync(
+                                thread_id=thread_slug,
+                                project_id=thread_info.project_id,
+                                name=thread_info.thread_id,
+                                entry=entry,
+                            )
+                            return result.success, not result.queued  # synced if not queued
+                        return False, False  # Not running, didn't sync
+
+                    daemon_ok, synced = asyncio.run(try_daemon())
+                    via_daemon = daemon_ok
+
+                # Fallback to direct sync if daemon not available
+                if not via_daemon:
+                    from vlt.core.sync import sync_thread_entry
+
+                    synced = asyncio.run(sync_thread_entry(
+                        thread_id=thread_slug,
+                        project_id=thread_info.project_id,
+                        name=thread_info.thread_id,
+                        entry_id=node.id,
+                        sequence_id=node.sequence_id,
+                        content=content,
+                        author=effective_author,
+                    ))
+
                 if synced:
-                    print("[dim]Synced to server[/dim]")
+                    msg = "[dim]Synced to server[/dim]"
+                    if via_daemon:
+                        msg += " [dim](via daemon)[/dim]"
+                    print(msg)
                 else:
-                    print("[dim yellow]Queued for sync (will retry)[/dim yellow]")
+                    msg = "[dim yellow]Queued for sync (will retry)[/dim yellow]"
+                    if via_daemon:
+                        msg += " [dim](via daemon)[/dim]"
+                    print(msg)
         except Exception as e:
             # Don't fail push if sync fails
             logger.debug(f"Sync failed (non-fatal): {e}")

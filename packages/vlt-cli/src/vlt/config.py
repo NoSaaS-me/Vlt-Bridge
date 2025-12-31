@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     sync_token: str | None = None
     vault_url: str = "http://localhost:8000"
 
+    # Daemon configuration
+    daemon_port: int = 8765
+    daemon_enabled: bool = True  # Whether to use daemon for sync operations
+    daemon_url: str = "http://127.0.0.1:8765"
+
     # DEPRECATED: OpenRouter settings (kept for backward compatibility)
     # These are no longer used - LLM operations are handled server-side
     openrouter_api_key: str | None = None
