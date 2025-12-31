@@ -118,6 +118,7 @@ async def query_oracle(
             thinking=request.thinking,
             max_tokens=request.max_tokens,
             project_id=request.project_id,
+            context_id=request.context_id,
         ):
             if chunk.type == "content" and chunk.content:
                 content_parts.append(chunk.content)
@@ -240,6 +241,7 @@ async def query_oracle_stream(
                 thinking=request.thinking,
                 max_tokens=request.max_tokens,
                 project_id=request.project_id,
+                context_id=request.context_id,
             ):
                 chunk_counter += 1
                 chunk_json = chunk.model_dump(exclude_none=True)

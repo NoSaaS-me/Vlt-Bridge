@@ -33,6 +33,7 @@ from ..models.oracle_context import (
     ToolCallStatus,
 )
 from .oracle_context_service import OracleContextService, get_context_service
+from .context_tree_service import ContextTreeService, get_context_tree_service
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +256,7 @@ class OracleAgent:
         project_id: Optional[str] = None,
         user_id: Optional[str] = None,
         context_service: Optional[OracleContextService] = None,
+        tree_service: Optional[ContextTreeService] = None,
     ):
         """Initialize the Oracle agent.
 
@@ -265,6 +267,7 @@ class OracleAgent:
             project_id: Project context for tool scoping
             user_id: User ID for context tracking
             context_service: OracleContextService for persistence (uses singleton if None)
+            tree_service: ContextTreeService for tree-based persistence (uses singleton if None)
         """
         self.api_key = api_key
         self.model = model or self.DEFAULT_MODEL
@@ -275,6 +278,11 @@ class OracleAgent:
         self._collected_sources: List[SourceReference] = []
         self._collected_tool_calls: List[ToolCall] = []
         self._context_service = context_service or get_context_service()
+        self._tree_service = tree_service or get_context_tree_service()
+
+        # Tree-based context tracking
+        self._current_tree_root_id: Optional[str] = None
+        self._current_node_id: Optional[str] = None
 
         # Cancellation support
         self._cancelled = False
@@ -310,6 +318,7 @@ class OracleAgent:
         thinking: bool = False,
         max_tokens: int = 4000,
         project_id: Optional[str] = None,
+        context_id: Optional[str] = None,
     ) -> AsyncGenerator[OracleStreamChunk, None]:
         """Run agent loop, yielding streaming chunks.
 
@@ -320,6 +329,7 @@ class OracleAgent:
             thinking: Enable thinking/reasoning mode
             max_tokens: Maximum tokens in response
             project_id: Project ID for context scoping (overrides init value)
+            context_id: Node ID from context tree (for conversation continuity)
 
         Yields:
             OracleStreamChunk objects for each piece of the response
@@ -338,20 +348,60 @@ class OracleAgent:
             yield OracleStreamChunk(type="error", error="Cancelled by user")
             return
 
-        # Load or create context for this user+project pair
+        # Load context from tree service (new tree-based system)
+        try:
+            if context_id:
+                # Load from existing node's tree
+                node = self._tree_service.get_node(user_id, context_id)
+                if node:
+                    self._current_tree_root_id = node.root_id
+                    self._current_node_id = context_id
+                    logger.debug(
+                        f"Loaded tree context from node {context_id} "
+                        f"(tree: {node.root_id})"
+                    )
+                else:
+                    logger.warning(f"Context node {context_id} not found, creating new tree")
+                    context_id = None
+
+            if not context_id:
+                # Get or create active tree for this user/project
+                active_tree_id = self._tree_service.get_active_tree_id(user_id, effective_project_id)
+                if active_tree_id:
+                    tree = self._tree_service.get_tree(user_id, active_tree_id)
+                    if tree:
+                        self._current_tree_root_id = tree.root_id
+                        self._current_node_id = tree.current_node_id
+                        logger.debug(
+                            f"Using active tree {tree.root_id} "
+                            f"(HEAD: {tree.current_node_id})"
+                        )
+                else:
+                    # Create new tree if none exists
+                    tree = self._tree_service.create_tree(
+                        user_id=user_id,
+                        project_id=effective_project_id,
+                        max_nodes=30,
+                    )
+                    self._current_tree_root_id = tree.root_id
+                    self._current_node_id = tree.current_node_id
+                    logger.info(f"Created new tree {tree.root_id} for {user_id}/{effective_project_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to load tree context: {e}")
+            # Continue without context persistence
+            self._current_tree_root_id = None
+            self._current_node_id = None
+
+        # Also load legacy context for backwards compatibility
         try:
             self._context = self._context_service.get_or_create_context(
                 user_id=user_id,
                 project_id=effective_project_id,
                 token_budget=max_tokens,
             )
-            logger.debug(
-                f"Loaded context {self._context.id} for {user_id}/{effective_project_id} "
-                f"(tokens: {self._context.tokens_used}/{self._context.token_budget})"
-            )
         except Exception as e:
-            logger.error(f"Failed to load context: {e}")
-            # Continue without context persistence
+            logger.error(f"Failed to load legacy context: {e}")
             self._context = None
 
         # Get services
@@ -371,8 +421,38 @@ class OracleAgent:
             {"role": "system", "content": system_prompt},
         ]
 
-        # Add context history from stored exchanges
-        if self._context and self._context.recent_exchanges:
+        # Add context history from tree nodes (primary source)
+        if self._current_tree_root_id and self._current_node_id:
+            try:
+                # Get all nodes in tree
+                nodes = self._tree_service.get_nodes(user_id, self._current_tree_root_id)
+                node_map = {n.id: n for n in nodes}
+
+                # Build path from root to current node
+                path_nodes = []
+                current_id = self._current_node_id
+                while current_id and current_id in node_map:
+                    path_nodes.insert(0, node_map[current_id])
+                    current_id = node_map[current_id].parent_id
+
+                # Add conversation history from path (skip empty root nodes)
+                for node in path_nodes:
+                    if node.is_root and not node.question and not node.answer:
+                        continue
+                    if node.question:
+                        messages.append({"role": "user", "content": node.question})
+                    if node.answer:
+                        messages.append({"role": "assistant", "content": node.answer})
+
+                logger.debug(
+                    f"Loaded {len(path_nodes)} nodes from tree, "
+                    f"added {len(messages) - 1} context messages"
+                )
+            except Exception as e:
+                logger.error(f"Failed to load tree history: {e}")
+
+        # Fallback: Add legacy context history if tree is empty
+        elif self._context and self._context.recent_exchanges:
             # Add compressed summary as system context if available
             if self._context.compressed_summary:
                 messages.append({
@@ -386,7 +466,6 @@ class OracleAgent:
                     messages.append({"role": "user", "content": exchange.content})
                 elif exchange.role == ExchangeRole.ASSISTANT:
                     messages.append({"role": "assistant", "content": exchange.content})
-                # Note: Tool exchanges are embedded in the conversation flow
 
         # Add current question
         messages.append({"role": "user", "content": question})
@@ -1158,7 +1237,7 @@ class OracleAgent:
         """Save the question and answer exchange to persistent context.
 
         This is called after a successful response to persist the conversation
-        for future context loading.
+        for future context loading. Saves to BOTH tree-based and legacy systems.
 
         Args:
             question: User's question
@@ -1166,65 +1245,98 @@ class OracleAgent:
             tokens_used: Total tokens consumed (if known)
 
         Returns:
-            Context ID if saved successfully, None otherwise
+            Node ID if saved successfully (for tree), or legacy context ID
         """
-        if not self._context:
-            logger.debug("No context loaded, skipping exchange save")
-            return None
+        result_id = None
 
-        try:
-            # Create user exchange
-            user_exchange = OracleExchange(
-                id=str(uuid.uuid4()),
-                role=ExchangeRole.USER,
-                content=question,
-                timestamp=datetime.now(timezone.utc),
-                token_count=self._estimate_tokens(question),
-            )
+        # SAVE TO TREE-BASED SYSTEM (primary)
+        if self._current_tree_root_id and self._current_node_id and self.user_id:
+            try:
+                # Create new node as child of current HEAD
+                new_node = self._tree_service.create_node(
+                    user_id=self.user_id,
+                    root_id=self._current_tree_root_id,
+                    parent_id=self._current_node_id,
+                    question=question,
+                    answer=answer,
+                    tool_calls=self._collected_tool_calls if self._collected_tool_calls else None,
+                    tokens_used=tokens_used or self._estimate_tokens(question + answer),
+                    model_used=self.model,
+                )
 
-            # Add user exchange first
-            self._context_service.add_exchange(
-                user_id=self._context.user_id,
-                project_id=self._context.project_id,
-                exchange=user_exchange,
-            )
+                # Update current node to the new one (new HEAD)
+                self._current_node_id = new_node.id
+                result_id = new_node.id
 
-            # Extract mentioned files and symbols from sources
-            mentioned_files = []
-            mentioned_symbols = []
-            for source in self._collected_sources:
-                if source.path:
-                    mentioned_files.append(source.path)
-                # Note: symbols would need parsing from content
+                logger.info(
+                    f"Saved exchange to tree node {new_node.id} "
+                    f"(tree: {self._current_tree_root_id})"
+                )
 
-            # Create assistant exchange with tool calls
-            assistant_exchange = OracleExchange(
-                id=str(uuid.uuid4()),
-                role=ExchangeRole.ASSISTANT,
-                content=answer,
-                tool_calls=self._collected_tool_calls if self._collected_tool_calls else None,
-                timestamp=datetime.now(timezone.utc),
-                token_count=tokens_used or self._estimate_tokens(answer),
-                mentioned_files=mentioned_files[:20],  # Limit to 20
-            )
+            except Exception as e:
+                logger.error(f"Failed to save exchange to tree: {e}")
 
-            # Add assistant exchange
-            self._context = self._context_service.add_exchange(
-                user_id=self._context.user_id,
-                project_id=self._context.project_id,
-                exchange=assistant_exchange,
-                model_used=self.model,
-            )
+        # SAVE TO LEGACY SYSTEM (for backwards compatibility)
+        if self._context:
+            try:
+                # Create user exchange
+                user_exchange = OracleExchange(
+                    id=str(uuid.uuid4()),
+                    role=ExchangeRole.USER,
+                    content=question,
+                    timestamp=datetime.now(timezone.utc),
+                    token_count=self._estimate_tokens(question),
+                )
 
-            logger.info(
-                f"Saved exchange to context {self._context.id} "
-                f"(total exchanges: {len(self._context.recent_exchanges)})"
-            )
-            return self._context.id
+                # Add user exchange first
+                self._context_service.add_exchange(
+                    user_id=self._context.user_id,
+                    project_id=self._context.project_id,
+                    exchange=user_exchange,
+                )
 
-        except Exception as e:
-            logger.error(f"Failed to save exchange: {e}")
-            return self._context.id if self._context else None
+                # Extract mentioned files and symbols from sources
+                mentioned_files = []
+                mentioned_symbols = []
+                for source in self._collected_sources:
+                    if source.path:
+                        mentioned_files.append(source.path)
+                    # Note: symbols would need parsing from content
+
+                # Create assistant exchange with tool calls
+                assistant_exchange = OracleExchange(
+                    id=str(uuid.uuid4()),
+                    role=ExchangeRole.ASSISTANT,
+                    content=answer,
+                    tool_calls=self._collected_tool_calls if self._collected_tool_calls else None,
+                    timestamp=datetime.now(timezone.utc),
+                    token_count=tokens_used or self._estimate_tokens(answer),
+                    mentioned_files=mentioned_files[:20],  # Limit to 20
+                )
+
+                # Add assistant exchange
+                self._context = self._context_service.add_exchange(
+                    user_id=self._context.user_id,
+                    project_id=self._context.project_id,
+                    exchange=assistant_exchange,
+                    model_used=self.model,
+                )
+
+                logger.debug(
+                    f"Saved exchange to legacy context {self._context.id} "
+                    f"(total exchanges: {len(self._context.recent_exchanges)})"
+                )
+
+                # Use legacy ID as fallback if tree save failed
+                if not result_id:
+                    result_id = self._context.id
+
+            except Exception as e:
+                logger.error(f"Failed to save exchange to legacy context: {e}")
+                if not result_id and self._context:
+                    result_id = self._context.id
+
+        return result_id
 
 
 # Singleton instance
