@@ -338,9 +338,10 @@ The app can be embedded in ChatGPT as an iFrame:
 - Entry point: `frontend/src/widget.tsx`
 
 ## Recent Changes
+- 008-thread-sync: Added Python 3.11+ (vlt-cli & backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, SQLAlchemy (vlt-cli), httpx, SQLite
 - 007-vlt-oracle: Added Python 3.11+ (vlt-cli), TypeScript 5.x (frontend)
 - 007-vlt-oracle: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 
 ## Active Technologies
-- Python 3.11+ (vlt-cli), TypeScript 5.x (frontend) (007-vlt-oracle)
-- SQLite (vlt-cli ~/.vlt/vault.db) + Document-MCP SQLite (data/index.db) (007-vlt-oracle)
+- Python 3.11+ (vlt-cli & backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, SQLAlchemy (vlt-cli), httpx, SQLite (008-thread-sync)
+- SQLite (vlt-cli ~/.vlt/vault.db) + Backend SQLite (data/index.db) (008-thread-sync)

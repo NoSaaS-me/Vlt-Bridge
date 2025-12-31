@@ -1,0 +1,463 @@
+openapi: 3.1.0
+info:
+  title: Thread Sync API
+  description: API endpoints for syncing threads from vlt-cli to Document-MCP backend
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/threads:
+    get:
+      operationId: listThreads
+      summary: List user's synced threads
+      description: Returns all threads synced from vlt-cli for the authenticated user
+      tags:
+        - threads
+      parameters:
+        - name: project_id
+          in: query
+          description: Filter by project ID
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter by thread status
+          required: false
+          schema:
+            type: string
+            enum: [active, archived, blocked]
+        - name: limit
+          in: query
+          description: Maximum threads to return
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          description: Pagination offset
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: List of threads
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadListResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/threads/{thread_id}:
+    get:
+      operationId: getThread
+      summary: Get thread with entries
+      description: Returns a specific thread with its entries
+      tags:
+        - threads
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: include_entries
+          in: query
+          description: Include thread entries in response
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: entries_limit
+          in: query
+          description: Maximum entries to return
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Thread details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+        '404':
+          description: Thread not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      operationId: deleteThread
+      summary: Delete a synced thread
+      description: Removes a thread and all its entries from the backend
+      tags:
+        - threads
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Thread deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  message:
+                    type: string
+                    example: Thread deleted
+        '404':
+          description: Thread not found
+
+  /api/threads/sync:
+    post:
+      operationId: syncThread
+      summary: Sync thread entries from CLI
+      description: |
+        Receives thread entries from vlt-cli and stores them in the backend.
+        Creates the thread if it doesn't exist, or updates existing thread.
+        Supports incremental sync - only new entries need to be sent.
+      tags:
+        - threads
+        - sync
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncRequest'
+      responses:
+        '200':
+          description: Entries synced successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResponse'
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Sequence conflict (entries out of order)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncConflictResponse'
+
+  /api/threads/{thread_id}/status:
+    get:
+      operationId: getSyncStatus
+      summary: Get sync status for a thread
+      description: Returns the current sync state including last synced sequence
+      tags:
+        - threads
+        - sync
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Sync status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncStatus'
+        '404':
+          description: Thread not found
+
+  /api/threads/search:
+    get:
+      operationId: searchThreads
+      summary: Search thread content
+      description: Full-text search across thread entries (used by Oracle)
+      tags:
+        - threads
+        - search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+        - name: project_id
+          in: query
+          description: Filter by project
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum results
+          required: false
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 50
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadSearchResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ThreadEntry:
+      type: object
+      required:
+        - entry_id
+        - sequence_id
+        - content
+        - author
+        - timestamp
+      properties:
+        entry_id:
+          type: string
+          format: uuid
+          description: Unique entry identifier
+        sequence_id:
+          type: integer
+          minimum: 0
+          description: Order within thread
+        content:
+          type: string
+          minLength: 1
+          maxLength: 100000
+          description: Entry text content
+        author:
+          type: string
+          maxLength: 64
+          default: user
+          description: Who wrote the entry (user, claude, system)
+        timestamp:
+          type: string
+          format: date-time
+          description: When entry was created
+
+    Thread:
+      type: object
+      required:
+        - thread_id
+        - project_id
+        - name
+        - status
+        - created_at
+        - updated_at
+      properties:
+        thread_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Thread identifier (slug)
+        project_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Parent project ID
+        name:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Thread display name
+        status:
+          type: string
+          enum: [active, archived, blocked]
+          default: active
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/ThreadEntry'
+          description: Thread entries (included when requested)
+
+    SyncRequest:
+      type: object
+      required:
+        - thread_id
+        - project_id
+        - name
+        - entries
+      properties:
+        thread_id:
+          type: string
+          description: Thread to sync
+        project_id:
+          type: string
+          description: Parent project
+        name:
+          type: string
+          description: Thread name
+        status:
+          type: string
+          enum: [active, archived, blocked]
+          default: active
+        entries:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ThreadEntry'
+          description: Entries to sync
+
+    SyncResponse:
+      type: object
+      required:
+        - thread_id
+        - synced_count
+        - last_synced_sequence
+      properties:
+        thread_id:
+          type: string
+        synced_count:
+          type: integer
+          description: Number of entries synced
+        last_synced_sequence:
+          type: integer
+          description: Highest sequence_id now synced
+
+    SyncConflictResponse:
+      type: object
+      required:
+        - error
+        - expected_sequence
+        - received_sequence
+      properties:
+        error:
+          type: string
+          example: sequence_conflict
+        expected_sequence:
+          type: integer
+          description: Expected next sequence_id
+        received_sequence:
+          type: integer
+          description: Sequence_id that was received
+        message:
+          type: string
+          example: Expected sequence 5, received 3
+
+    SyncStatus:
+      type: object
+      required:
+        - thread_id
+        - last_synced_sequence
+        - last_sync_at
+      properties:
+        thread_id:
+          type: string
+        last_synced_sequence:
+          type: integer
+          description: Highest synced sequence_id (-1 if never synced)
+        last_sync_at:
+          type: string
+          format: date-time
+        sync_error:
+          type: string
+          nullable: true
+          description: Last error message if sync failed
+
+    ThreadListResponse:
+      type: object
+      required:
+        - threads
+        - total
+      properties:
+        threads:
+          type: array
+          items:
+            $ref: '#/components/schemas/Thread'
+        total:
+          type: integer
+          description: Total threads matching filters
+
+    ThreadSearchResult:
+      type: object
+      required:
+        - thread_id
+        - entry_id
+        - content
+        - score
+      properties:
+        thread_id:
+          type: string
+        entry_id:
+          type: string
+        content:
+          type: string
+          description: Matching content snippet
+        author:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        score:
+          type: number
+          description: Relevance score
+
+    ThreadSearchResponse:
+      type: object
+      required:
+        - results
+        - total
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ThreadSearchResult'
+        total:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
