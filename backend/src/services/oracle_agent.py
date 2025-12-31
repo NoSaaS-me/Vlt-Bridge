@@ -6,11 +6,13 @@ that uses OpenRouter function calling for tool execution.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -25,6 +27,18 @@ from ..models.oracle_context import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolExecutionResult:
+    """Result of a single tool execution for parallel handling."""
+    call_id: str
+    name: str
+    arguments: Dict[str, Any]
+    result: Optional[str] = None
+    error: Optional[str] = None
+    success: bool = True
+
 
 # Lazy imports to avoid circular dependencies
 _tool_executor = None
@@ -63,16 +77,35 @@ class OracleAgent:
 
     The Oracle answers questions about codebases by using tools to search code,
     read documentation, query development threads, and search the web.
+
+    Supports cancellation via the cancel() method, which sets a cancellation flag
+    and cancels any active asyncio tasks. Check _cancelled at key points during
+    long-running operations.
+
+    Auto-delegation: When search results are large or have many near-equal scores,
+    the Oracle can automatically delegate to the Librarian subagent for summarization.
     """
 
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
     MAX_TURNS = 15
     DEFAULT_MODEL = "anthropic/claude-sonnet-4"
+    DEFAULT_SUBAGENT_MODEL = "deepseek/deepseek-chat"
+
+    # Thresholds for auto-delegation to Librarian
+    DELEGATION_THRESHOLDS = {
+        "vault_search_results": 6,      # >6 results with similar scores
+        "search_code_results": 6,       # >6 code search results with similar scores
+        "vault_list_files": 10,         # >10 files in listing
+        "thread_read_entries": 20,      # >20 entries in thread
+        "token_estimate": 4000,         # >4000 tokens in result
+        "score_similarity": 0.1,        # Scores within 0.1 considered "similar"
+    }
 
     def __init__(
         self,
         api_key: str,
         model: Optional[str] = None,
+        subagent_model: Optional[str] = None,
         project_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ):
@@ -81,15 +114,43 @@ class OracleAgent:
         Args:
             api_key: OpenRouter API key
             model: Model to use (default: anthropic/claude-sonnet-4)
+            subagent_model: Model for Librarian subagent (from user settings)
             project_id: Project context for tool scoping
             user_id: User ID for context tracking
         """
         self.api_key = api_key
         self.model = model or self.DEFAULT_MODEL
+        self.subagent_model = subagent_model or self.DEFAULT_SUBAGENT_MODEL
         self.project_id = project_id
         self.user_id = user_id
         self._context: Optional[OracleContext] = None
         self._collected_sources: List[SourceReference] = []
+
+        # Cancellation support
+        self._cancelled = False
+        self._active_tasks: List[asyncio.Task] = []
+
+    def cancel(self) -> None:
+        """Cancel all running operations.
+
+        Sets the cancellation flag and cancels any active asyncio tasks.
+        The agent loop will stop at the next checkpoint.
+        """
+        logger.info(f"Cancelling Oracle agent for user {self.user_id}")
+        self._cancelled = True
+        for task in self._active_tasks:
+            if not task.done():
+                task.cancel()
+        self._active_tasks.clear()
+
+    def is_cancelled(self) -> bool:
+        """Check if the agent has been cancelled."""
+        return self._cancelled
+
+    def reset_cancellation(self) -> None:
+        """Reset cancellation state for reuse."""
+        self._cancelled = False
+        self._active_tasks.clear()
 
     async def query(
         self,
@@ -111,8 +172,15 @@ class OracleAgent:
         Yields:
             OracleStreamChunk objects for each piece of the response
         """
+        # Reset cancellation state for new query
+        self.reset_cancellation()
         self.user_id = user_id
         self._collected_sources = []
+
+        # Check cancellation at start
+        if self._cancelled:
+            yield OracleStreamChunk(type="error", error="Cancelled by user")
+            return
 
         # Get services
         tool_executor = _get_tool_executor()
@@ -143,6 +211,12 @@ class OracleAgent:
 
         # Agent loop
         for turn in range(self.MAX_TURNS):
+            # Check cancellation before each turn
+            if self._cancelled:
+                logger.info(f"Agent cancelled at turn {turn + 1}")
+                yield OracleStreamChunk(type="error", error="Cancelled by user")
+                return
+
             logger.debug(f"Agent turn {turn + 1}/{self.MAX_TURNS}")
 
             async for chunk in self._agent_turn(
@@ -153,6 +227,12 @@ class OracleAgent:
                 max_tokens=max_tokens,
                 user_id=user_id,
             ):
+                # Check cancellation during streaming
+                if self._cancelled:
+                    logger.info("Agent cancelled during streaming")
+                    yield OracleStreamChunk(type="error", error="Cancelled by user")
+                    return
+
                 yield chunk
 
                 # Check if we're done
@@ -417,7 +497,13 @@ class OracleAgent:
         messages: List[Dict[str, Any]],
         user_id: str,
     ) -> AsyncGenerator[OracleStreamChunk, None]:
-        """Execute tool calls and add results to messages.
+        """Execute tool calls in parallel and add results to messages.
+
+        Implements T026 (parallel execution) and T027 (error handling):
+        - Runs multiple tool calls concurrently using asyncio.gather
+        - Continues with other tools if one fails (return_exceptions=True)
+        - Returns error result for failed tools but allows agent loop to continue
+        - Preserves order of results for consistent message flow
 
         Args:
             tool_calls: List of tool calls from the model
@@ -427,8 +513,13 @@ class OracleAgent:
         Yields:
             Tool call and result chunks
         """
+        if not tool_calls:
+            return
+
         tool_executor = _get_tool_executor()
 
+        # Parse all tool calls first
+        parsed_calls: List[Tuple[str, str, Dict[str, Any], str]] = []
         for call in tool_calls:
             call_id = call.get("id", str(uuid.uuid4()))
             function = call.get("function", {})
@@ -441,7 +532,10 @@ class OracleAgent:
             except json.JSONDecodeError:
                 arguments = {}
 
-            # Yield tool call notification
+            parsed_calls.append((call_id, name, arguments, arguments_str))
+
+        # Yield all tool call notifications first (pending status)
+        for call_id, name, arguments, arguments_str in parsed_calls:
             yield OracleStreamChunk(
                 type="tool_call",
                 tool_call={
@@ -452,44 +546,181 @@ class OracleAgent:
                 },
             )
 
-            # Execute tool
+        # Execute all tools in parallel
+        async def execute_single_tool(
+            call_id: str,
+            name: str,
+            arguments: Dict[str, Any],
+        ) -> ToolExecutionResult:
+            """Execute a single tool and return structured result."""
             try:
                 result = await tool_executor.execute(
                     name=name,
                     arguments=arguments,
                     user_id=user_id,
                 )
-
-                # Yield tool result
-                yield OracleStreamChunk(
-                    type="tool_result",
-                    tool_result=result[:1000] if len(result) > 1000 else result,  # Truncate for display
+                return ToolExecutionResult(
+                    call_id=call_id,
+                    name=name,
+                    arguments=arguments,
+                    result=result,
+                    success=True,
+                )
+            except Exception as e:
+                logger.exception(f"Tool execution failed: {name}")
+                return ToolExecutionResult(
+                    call_id=call_id,
+                    name=name,
+                    arguments=arguments,
+                    error=str(e),
+                    success=False,
                 )
 
-                # Extract sources from result if present
-                self._extract_sources_from_result(name, result)
+        # Create tasks for parallel execution
+        tasks = [
+            execute_single_tool(call_id, name, arguments)
+            for call_id, name, arguments, _ in parsed_calls
+        ]
+
+        # Execute all tools concurrently, continue even if some fail
+        results: List[ToolExecutionResult] = await asyncio.gather(
+            *tasks, return_exceptions=True
+        )
+
+        # Process results in order (preserves message ordering)
+        for i, result in enumerate(results):
+            # Handle case where asyncio.gather returns an exception object
+            if isinstance(result, Exception):
+                call_id, name, arguments, _ = parsed_calls[i]
+                logger.exception(f"Unexpected exception in tool {name}: {result}")
+                result = ToolExecutionResult(
+                    call_id=call_id,
+                    name=name,
+                    arguments=arguments,
+                    error=f"Unexpected error: {str(result)}",
+                    success=False,
+                )
+
+            if result.success and result.result is not None:
+                # Success case
+                yield OracleStreamChunk(
+                    type="tool_result",
+                    tool_result=(
+                        result.result[:1000]
+                        if len(result.result) > 1000
+                        else result.result
+                    ),
+                )
+
+                # Extract sources from successful result
+                self._extract_sources_from_result(result.name, result.result)
 
                 # Add tool result to messages
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": result,
+                    "tool_call_id": result.call_id,
+                    "content": result.result,
                 })
-
-            except Exception as e:
-                logger.exception(f"Tool execution failed: {name}")
-                error_result = json.dumps({"error": str(e)})
+            else:
+                # Error case - T027: provide error but let agent continue
+                error_content = self._format_tool_error(
+                    result.name,
+                    result.error or "Unknown error",
+                    result.arguments,
+                )
 
                 yield OracleStreamChunk(
                     type="tool_result",
-                    tool_result=error_result,
+                    tool_result=error_content,
                 )
 
+                # Add error result to messages so agent can handle it
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": error_result,
+                    "tool_call_id": result.call_id,
+                    "content": error_content,
                 })
+
+    def _format_tool_error(
+        self,
+        tool_name: str,
+        error: str,
+        arguments: Dict[str, Any],
+    ) -> str:
+        """Format a tool error message for the agent.
+
+        Provides structured error information that helps the agent:
+        - Understand what failed
+        - Decide whether to retry with different parameters
+        - Choose an alternative approach
+
+        Args:
+            tool_name: Name of the failed tool
+            error: Error message
+            arguments: Arguments that were passed to the tool
+
+        Returns:
+            JSON-formatted error message
+        """
+        return json.dumps({
+            "error": True,
+            "tool": tool_name,
+            "message": error,
+            "suggestion": self._get_error_suggestion(tool_name, error),
+            "failed_arguments": arguments,
+        })
+
+    def _get_error_suggestion(self, tool_name: str, error: str) -> str:
+        """Generate a suggestion for handling tool errors.
+
+        Provides context-aware suggestions to help the agent recover from errors.
+
+        Args:
+            tool_name: Name of the failed tool
+            error: Error message
+
+        Returns:
+            Suggestion string for the agent
+        """
+        error_lower = error.lower()
+
+        # File not found errors
+        if "not found" in error_lower or "does not exist" in error_lower:
+            if "vault" in tool_name:
+                return "The note may not exist. Try vault_list to see available notes, or vault_search to find related content."
+            elif "thread" in tool_name:
+                return "The thread may not exist. Try thread_list to see available threads."
+            else:
+                return "The requested resource was not found. Try searching for alternatives."
+
+        # Permission/access errors
+        if "permission" in error_lower or "access denied" in error_lower:
+            return "Access was denied. The user may not have permission to access this resource."
+
+        # Timeout errors
+        if "timeout" in error_lower:
+            return "The operation timed out. Try with more specific parameters or a smaller scope."
+
+        # Invalid arguments
+        if "invalid" in error_lower or "validation" in error_lower:
+            return "The arguments were invalid. Check the parameter format and try again."
+
+        # Network errors
+        if "network" in error_lower or "connection" in error_lower:
+            return "A network error occurred. This may be temporary - consider retrying."
+
+        # Tool-specific suggestions
+        suggestions = {
+            "search_code": "Try a different search query or use vault_search for documentation.",
+            "vault_read": "Use vault_list to verify the note path exists.",
+            "vault_search": "Try broader search terms or check if the vault has content.",
+            "thread_read": "Use thread_list to verify the thread exists.",
+            "thread_seek": "Try different search terms or use thread_list first.",
+            "web_search": "Try a different query or check if web search is available.",
+            "web_fetch": "Verify the URL is accessible or try a different source.",
+        }
+
+        return suggestions.get(tool_name, "Consider trying an alternative approach or asking the user for clarification.")
 
     def _extract_sources_from_result(self, tool_name: str, result: str) -> None:
         """Extract source references from tool results.
@@ -552,6 +783,94 @@ class OracleAgent:
                     )
                 )
 
+    def _should_delegate_to_librarian(
+        self,
+        tool_name: str,
+        tool_result: Dict[str, Any],
+    ) -> bool:
+        """
+        Determine if results should be delegated to Librarian for summarization.
+
+        Auto-delegation occurs when:
+        - vault_search/search_code returns >6 results with similar scores (within 0.1)
+        - vault_list returns >10 files
+        - thread_read returns >20 entries
+        - Any result exceeds ~4000 tokens
+
+        Args:
+            tool_name: Name of the tool that produced the result
+            tool_result: Parsed JSON result from the tool
+
+        Returns:
+            True if the result should be summarized by Librarian
+        """
+        thresholds = self.DELEGATION_THRESHOLDS
+
+        # Check for errors - don't delegate error responses
+        if "error" in tool_result:
+            return False
+
+        # Estimate token count (rough: 4 chars per token)
+        result_str = json.dumps(tool_result)
+        estimated_tokens = len(result_str) // 4
+        if estimated_tokens > thresholds["token_estimate"]:
+            logger.debug(
+                f"Auto-delegation: {tool_name} result exceeds {thresholds['token_estimate']} tokens "
+                f"(estimated: {estimated_tokens})"
+            )
+            return True
+
+        # Check tool-specific thresholds
+        if tool_name in ("vault_search", "search_code"):
+            results = tool_result.get("results", [])
+            if len(results) > thresholds["vault_search_results"]:
+                # Check if scores are "near-equal" (within threshold)
+                scores = [r.get("score", 0) for r in results if r.get("score") is not None]
+                if len(scores) >= 2:
+                    # Check if the spread is small (many similar scores)
+                    max_score = max(scores)
+                    min_score = min(scores)
+                    if (max_score - min_score) <= thresholds["score_similarity"]:
+                        logger.debug(
+                            f"Auto-delegation: {tool_name} has {len(results)} results "
+                            f"with similar scores (spread: {max_score - min_score:.3f})"
+                        )
+                        return True
+                    # Also delegate if most results are within threshold of each other
+                    near_equal_count = sum(
+                        1 for s in scores
+                        if abs(s - scores[0]) <= thresholds["score_similarity"]
+                    )
+                    if near_equal_count > thresholds["vault_search_results"]:
+                        logger.debug(
+                            f"Auto-delegation: {tool_name} has {near_equal_count} near-equal results"
+                        )
+                        return True
+
+        elif tool_name == "vault_list":
+            notes = tool_result.get("notes", [])
+            if len(notes) > thresholds["vault_list_files"]:
+                logger.debug(
+                    f"Auto-delegation: vault_list has {len(notes)} files "
+                    f"(threshold: {thresholds['vault_list_files']})"
+                )
+                return True
+
+        elif tool_name == "thread_read":
+            entries = tool_result.get("entries", [])
+            if len(entries) > thresholds["thread_read_entries"]:
+                logger.debug(
+                    f"Auto-delegation: thread_read has {len(entries)} entries "
+                    f"(threshold: {thresholds['thread_read_entries']})"
+                )
+                return True
+
+        return False
+
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate token count for a string (rough: 4 chars per token)."""
+        return len(text) // 4
+
 
 # Singleton instance
 _oracle_agent: Optional[OracleAgent] = None
@@ -560,6 +879,7 @@ _oracle_agent: Optional[OracleAgent] = None
 def get_oracle_agent(
     api_key: str,
     model: Optional[str] = None,
+    subagent_model: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> OracleAgent:
     """Get or create an OracleAgent instance.
@@ -570,6 +890,7 @@ def get_oracle_agent(
     Args:
         api_key: OpenRouter API key
         model: Model override
+        subagent_model: Model for Librarian subagent (from user settings)
         project_id: Project context
 
     Returns:
@@ -578,6 +899,7 @@ def get_oracle_agent(
     return OracleAgent(
         api_key=api_key,
         model=model,
+        subagent_model=subagent_model,
         project_id=project_id,
     )
 

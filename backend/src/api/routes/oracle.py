@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -36,6 +36,10 @@ router = APIRouter(prefix="/api/oracle", tags=["oracle"])
 
 # Singleton oracle bridge instance (kept for fallback/deprecation period)
 _oracle_bridge: OracleBridge | None = None
+
+# Active Oracle sessions for cancellation support
+# Maps user_id to active OracleAgent instance
+_active_sessions: Dict[str, OracleAgent] = {}
 
 
 def get_oracle_bridge() -> OracleBridge:
@@ -85,10 +89,14 @@ async def query_oracle(
     try:
         logger.info(f"Oracle query from user {auth.user_id}: {request.question[:100]}")
 
+        # Get user's subagent model for Librarian delegation
+        subagent_model = settings_service.get_subagent_model(auth.user_id)
+
         # Create OracleAgent
         agent = OracleAgent(
             api_key=openrouter_api_key,
             model=request.model,
+            subagent_model=subagent_model,
             project_id=None,  # TODO: Get from request or detect
             user_id=auth.user_id,
         )
@@ -189,13 +197,25 @@ async def query_oracle_stream(
 
         return EventSourceResponse(error_generator())
 
+    # Cancel any existing session for this user
+    if auth.user_id in _active_sessions:
+        logger.info(f"Cancelling existing session for user {auth.user_id}")
+        _active_sessions[auth.user_id].cancel()
+
+    # Get user's subagent model for Librarian delegation
+    subagent_model = settings_service.get_subagent_model(auth.user_id)
+
     # Create OracleAgent with user's settings
     agent = OracleAgent(
         api_key=openrouter_api_key,
         model=request.model,  # None uses default
+        subagent_model=subagent_model,
         project_id=None,  # TODO: Get from request or detect
         user_id=auth.user_id,
     )
+
+    # Register the agent for cancellation support
+    _active_sessions[auth.user_id] = agent
 
     async def event_generator() -> AsyncGenerator[str, None]:
         """Generate SSE events from OracleAgent stream."""
@@ -228,7 +248,39 @@ async def query_oracle_stream(
             )
             yield json.dumps(error_chunk.model_dump(exclude_none=True))
 
+        finally:
+            # Clean up session when done
+            if auth.user_id in _active_sessions and _active_sessions[auth.user_id] is agent:
+                del _active_sessions[auth.user_id]
+
     return EventSourceResponse(event_generator())
+
+
+@router.post("/cancel")
+async def cancel_oracle_session(
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """
+    Cancel the active Oracle session for this user.
+
+    This endpoint immediately cancels any running Oracle query for the authenticated user.
+    The agent will stop at the next checkpoint and yield a cancellation error.
+
+    **Response:**
+    - `{"status": "cancelled"}`: Successfully cancelled an active session
+    - `{"status": "no_active_session"}`: No active session to cancel
+    """
+    session_id = auth.user_id
+
+    if session_id in _active_sessions:
+        agent = _active_sessions[session_id]
+        agent.cancel()
+        del _active_sessions[session_id]
+        logger.info(f"Cancelled Oracle session for user {session_id}")
+        return {"status": "cancelled"}
+
+    logger.debug(f"No active Oracle session to cancel for user {session_id}")
+    return {"status": "no_active_session"}
 
 
 @router.get("/history", response_model=ConversationHistoryResponse)

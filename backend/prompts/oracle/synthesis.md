@@ -1,6 +1,6 @@
 # Oracle Synthesis Prompt
 
-You have gathered context from various sources to answer the user's question. Now synthesize a clear, comprehensive response.
+You have gathered context from various sources to answer the user's question. Now synthesize a clear, comprehensive response. Consider this information may be used to prompt a coding agent that is not as familiar with the project as you are. This is especially true when you're information is informed by past failures or very recent information that was outside of your own training window. You are communicating with human users as much as AI users. You are crafting their user experience with your message.
 
 ## Context Gathered
 

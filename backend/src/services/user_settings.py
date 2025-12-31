@@ -35,7 +35,7 @@ class UserSettingsService:
             cursor = conn.execute(
                 """
                 SELECT oracle_model, oracle_provider, subagent_model,
-                       subagent_provider, thinking_enabled, openrouter_api_key
+                       subagent_provider, thinking_enabled, librarian_timeout, openrouter_api_key
                 FROM user_settings
                 WHERE user_id = ?
                 """,
@@ -48,12 +48,16 @@ class UserSettingsService:
                 api_key = row["openrouter_api_key"]
                 has_api_key = api_key is not None and len(api_key) > 0
 
+                # Handle librarian_timeout - may be None for legacy rows
+                librarian_timeout = row["librarian_timeout"] if row["librarian_timeout"] is not None else 1200
+
                 return ModelSettings(
                     oracle_model=row["oracle_model"],
                     oracle_provider=ModelProvider(row["oracle_provider"]),
                     subagent_model=row["subagent_model"],
                     subagent_provider=ModelProvider(row["subagent_provider"]),
                     thinking_enabled=bool(row["thinking_enabled"]),
+                    librarian_timeout=librarian_timeout,
                     openrouter_api_key=None,  # Never return the actual key
                     openrouter_api_key_set=has_api_key
                 )
@@ -94,6 +98,78 @@ class UserSettingsService:
         finally:
             conn.close()
 
+    def get_subagent_model(self, user_id: str) -> str:
+        """
+        Get user's preferred subagent model.
+
+        This is used by OracleAgent when delegating to Librarian.
+        Returns the configured model or a default if not set.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Model identifier string (e.g., "deepseek/deepseek-chat")
+        """
+        settings = self.get_settings(user_id)
+        return settings.subagent_model or "deepseek/deepseek-chat"
+
+    def get_subagent_provider(self, user_id: str) -> "ModelProvider":
+        """
+        Get user's preferred subagent provider.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            ModelProvider enum value
+        """
+        settings = self.get_settings(user_id)
+        return settings.subagent_provider
+
+    def get_librarian_timeout(self, user_id: str) -> int:
+        """
+        Get user's configured librarian timeout in seconds.
+
+        This is used by ToolExecutor when running delegate_librarian operations.
+        Returns the configured timeout or the default (1200 seconds = 20 minutes).
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Timeout in seconds (60-3600, default 1200)
+        """
+        settings = self.get_settings(user_id)
+        return settings.librarian_timeout
+
+    def set_librarian_timeout(self, user_id: str, timeout_seconds: int) -> None:
+        """
+        Set user's librarian timeout.
+
+        Args:
+            user_id: User identifier
+            timeout_seconds: Timeout in seconds (60-3600)
+        """
+        # Clamp to valid range
+        timeout_seconds = max(60, min(timeout_seconds, 3600))
+        self.update_settings(user_id=user_id, librarian_timeout=timeout_seconds)
+
+    def set_subagent_model(self, user_id: str, model: str, provider: Optional["ModelProvider"] = None) -> None:
+        """
+        Set user's preferred subagent model.
+
+        Args:
+            user_id: User identifier
+            model: Model identifier (e.g., "deepseek/deepseek-chat")
+            provider: Optional provider override (defaults to OPENROUTER)
+        """
+        self.update_settings(
+            user_id=user_id,
+            subagent_model=model,
+            subagent_provider=provider,
+        )
+
     def update_settings(
         self,
         user_id: str,
@@ -102,6 +178,7 @@ class UserSettingsService:
         subagent_model: Optional[str] = None,
         subagent_provider: Optional[ModelProvider] = None,
         thinking_enabled: Optional[bool] = None,
+        librarian_timeout: Optional[int] = None,
         openrouter_api_key: Optional[str] = None
     ) -> ModelSettings:
         """
@@ -114,6 +191,7 @@ class UserSettingsService:
             subagent_model: Subagent model ID (optional)
             subagent_provider: Subagent provider (optional)
             thinking_enabled: Enable thinking mode (optional)
+            librarian_timeout: Timeout in seconds for Librarian operations (optional, 60-3600)
             openrouter_api_key: OpenRouter API key (optional, empty string to clear)
 
         Returns:
@@ -136,6 +214,11 @@ class UserSettingsService:
             else:
                 new_api_key = openrouter_api_key
 
+            # Clamp librarian_timeout to valid range if provided
+            new_librarian_timeout = current.librarian_timeout
+            if librarian_timeout is not None:
+                new_librarian_timeout = max(60, min(librarian_timeout, 3600))
+
             # Apply updates (only non-None values)
             updated = ModelSettings(
                 oracle_model=oracle_model if oracle_model is not None else current.oracle_model,
@@ -143,6 +226,7 @@ class UserSettingsService:
                 subagent_model=subagent_model if subagent_model is not None else current.subagent_model,
                 subagent_provider=subagent_provider if subagent_provider is not None else current.subagent_provider,
                 thinking_enabled=thinking_enabled if thinking_enabled is not None else current.thinking_enabled,
+                librarian_timeout=new_librarian_timeout,
                 openrouter_api_key=None,  # Never return the key
                 openrouter_api_key_set=new_api_key is not None and len(new_api_key) > 0
             )
@@ -156,14 +240,15 @@ class UserSettingsService:
                     INSERT INTO user_settings (
                         user_id, oracle_model, oracle_provider,
                         subagent_model, subagent_provider, thinking_enabled,
-                        openrouter_api_key, created, updated
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        librarian_timeout, openrouter_api_key, created, updated
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(user_id) DO UPDATE SET
                         oracle_model = excluded.oracle_model,
                         oracle_provider = excluded.oracle_provider,
                         subagent_model = excluded.subagent_model,
                         subagent_provider = excluded.subagent_provider,
                         thinking_enabled = excluded.thinking_enabled,
+                        librarian_timeout = excluded.librarian_timeout,
                         openrouter_api_key = excluded.openrouter_api_key,
                         updated = excluded.updated
                     """,
@@ -174,6 +259,7 @@ class UserSettingsService:
                         updated.subagent_model,
                         updated.subagent_provider.value,
                         int(updated.thinking_enabled),
+                        updated.librarian_timeout,
                         new_api_key,
                         now,
                         now

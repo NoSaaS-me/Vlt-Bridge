@@ -33,6 +33,12 @@ class ModelSettings(BaseModel):
         default=False,
         description="Enable extended thinking mode (adds :thinking suffix for supported models)"
     )
+    librarian_timeout: int = Field(
+        default=1200,
+        ge=60,
+        le=3600,
+        description="Timeout in seconds for Librarian subagent tasks (default: 1200 = 20 minutes, max: 3600 = 1 hour)"
+    )
     openrouter_api_key: Optional[str] = Field(
         default=None,
         description="User's OpenRouter API key for accessing paid models"
@@ -75,6 +81,12 @@ class ModelSettingsUpdateRequest(BaseModel):
     subagent_model: Optional[str] = None
     subagent_provider: Optional[ModelProvider] = None
     thinking_enabled: Optional[bool] = None
+    librarian_timeout: Optional[int] = Field(
+        default=None,
+        ge=60,
+        le=3600,
+        description="Timeout in seconds for Librarian subagent tasks (60-3600)"
+    )
     openrouter_api_key: Optional[str] = Field(
         default=None,
         description="OpenRouter API key (set to empty string to clear)"

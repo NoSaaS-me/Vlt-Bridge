@@ -94,6 +94,40 @@ export async function streamOracle(
 }
 
 /**
+ * Cancel the active Oracle session for the current user.
+ * This stops all running agents (Oracle + any subagents).
+ *
+ * @returns Promise resolving to the cancellation status
+ */
+export async function cancelOracle(): Promise<{ status: 'cancelled' | 'no_active_session' }> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  // Handle absolute URL injection for widget mode
+  let url = '/api/oracle/cancel';
+  if (window.API_BASE_URL) {
+    url = `${window.API_BASE_URL}${url}`;
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to cancel Oracle: HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
  * Clear conversation history (not implemented server-side yet)
  * For now, this is a client-side operation
  */

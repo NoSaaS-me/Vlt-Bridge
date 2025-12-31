@@ -129,6 +129,7 @@ async def update_model_settings(
             subagent_model=request.subagent_model,
             subagent_provider=request.subagent_provider,
             thinking_enabled=request.thinking_enabled,
+            librarian_timeout=request.librarian_timeout,
             openrouter_api_key=request.openrouter_api_key
         )
         return updated_settings

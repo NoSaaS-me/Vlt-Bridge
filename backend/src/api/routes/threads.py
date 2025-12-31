@@ -1,8 +1,22 @@
-"""Thread API endpoints - Sync and query threads from vlt-cli."""
+"""Thread API endpoints - Sync and query threads from vlt-cli.
+
+This module provides two types of endpoints:
+
+1. **Database-backed endpoints** (T014-T018, T031): These work with the
+   ThreadService which stores threads in SQLite for syncing and searching.
+
+2. **CLI-backed endpoints** (T037-T039): These call the vlt CLI directly
+   to create threads, push entries, and perform semantic search. These
+   enable the web UI to interact with the local vlt vault.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import re
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -17,11 +31,73 @@ from ...models.thread import (
     ThreadSearchResponse,
     SummarizeRequest,
     SummarizeResponse,
+    # CLI-based models (T037-T039)
+    CreateThreadRequest,
+    CreateThreadResponse,
+    PushEntryRequest,
+    PushEntryResponse,
+    SeekResult,
+    SeekResponse,
 )
 from ...services.thread_service import ThreadService, get_thread_service
 from ...services.librarian_service import LibrarianService, get_librarian_service
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# VLT CLI Helper Functions
+# ============================================================================
+
+async def run_vlt_command(
+    args: list[str],
+    timeout: int = 30,
+) -> tuple[bool, str, str]:
+    """
+    Run a vlt CLI command asynchronously.
+
+    Args:
+        args: Command arguments (after 'vlt')
+        timeout: Command timeout in seconds
+
+    Returns:
+        Tuple of (success, stdout, stderr)
+    """
+    cmd = ["vlt"] + args
+
+    try:
+        logger.info(f"Running vlt command: {' '.join(cmd)}")
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return False, "", f"Command timed out after {timeout}s"
+
+        stdout_str = stdout.decode("utf-8").strip()
+        stderr_str = stderr.decode("utf-8").strip()
+
+        if process.returncode != 0:
+            logger.error(f"vlt command failed: {stderr_str}")
+            return False, stdout_str, stderr_str
+
+        return True, stdout_str, stderr_str
+
+    except FileNotFoundError:
+        return False, "", "vlt CLI not found. Please ensure vlt is installed and in PATH."
+    except Exception as e:
+        logger.exception(f"Failed to run vlt command: {e}")
+        return False, "", str(e)
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 
@@ -145,6 +221,197 @@ async def search_threads(
     )
 
 
+# ============================================================================
+# CLI-based Thread API Endpoints (T037-T039)
+# These endpoints call vlt CLI directly for local vault operations
+# ============================================================================
+
+
+# T039: GET /api/threads/seek - Semantic search via vlt CLI
+# NOTE: This route MUST be defined BEFORE the /{thread_id} route to avoid
+# FastAPI treating "seek" as a thread_id parameter
+@router.get("/seek", response_model=SeekResponse)
+async def seek_threads(
+    q: str = Query(..., min_length=1, max_length=512, description="Semantic search query"),
+    project: Optional[str] = Query(None, description="Filter by project slug"),
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """
+    Semantic search across threads via vlt CLI.
+
+    Uses vlt's semantic search capabilities to find relevant entries
+    based on meaning rather than exact keyword matches. This enables
+    natural language queries like "How did I solve the caching problem?"
+
+    **Query Parameters:**
+    - `q`: Search query (required, 1-512 chars)
+    - `project`: Filter results to a specific project
+
+    **Response:**
+    - `query`: The original search query
+    - `results`: List of matching entries with content and relevance scores
+    - `total`: Total number of matches
+    - `project`: Project filter applied, if any
+
+    **Example:**
+    ```
+    GET /api/threads/seek?q=how%20to%20implement%20caching
+    ```
+
+    **Notes:**
+    - Requires vlt CLI to be installed and accessible
+    - Uses the local vlt vault (not synced threads in backend DB)
+    - Results are ranked by semantic similarity
+    """
+    # Build vlt command: vlt thread seek "query" [--project project]
+    args = ["thread", "seek", q]
+
+    if project:
+        args.extend(["--project", project])
+
+    success, stdout, stderr = await run_vlt_command(args, timeout=30)
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"vlt seek failed: {stderr or 'Unknown error'}",
+        )
+
+    # Parse vlt output - it may output formatted text, not JSON
+    # We'll parse it as best we can
+    results = []
+
+    # Try to parse as JSON first (if vlt supports --json flag)
+    try:
+        # Attempt JSON parsing
+        data = json.loads(stdout)
+        if isinstance(data, list):
+            for item in data:
+                results.append(SeekResult(
+                    thread_id=item.get("thread_id", "unknown"),
+                    project_id=item.get("project_id"),
+                    content=item.get("content", ""),
+                    score=float(item.get("score", 0.5)),
+                    author=item.get("author"),
+                    timestamp=datetime.fromisoformat(item["timestamp"]) if item.get("timestamp") else None,
+                ))
+    except json.JSONDecodeError:
+        # Fall back to text parsing
+        # vlt seek typically outputs formatted text with thread/project/content
+        if stdout:
+            # Simple heuristic: each non-empty block is a result
+            lines = stdout.split("\n")
+            current_content = []
+
+            for line in lines:
+                if line.strip():
+                    current_content.append(line)
+                elif current_content:
+                    # End of a result block
+                    results.append(SeekResult(
+                        thread_id="parsed",
+                        content="\n".join(current_content),
+                        score=0.5,  # Default score when not available
+                    ))
+                    current_content = []
+
+            # Don't forget last block
+            if current_content:
+                results.append(SeekResult(
+                    thread_id="parsed",
+                    content="\n".join(current_content),
+                    score=0.5,
+                ))
+
+    return SeekResponse(
+        query=q,
+        results=results,
+        total=len(results),
+        project=project,
+    )
+
+
+# T037: POST /api/threads - Create a new thread via vlt CLI
+# NOTE: This route MUST be defined BEFORE the /{thread_id} routes
+@router.post("/create", response_model=CreateThreadResponse, status_code=status.HTTP_201_CREATED)
+async def create_thread_via_cli(
+    request: CreateThreadRequest,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """
+    Create a new thread via vlt CLI.
+
+    Creates a new reasoning chain in the local vlt vault. This is useful
+    when the web UI needs to initiate a new thread without going through
+    the CLI directly.
+
+    **Request Body:**
+    - `name`: Thread slug/name (e.g., 'optimization-strategy')
+    - `initial_thought`: Initial thought/content for the thread
+    - `project`: Project slug (optional, defaults to auto-detected)
+    - `author`: Override the author (optional)
+
+    **Response:**
+    - `thread_id`: Created thread identifier
+    - `project_id`: Project the thread belongs to
+    - `name`: Thread name
+    - `success`: Whether creation succeeded
+    - `message`: Status message
+
+    **Example:**
+    ```json
+    POST /api/threads/create
+    {
+        "name": "api-redesign",
+        "initial_thought": "Starting to redesign the API layer for better ergonomics",
+        "project": "my-project"
+    }
+    ```
+
+    **Notes:**
+    - Requires vlt CLI to be installed and accessible
+    - Thread is created in the local vlt vault
+    - Use /api/threads/sync to sync to the backend database
+    """
+    # Build vlt command: vlt thread new NAME "INITIAL_THOUGHT" [--project P] [--author A]
+    args = ["thread", "new", request.name, request.initial_thought]
+
+    if request.project:
+        args.extend(["--project", request.project])
+
+    if request.author:
+        args.extend(["--author", request.author])
+
+    success, stdout, stderr = await run_vlt_command(args, timeout=30)
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create thread: {stderr or 'Unknown error'}",
+        )
+
+    # Parse the output to extract thread info
+    # vlt thread new typically outputs something like:
+    # "Created thread 'name' in project 'project'"
+    thread_id = request.name
+    project_id = request.project or "unknown"
+
+    # Try to extract project from stdout if available
+    if "project" in stdout.lower():
+        # Simple extraction - look for project name in quotes
+        match = re.search(r"project\s+['\"]?(\S+)['\"]?", stdout, re.IGNORECASE)
+        if match:
+            project_id = match.group(1).strip("'\"")
+
+    return CreateThreadResponse(
+        thread_id=thread_id,
+        project_id=project_id,
+        name=request.name,
+        success=True,
+        message=stdout or "Thread created successfully",
+    )
+
+
 # T015: GET /api/threads
 @router.get("", response_model=ThreadListResponse)
 async def list_threads(
@@ -215,6 +482,74 @@ async def get_thread(
         )
 
     return thread
+
+
+# T038: POST /api/threads/{thread_id}/entries - Push entry via vlt CLI
+@router.post("/{thread_id}/entries", response_model=PushEntryResponse, status_code=status.HTTP_201_CREATED)
+async def push_thread_entry(
+    thread_id: str,
+    request: PushEntryRequest,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """
+    Push a new entry to a thread via vlt CLI.
+
+    Commits a thought to permanent memory in the local vlt vault. This is
+    a fire-and-forget operation designed for logging intermediate reasoning
+    steps so you can free up context window space.
+
+    **Path Parameters:**
+    - `thread_id`: Thread slug or path to push to
+
+    **Request Body:**
+    - `content`: The thought/content to log (required)
+    - `author`: Override the author (optional)
+
+    **Response:**
+    - `thread_id`: Thread the entry was added to
+    - `success`: Whether push succeeded
+    - `message`: Status message
+
+    **Example:**
+    ```json
+    POST /api/threads/api-redesign/entries
+    {
+        "content": "Decided to use FastAPI for its async support and automatic OpenAPI generation"
+    }
+    ```
+
+    **Notes:**
+    - Requires vlt CLI to be installed and accessible
+    - Entry is pushed to the local vlt vault
+    - Optimized for speed (<50ms target)
+    - If vlt daemon is running, sync is routed through it for better performance
+    """
+    # Build vlt command: vlt thread push THREAD_ID "CONTENT" [--author A]
+    args = ["thread", "push", thread_id, request.content]
+
+    if request.author:
+        args.extend(["--author", request.author])
+
+    success, stdout, stderr = await run_vlt_command(args, timeout=10)  # Short timeout for push
+
+    if not success:
+        # Check for specific error cases
+        if "not found" in stderr.lower() or "does not exist" in stderr.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Thread '{thread_id}' not found. Create it first with POST /api/threads/create",
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to push entry: {stderr or 'Unknown error'}",
+        )
+
+    return PushEntryResponse(
+        thread_id=thread_id,
+        success=True,
+        message=stdout or "Entry pushed successfully",
+    )
 
 
 # T017: GET /api/threads/{thread_id}/status

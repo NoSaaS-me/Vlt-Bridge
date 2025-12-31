@@ -372,7 +372,7 @@
           "required": ["query"]
         }
       },
-      "agent_scope": ["oracle"],
+      "agent_scope": ["oracle", "librarian"],
       "category": "web"
     },
     {
@@ -399,7 +399,7 @@
           "required": ["url"]
         }
       },
-      "agent_scope": ["oracle"],
+      "agent_scope": ["oracle", "librarian"],
       "category": "web"
     },
     {
@@ -446,11 +446,12 @@
     },
     "librarian": {
       "name": "Librarian",
-      "description": "Subagent specialized for vault organization",
+      "description": "Subagent specialized for vault organization and web research",
       "system_prompt_path": "librarian/system.md",
       "tools": [
         "vault_read", "vault_write", "vault_search", "vault_list",
-        "vault_move", "vault_create_index", "search_code"
+        "vault_move", "vault_create_index", "search_code",
+        "web_search", "web_fetch"
       ],
       "max_turns": 10,
       "model_override": "deepseek/deepseek-chat"

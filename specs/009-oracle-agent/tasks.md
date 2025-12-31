@@ -56,7 +56,7 @@
 
 ### Tests for User Story 1
 
-- [ ] T016 [P] [US1] Integration test for oracle streaming in backend/tests/integration/test_oracle_stream.py
+- [x] T016 [P] [US1] Integration test for oracle streaming in backend/tests/integration/test_oracle_stream.py
 
 ### Implementation for User Story 1
 
@@ -81,16 +81,16 @@
 
 ### Tests for User Story 2
 
-- [ ] T025 [P] [US2] Unit test for parallel tool execution in backend/tests/unit/test_tool_executor.py
+- [x] T025 [P] [US2] Unit test for parallel tool execution in backend/tests/unit/test_tool_executor.py
 
 ### Implementation for User Story 2
 
-- [ ] T026 [US2] Implement parallel tool call handling in backend/src/services/oracle_agent.py
-- [ ] T027 [US2] Add tool call error handling and fallback in backend/src/services/oracle_agent.py
-- [ ] T028 [US2] Add tool call timeout handling in backend/src/services/tool_executor.py
-- [ ] T029 [US2] Implement web_search tool in backend/src/services/tool_executor.py
-- [ ] T030 [US2] Implement web_fetch tool in backend/src/services/tool_executor.py
-- [ ] T031 [US2] Add get_repo_map tool to ToolExecutor in backend/src/services/tool_executor.py
+- [x] T026 [US2] Implement parallel tool call handling in backend/src/services/oracle_agent.py
+- [x] T027 [US2] Add tool call error handling and fallback in backend/src/services/oracle_agent.py
+- [x] T028 [US2] Add tool call timeout handling in backend/src/services/tool_executor.py
+- [x] T029 [US2] Implement web_search tool in backend/src/services/tool_executor.py
+- [x] T030 [US2] Implement web_fetch tool in backend/src/services/tool_executor.py
+- [x] T031 [US2] Add get_repo_map tool to ToolExecutor in backend/src/services/tool_executor.py
 
 **Checkpoint**: Oracle autonomously chains tools and handles failures gracefully
 
@@ -104,18 +104,18 @@
 
 ### Tests for User Story 3
 
-- [ ] T032 [P] [US3] Integration test for thread_push via Oracle in backend/tests/integration/test_oracle_memory.py
+- [x] T032 [P] [US3] Integration test for thread_push via Oracle in backend/tests/integration/test_oracle_memory.py
 
 ### Implementation for User Story 3
 
-- [ ] T033 [US3] Implement thread_push tool in backend/src/services/tool_executor.py
-- [ ] T034 [US3] Implement thread_read tool in backend/src/services/tool_executor.py
-- [ ] T035 [US3] Implement thread_seek tool in backend/src/services/tool_executor.py
-- [ ] T036 [US3] Implement thread_list tool in backend/src/services/tool_executor.py
-- [ ] T037 [US3] Add POST /api/threads endpoint in backend/src/api/routes/threads.py
-- [ ] T038 [US3] Add POST /api/threads/{id}/entries endpoint in backend/src/api/routes/threads.py
-- [ ] T039 [US3] Add GET /api/threads/seek endpoint in backend/src/api/routes/threads.py
-- [ ] T040 [US3] Implement vault_write tool for Oracle notes in backend/src/services/tool_executor.py
+- [x] T033 [US3] Implement thread_push tool in backend/src/services/tool_executor.py
+- [x] T034 [US3] Implement thread_read tool in backend/src/services/tool_executor.py
+- [x] T035 [US3] Implement thread_seek tool in backend/src/services/tool_executor.py
+- [x] T036 [US3] Implement thread_list tool in backend/src/services/tool_executor.py
+- [x] T037 [US3] Add POST /api/threads endpoint in backend/src/api/routes/threads.py
+- [x] T038 [US3] Add POST /api/threads/{id}/entries endpoint in backend/src/api/routes/threads.py
+- [x] T039 [US3] Add GET /api/threads/seek endpoint in backend/src/api/routes/threads.py
+- [x] T040 [US3] Implement vault_write tool for Oracle notes in backend/src/services/tool_executor.py
 
 **Checkpoint**: Oracle can save and retrieve research from long-term memory
 
@@ -148,16 +148,16 @@
 
 ### Tests for User Story 5
 
-- [ ] T047 [P] [US5] Unit test for LibrarianAgent in backend/tests/unit/test_librarian_agent.py
+- [x] T047 [P] [US5] Unit test for LibrarianAgent in backend/tests/unit/test_librarian_agent.py
 
 ### Implementation for User Story 5
 
-- [ ] T048 [US5] Create LibrarianAgent class in backend/src/services/librarian_agent.py
-- [ ] T049 [US5] Implement scoped tool access for Librarian in backend/src/services/librarian_agent.py
+- [x] T048 [US5] Create LibrarianAgent class in backend/src/services/librarian_agent.py
+- [x] T049 [US5] Implement scoped tool access for Librarian in backend/src/services/librarian_agent.py
 - [ ] T050 [US5] Implement vault_move tool in backend/src/services/tool_executor.py
 - [ ] T051 [US5] Implement vault_create_index tool in backend/src/services/tool_executor.py
-- [ ] T052 [US5] Implement delegate_librarian tool in backend/src/services/tool_executor.py
-- [ ] T053 [US5] Wire Librarian into Oracle agent loop in backend/src/services/oracle_agent.py
+- [x] T052 [US5] Implement delegate_librarian tool in backend/src/services/tool_executor.py
+- [x] T053 [US5] Wire Librarian into Oracle agent loop in backend/src/services/oracle_agent.py
 
 **Checkpoint**: Oracle successfully delegates organization tasks to Librarian
 

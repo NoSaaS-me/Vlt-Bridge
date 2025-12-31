@@ -112,6 +112,93 @@ class SummarizeResponse(BaseModel):
     error: Optional[str] = Field(None, description="Error message if failed")
 
 
+# ============================================================================
+# CLI-based Thread API Models (T037-T039)
+# These models are for endpoints that interact with vlt CLI directly
+# ============================================================================
+
+
+class CreateThreadRequest(BaseModel):
+    """Request to create a new thread via vlt CLI."""
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Thread slug/name (e.g., 'optimization-strategy')"
+    )
+    initial_thought: str = Field(
+        ...,
+        min_length=1,
+        max_length=10000,
+        description="Initial thought/content for the thread"
+    )
+    project: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="Project slug. Defaults to auto-detected from vlt.toml context."
+    )
+    author: Optional[str] = Field(
+        None,
+        max_length=64,
+        description="Override the author for this thread"
+    )
+
+
+class CreateThreadResponse(BaseModel):
+    """Response after creating a thread via vlt CLI."""
+
+    thread_id: str = Field(..., description="Created thread identifier")
+    project_id: str = Field(..., description="Project the thread belongs to")
+    name: str = Field(..., description="Thread name")
+    success: bool = Field(True, description="Whether creation succeeded")
+    message: Optional[str] = Field(None, description="Status message")
+
+
+class PushEntryRequest(BaseModel):
+    """Request to push an entry to a thread via vlt CLI."""
+
+    content: str = Field(
+        ...,
+        min_length=1,
+        max_length=100000,
+        description="The thought/content to log"
+    )
+    author: Optional[str] = Field(
+        None,
+        max_length=64,
+        description="Override the author for this thought"
+    )
+
+
+class PushEntryResponse(BaseModel):
+    """Response after pushing an entry via vlt CLI."""
+
+    thread_id: str = Field(..., description="Thread the entry was added to")
+    success: bool = Field(True, description="Whether push succeeded")
+    message: Optional[str] = Field(None, description="Status message")
+
+
+class SeekResult(BaseModel):
+    """Single result from semantic search."""
+
+    thread_id: str = Field(..., description="Thread ID containing the match")
+    project_id: Optional[str] = Field(None, description="Project the thread belongs to")
+    content: str = Field(..., description="Matching content/snippet")
+    score: float = Field(..., description="Relevance score (0-1)")
+    author: Optional[str] = Field(None, description="Author of the entry")
+    timestamp: Optional[datetime] = Field(None, description="When the entry was created")
+
+
+class SeekResponse(BaseModel):
+    """Response from semantic thread search via vlt CLI."""
+
+    query: str = Field(..., description="Original search query")
+    results: List[SeekResult] = Field(default_factory=list, description="Matching results")
+    total: int = Field(0, description="Total number of matches")
+    project: Optional[str] = Field(None, description="Project filter applied, if any")
+
+
 __all__ = [
     "ThreadEntry",
     "Thread",
@@ -123,4 +210,11 @@ __all__ = [
     "ThreadSearchResponse",
     "SummarizeRequest",
     "SummarizeResponse",
+    # CLI-based Thread API Models (T037-T039)
+    "CreateThreadRequest",
+    "CreateThreadResponse",
+    "PushEntryRequest",
+    "PushEntryResponse",
+    "SeekResult",
+    "SeekResponse",
 ]

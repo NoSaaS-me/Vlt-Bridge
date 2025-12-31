@@ -78,6 +78,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         subagent_model TEXT NOT NULL DEFAULT 'gemini-2.0-flash-exp',
         subagent_provider TEXT NOT NULL DEFAULT 'google',
         thinking_enabled INTEGER NOT NULL DEFAULT 0,
+        librarian_timeout INTEGER NOT NULL DEFAULT 1200,
         openrouter_api_key TEXT,
         created TEXT NOT NULL,
         updated TEXT NOT NULL
@@ -162,6 +163,8 @@ DDL_STATEMENTS: tuple[str, ...] = (
 MIGRATION_STATEMENTS: tuple[str, ...] = (
     # Add openrouter_api_key column if it doesn't exist
     "ALTER TABLE user_settings ADD COLUMN openrouter_api_key TEXT",
+    # Add librarian_timeout column if it doesn't exist (default 1200 = 20 minutes)
+    "ALTER TABLE user_settings ADD COLUMN librarian_timeout INTEGER NOT NULL DEFAULT 1200",
 )
 
 

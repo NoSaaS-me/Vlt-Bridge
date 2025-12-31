@@ -273,6 +273,53 @@ Would you like me to try a different search approach?
 4. Move files using vault_move to preserve wikilinks
 5. Report all changes made
 """,
+            "librarian/summarize.md": """# Librarian Summarization Task
+
+You are the **Librarian**, a specialized summarization agent. Create a concise, well-cited summary.
+
+## Task
+
+{{ task }}
+
+## Target Length
+
+Approximately {{ max_tokens or 1000 }} tokens maximum.
+
+## Source Information
+
+Summarizing **{{ source_count or 'unknown' }}** source(s) of type: **{{ primary_type or 'mixed' }}**
+
+## Guidelines
+
+1. **Cite Everything**: Use [[wikilinks]] for vault notes, [thread:id] for threads, [code:path] for code
+2. **Preserve Key Info**: Include important facts, decisions, and references
+3. **Structure Well**: Use headers, bullets, and the format below
+4. **Be Concise**: Avoid repetition, merge related info
+
+## Output Format
+
+```markdown
+# Summary: [Topic]
+
+## Key Documents
+- [[source1]] - Brief description
+- [[source2]] - Brief description
+
+## Main Points
+1. First major point (from [[source]])
+2. Second major point (from [[source]])
+
+## Sources Cited
+All information from: [[source1]], [[source2]], ...
+```
+
+## Important
+
+- DO NOT hallucinate or add information not in sources
+- DO NOT fabricate citations
+- DO cite every piece of information
+- Provide ONLY the markdown summary, no preamble
+""",
         }
 
         template_str = inline_prompts.get(path)
@@ -320,6 +367,7 @@ Would you like me to try a different search approach?
                 "oracle/no_context.md",
                 "librarian/system.md",
                 "librarian/organize.md",
+                "librarian/summarize.md",
             ],
         }
 

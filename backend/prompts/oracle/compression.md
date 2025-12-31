@@ -106,3 +106,5 @@ Output the compressed summary that will replace older exchanges. The summary sho
 - **Preserve citations**: Even in summary form, keep source references
 - **Note what was removed**: If significant context is being compressed, briefly note what topics were covered
 - **Err on the side of keeping**: When uncertain, preserve rather than discard
+- **Recency Bias**: Prioritize recent exchanges and decisions over older ones when making compression decisions, if the path of the conversation indicates it is pivoting towards something else with high importance in the context window, that information should be preserved.
+- **The Polished Gem**: Your context window is your memory. Treasure it, and polish it.

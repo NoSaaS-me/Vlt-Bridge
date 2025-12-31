@@ -1,11 +1,11 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Send, Loader2, Info } from 'lucide-react';
+import { Send, Loader2, Info, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ChatMessage } from './ChatMessage';
 import { SlashCommandMenu } from './SlashCommandMenu';
-import { streamOracle, exportConversationAsMarkdown, downloadAsFile, compactHistory } from '@/services/oracle';
+import { streamOracle, cancelOracle, exportConversationAsMarkdown, downloadAsFile, compactHistory } from '@/services/oracle';
 import { getModelSettings } from '@/services/models';
 import type { OracleMessage, SlashCommand, OracleStreamChunk, SourceType } from '@/types/oracle';
 import type { ModelSettings } from '@/types/models';
@@ -53,6 +53,31 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  /**
+   * Stop the current Oracle query.
+   * Aborts the frontend fetch request and cancels the backend session.
+   * Defined as useCallback so it can be used in slashCommands.
+   */
+  const handleStop = useCallback(async () => {
+    // Abort the frontend request first (faster feedback)
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // Cancel backend session (stops all running agents)
+    try {
+      await cancelOracle();
+    } catch (err) {
+      console.error('Failed to cancel Oracle session:', err);
+      // Don't show error - frontend abort already worked
+    }
+
+    setIsLoading(false);
+    setStatusMessage('');
+    toast.info('Query stopped');
+  }, [toast]);
 
   // Slash commands
   const slashCommands = useMemo<SlashCommand[]>(
@@ -126,8 +151,20 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
           toast.success('Conversation exported');
         },
       },
+      {
+        name: 'stop',
+        description: 'Stop current query (if running)',
+        shortcut: 'Esc',
+        handler: () => {
+          if (isLoading) {
+            handleStop();
+          } else {
+            toast.info('No active query to stop');
+          }
+        },
+      },
     ],
-    [messages, activeSources, showSources, showThinking, toast, modelSettings, navigate]
+    [messages, activeSources, showSources, showThinking, toast, modelSettings, navigate, isLoading, handleStop]
   );
 
   const handleSubmit = async () => {
@@ -211,6 +248,20 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
         abortControllerRef.current.signal
       );
     } catch (err) {
+      // Check if this was a user-initiated abort (stop button)
+      if (err instanceof Error && err.name === 'AbortError') {
+        // User cancelled - update the message to show it was stopped
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastMsg = updated[updated.length - 1];
+          if (lastMsg.role === 'assistant' && !lastMsg.content) {
+            lastMsg.content = 'Query stopped by user.';
+          }
+          return updated;
+        });
+        return; // Don't show error toast for user-initiated stop
+      }
+
       console.error('Oracle error:', err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to get response';
 
@@ -357,9 +408,20 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
             rows={1}
             disabled={isLoading}
           />
-          <Button onClick={handleSubmit} disabled={isLoading || !input.trim()} size="icon">
-            <Send className="h-4 w-4" />
-          </Button>
+          {isLoading ? (
+            <Button
+              onClick={handleStop}
+              variant="destructive"
+              size="icon"
+              title="Stop query"
+            >
+              <Square className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button onClick={handleSubmit} disabled={!input.trim()} size="icon">
+              <Send className="h-4 w-4" />
+            </Button>
+          )}
         </div>
         <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
           <span>

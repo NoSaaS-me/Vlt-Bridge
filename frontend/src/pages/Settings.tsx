@@ -93,6 +93,7 @@ export function Settings() {
           subagent_model: 'google/gemini-2.0-flash-exp:free',
           subagent_provider: 'openrouter',
           thinking_enabled: false,
+          librarian_timeout: 1200,
           openrouter_api_key: null,
           openrouter_api_key_set: false,
         });
@@ -545,6 +546,33 @@ export function Settings() {
                     </Tooltip>
                   </TooltipProvider>
                 </div>
+              </div>
+
+              <Separator />
+
+              {/* Librarian Timeout */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Librarian Timeout</label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Maximum time (in minutes) for Librarian subagent operations like summarization and web research
+                </p>
+                <div className="flex items-center gap-4">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={Math.round(modelSettings.librarian_timeout / 60)}
+                    onChange={(e) => {
+                      const minutes = Math.max(1, Math.min(60, parseInt(e.target.value) || 20));
+                      setModelSettings({ ...modelSettings, librarian_timeout: minutes * 60 });
+                    }}
+                    className="w-24"
+                  />
+                  <span className="text-sm text-muted-foreground">minutes (1-60)</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Default: 20 minutes. Increase for large summarization or extensive web research tasks.
+                </p>
               </div>
 
               <Separator />
