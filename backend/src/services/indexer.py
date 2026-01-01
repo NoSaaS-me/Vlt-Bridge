@@ -312,6 +312,8 @@ class IndexerService:
             if normalized_tags:
                 # Build query with tag filtering using AND logic
                 # Notes must have ALL specified tags to be included
+                # Use a subquery to find notes with all required tags first,
+                # then join with FTS5 to preserve bm25/snippet context
                 tag_placeholders = ", ".join("?" for _ in normalized_tags)
                 tag_count = len(normalized_tags)
 
@@ -325,16 +327,20 @@ class IndexerService:
                         bm25(note_fts, 3.0, 1.0) AS score
                     FROM note_fts
                     JOIN note_metadata m USING (user_id, note_path)
-                    JOIN note_tags t ON m.user_id = t.user_id AND m.note_path = t.note_path
                     WHERE note_fts.user_id = ?
                       AND note_fts MATCH ?
-                      AND t.tag IN ({tag_placeholders})
-                    GROUP BY m.note_path, m.title, m.updated
-                    HAVING COUNT(DISTINCT t.tag) = ?
+                      AND m.note_path IN (
+                          SELECT note_path
+                          FROM note_tags
+                          WHERE user_id = ?
+                            AND tag IN ({tag_placeholders})
+                          GROUP BY note_path
+                          HAVING COUNT(DISTINCT tag) = ?
+                      )
                     ORDER BY score DESC
                     LIMIT ?
                     """,
-                    (user_id, sanitized_query, *normalized_tags, tag_count, limit),
+                    (user_id, sanitized_query, user_id, *normalized_tags, tag_count, limit),
                 ).fetchall()
             else:
                 # Original query without tag filtering
