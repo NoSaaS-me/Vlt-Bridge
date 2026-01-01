@@ -1,0 +1,85 @@
+# Build Progress: 003-enforce-authentication-on-sensitive-api-routes
+
+## Session: 2026-01-01
+
+### Analysis Complete
+
+Performed comprehensive codebase analysis to understand the authentication landscape:
+
+#### Key Findings:
+
+1. **Primary Vulnerability: ENABLE_NOAUTH_MCP bypass**
+   - Located in `backend/src/api/middleware/auth_middleware.py`
+   - When `ENABLE_NOAUTH_MCP=true`, the `get_auth_context` dependency returns a "demo-user" context without requiring any Authorization header
+   - This affects ALL routes that use `get_auth_context` as a dependency
+
+2. **Routes Analyzed:**
+   - `notes.py` - CRUD operations on user notes
+   - `index.py` - Index rebuild (administrative)
+   - `oracle.py` - LLM queries (consumes OpenRouter credits)
+   - `oracle_context.py` - Context tree management
+   - `threads.py` - Development history/reasoning chains
+   - `rag.py` - RAG chat (consumes LLM resources)
+   - `tts.py` - Text-to-speech (consumes ElevenLabs API)
+   - `search.py` - Full-text search, backlinks, tags
+   - `graph.py` - Note relationship graph
+   - `system.py` - System logs (security sensitive)
+   - `auth.py` - Token issuance, user profile
+   - `demo.py` - Demo token issuance (intentionally public)
+
+3. **MCP Server Analysis:**
+   - Located in `backend/src/mcp/server.py`
+   - Has its own `_current_user_id()` function
+   - Also has ENABLE_NOAUTH_MCP bypass for HTTP transport
+   - STDIO transport correctly falls back to local-dev (acceptable for local execution)
+
+4. **Current Protection Patterns:**
+   - Some routes check `_ensure_write_allowed(user_id)` to prevent demo-user writes
+   - This doesn't prevent unauthenticated access - just prevents modifications
+   - Read access to all user data is still possible
+
+#### Implementation Plan Created:
+
+Created comprehensive implementation_plan.json with 4 phases:
+
+- **Phase 1**: Create foundational auth dependencies (require_auth_context, require_admin_context, AuthMode enum)
+- **Phase 2**: Update all sensitive routes (10 subtasks covering all route files)
+- **Phase 3**: Secure MCP HTTP endpoint, add documentation and warnings
+- **Phase 4**: Testing and validation (unit tests, integration tests, manual testing)
+
+Total subtasks: 17
+
+### Next Steps:
+
+Begin implementation with Phase 1, starting with P1.1 (Create strict authentication dependency).
+
+---
+
+## Session: 2026-01-01 (Implementation)
+
+### ✅ P1.1 - Create strict authentication dependency (COMPLETED)
+
+**Implementation Details:**
+- Created new `require_auth_context()` function in `backend/src/api/middleware/auth_middleware.py`
+- Function enforces strict authentication without any fallback to demo-user
+- Validates JWT tokens and raises 401 Unauthorized if no valid Authorization header is present
+- Implementation follows same pattern as `get_auth_context()` but removes the ENABLE_NOAUTH_MCP bypass logic
+- Added comprehensive docstring explaining when to use this dependency
+- Added to `__all__` exports for use in route dependencies
+
+**Key Differences from get_auth_context:**
+- `get_auth_context()`: Falls back to "demo-user" when ENABLE_NOAUTH_MCP=true
+- `require_auth_context()`: ALWAYS requires valid Authorization header, regardless of config
+
+**Verification:**
+- Code follows existing patterns in auth_middleware.py
+- Uses same error handling structure (_unauthorized helper)
+- Returns AuthContext dataclass with user_id, token, and payload
+- Properly handles AuthError exceptions from auth_service.validate_jwt()
+
+**Files Modified:**
+- backend/src/api/middleware/auth_middleware.py
+
+**Commit:** 7edbe79
+
+**Status:** Ready for use in Phase 2 route protection subtasks
