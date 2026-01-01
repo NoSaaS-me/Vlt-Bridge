@@ -4,7 +4,12 @@
       "description": "Central authentication dependency get_auth_context has ENABLE_NOAUTH_MCP bypass that returns demo-user context without any Authorization header, affecting all routes that use this dependency",
       "category": "security",
       "discovered_at": "2026-01-01T13:29:20.791802+00:00"
+    },
+    "backend/src/api/routes/system.py": {
+      "description": "System routes (/api/system/logs and /api/system/debug/widget) now require admin authentication via require_admin_context. These endpoints expose sensitive information (system logs and widget.html content) and should only be accessible to administrators.",
+      "category": "security",
+      "discovered_at": "2026-01-01T13:51:32.037395+00:00"
     }
   },
-  "last_updated": "2026-01-01T13:29:20.791813+00:00"
+  "last_updated": "2026-01-01T13:51:32.037407+00:00"
 }

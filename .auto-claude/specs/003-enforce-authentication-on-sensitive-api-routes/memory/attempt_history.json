@@ -83,11 +83,167 @@
         }
       ],
       "status": "completed"
+    },
+    "P2.5": {
+      "attempts": [
+        {
+          "session": 9,
+          "timestamp": "2026-01-01T07:45:50.310117",
+          "approach": "Implemented: Update ALL /api/oracle/context/* endpoints to use require_auth_context. These manage conversation co",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P2.6": {
+      "attempts": [
+        {
+          "session": 10,
+          "timestamp": "2026-01-01T07:47:35.301753",
+          "approach": "Implemented: Update ALL /api/threads/* endpoints to use require_auth_context. Threads contain development history",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P2.7": {
+      "attempts": [
+        {
+          "session": 11,
+          "timestamp": "2026-01-01T07:49:31.304840",
+          "approach": "Implemented: Update /api/rag/status and /api/rag/chat to use require_auth_context. Chat uses LLM resources which ",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P2.8": {
+      "attempts": [
+        {
+          "session": 12,
+          "timestamp": "2026-01-01T07:50:26.242584",
+          "approach": "Implemented: Update /api/tts to use require_auth_context. TTS uses ElevenLabs API which costs money per character",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P2.9": {
+      "attempts": [
+        {
+          "session": 13,
+          "timestamp": "2026-01-01T07:51:46.501360",
+          "approach": "Implemented: Update /api/system/logs to use require_admin_context. System logs can leak sensitive information. Ad",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P2.10": {
+      "attempts": [
+        {
+          "session": 14,
+          "timestamp": "2026-01-01T07:53:07.442884",
+          "approach": "Implemented: Ensure /api/tokens and /api/me use require_auth_context. The /auth/login and /auth/callback remain p",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P3.1": {
+      "attempts": [
+        {
+          "session": 15,
+          "timestamp": "2026-01-01T07:54:24.622414",
+          "approach": "Implemented: Modify the _current_user_id() function in mcp/server.py to remove the ENABLE_NOAUTH_MCP bypass for H",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P3.2": {
+      "attempts": [
+        {
+          "session": 16,
+          "timestamp": "2026-01-01T07:55:46.416594",
+          "approach": "Implemented: Update .env.example to clearly document that ENABLE_NOAUTH_MCP is DANGEROUS and should ONLY be used ",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P3.3": {
+      "attempts": [
+        {
+          "session": 17,
+          "timestamp": "2026-01-01T07:58:20.988108",
+          "approach": "Implemented: Add a prominent warning log at startup if ENABLE_NOAUTH_MCP is enabled, making it clear the server i",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P4.1": {
+      "attempts": [
+        {
+          "session": 18,
+          "timestamp": "2026-01-01T08:02:10.090503",
+          "approach": "Implemented: Create tests for require_auth_context, require_admin_context, and the existing get_auth_context. Tes",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P4.2": {
+      "attempts": [
+        {
+          "session": 19,
+          "timestamp": "2026-01-01T08:04:51.989379",
+          "approach": "Implemented: Create integration tests that verify routes return 401 when accessed without authentication. Cover n",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P4.3": {
+      "attempts": [
+        {
+          "session": 20,
+          "timestamp": "2026-01-01T08:08:03.504758",
+          "approach": "Implemented: Create tests for MCP HTTP endpoint authentication. Verify that requests without Authorization header",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P4.4": {
+      "attempts": [
+        {
+          "session": 21,
+          "timestamp": "2026-01-01T08:11:38.080439",
+          "approach": "Implemented: Perform manual testing: 1) Verify demo mode still works via /api/demo/token, 2) Verify protected rou",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
     }
   },
   "stuck_subtasks": [],
   "metadata": {
     "created_at": "2026-01-01T07:25:00.058703",
-    "last_updated": "2026-01-01T07:44:04.210825"
+    "last_updated": "2026-01-01T08:11:38.080443"
   }
 }
