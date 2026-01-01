@@ -22,6 +22,10 @@ class SearchRequest(BaseModel):
 
     query: str = Field(..., min_length=1, max_length=256)
     limit: int = Field(50, ge=1, le=100)
+    tags: list[str] | None = Field(
+        default=None,
+        description="Optional list of tags to filter results. Notes must have ALL specified tags (AND logic).",
+    )
 
 
 __all__ = ["SearchResult", "SearchRequest"]
