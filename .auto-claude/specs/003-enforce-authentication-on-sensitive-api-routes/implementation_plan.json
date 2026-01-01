@@ -28,12 +28,13 @@
           "id": "P1.2",
           "title": "Create admin-only authentication dependency",
           "description": "Create `require_admin_context` that validates the user has admin privileges. Initially, this can check against a list of admin user IDs from environment variable (ADMIN_USER_IDS). System routes like /api/system/logs should use this.",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "backend/src/api/middleware/auth_middleware.py",
             "backend/src/services/config.py"
           ],
-          "notes": ""
+          "notes": "Created require_admin_context() dependency that validates admin privileges. Added admin_user_ids field to AppConfig (parsed from ADMIN_USER_IDS env var as comma-separated list). Function enforces strict authentication first via require_auth_context(), then checks if user_id is in admin list. Raises 401 Unauthorized if no auth header, 403 Forbidden if not an admin. Added _forbidden() helper for 403 responses. Updated __all__ exports. System routes can now use this for admin-only access.",
+          "updated_at": "2026-01-01T13:33:55.488347+00:00"
         },
         {
           "id": "P1.3",
@@ -298,5 +299,5 @@
     "All existing functionality works for authenticated users",
     "Unit and integration tests pass"
   ],
-  "last_updated": "2026-01-01T13:31:09.907138+00:00"
+  "last_updated": "2026-01-01T13:33:55.488354+00:00"
 }

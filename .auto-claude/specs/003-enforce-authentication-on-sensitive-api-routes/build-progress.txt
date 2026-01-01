@@ -83,3 +83,48 @@ Begin implementation with Phase 1, starting with P1.1 (Create strict authenticat
 **Commit:** 7edbe79
 
 **Status:** Ready for use in Phase 2 route protection subtasks
+
+---
+
+### ✅ P1.2 - Create admin-only authentication dependency (COMPLETED)
+
+**Implementation Details:**
+- Added `admin_user_ids` field to `AppConfig` in `backend/src/services/config.py`
+  - Type: `set[str]` with default empty set
+  - Parsed from `ADMIN_USER_IDS` environment variable (comma-separated list)
+  - Parsing logic strips whitespace and filters empty strings
+- Created new `require_admin_context()` function in `backend/src/api/middleware/auth_middleware.py`
+  - First enforces strict authentication by calling `require_auth_context()`
+  - Then checks if authenticated user_id is in admin_user_ids set
+  - Raises 401 Unauthorized if no valid Authorization header (from require_auth_context)
+  - Raises 403 Forbidden if user lacks admin privileges
+  - Returns AuthContext if user is authenticated AND has admin privileges
+- Added `_forbidden()` helper function for consistent 403 error responses
+- Added comprehensive docstring explaining when to use this dependency (system logs, user management, etc.)
+- Added to `__all__` exports for use in route dependencies
+
+**Key Features:**
+- Two-stage validation: authentication first, then authorization
+- Clear separation of concerns (401 for auth failure, 403 for insufficient permissions)
+- Follows existing code patterns in auth_middleware.py
+- Environment variable configuration allows easy admin user management
+
+**Configuration:**
+```bash
+# Example: Set admin users in .env
+ADMIN_USER_IDS="user-123,admin-user,john@example.com"
+```
+
+**Verification:**
+- Python syntax check passed
+- Code follows existing patterns
+- Proper error handling with specific error codes
+- Documentation clear and complete
+
+**Files Modified:**
+- backend/src/services/config.py (added admin_user_ids field and parsing)
+- backend/src/api/middleware/auth_middleware.py (added require_admin_context and _forbidden helper)
+
+**Commit:** 23edc9c
+
+**Status:** Ready for use in P2.9 (Protect system routes with admin auth)
