@@ -28,9 +28,11 @@ import type { ContextSettings } from '@/types/context';
 import type { CodeRAGStatusResponse } from '@/types/coderag';
 import { getCodeRAGStatus, initCodeRAG } from '@/services/coderag';
 import { SystemLogs } from '@/components/SystemLogs';
+import { useProjectContext } from '@/contexts/ProjectContext';
 
 export function Settings() {
   const navigate = useNavigate();
+  const { selectedProjectId, selectedProject, isLoading: projectsLoading } = useProjectContext();
   const [user, setUser] = useState<User | null>(null);
   const [apiToken, setApiToken] = useState<string>('');
   const [indexHealth, setIndexHealth] = useState<IndexHealth | null>(null);
@@ -56,9 +58,6 @@ export function Settings() {
   const [isReindexing, setIsReindexing] = useState(false);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Default project ID for CodeRAG (can be made configurable later)
-  const DEFAULT_PROJECT_ID = 'default';
-
   useEffect(() => {
     loadData();
   }, []);
@@ -71,14 +70,19 @@ export function Settings() {
 
   // T046: Load CodeRAG status
   const loadCodeRAGStatus = useCallback(async () => {
+    if (!selectedProjectId) {
+      setCoderagStatus(null);
+      return;
+    }
     try {
-      const status = await getCodeRAGStatus(DEFAULT_PROJECT_ID);
+      const status = await getCodeRAGStatus(selectedProjectId);
       setCoderagStatus(status);
     } catch (err) {
       console.debug('CodeRAG status not available:', err);
       // Not critical - CodeRAG may not be initialized
+      setCoderagStatus(null);
     }
-  }, []);
+  }, [selectedProjectId]);
 
   // T053: Polling for CodeRAG status during active indexing
   useEffect(() => {
@@ -103,6 +107,13 @@ export function Settings() {
       }
     };
   }, [coderagStatus?.status, loadCodeRAGStatus]);
+
+  // Reload CodeRAG status when project changes
+  useEffect(() => {
+    if (selectedProjectId && !projectsLoading) {
+      loadCodeRAGStatus();
+    }
+  }, [selectedProjectId, projectsLoading, loadCodeRAGStatus]);
 
   const loadData = async () => {
     try {
@@ -282,13 +293,18 @@ export function Settings() {
       return;
     }
 
+    if (!selectedProjectId) {
+      setError('No project selected. Please select a project first.');
+      return;
+    }
+
     setIsReindexing(true);
     setError(null);
 
     try {
       // Use current working directory as default target path
-      // In a real scenario, this would come from project settings
-      await initCodeRAG(DEFAULT_PROJECT_ID, '.', true, true);
+      // The target path comes from project settings (stored on backend)
+      await initCodeRAG(selectedProjectId, '.', true, true);
       // Reload status to show indexing in progress
       await loadCodeRAGStatus();
     } catch (err) {
@@ -549,7 +565,7 @@ export function Settings() {
         )}
 
         {/* T047-T054: Code Index Section */}
-        {coderagStatus ? (
+        {coderagStatus && selectedProject ? (
           <Card>
             <CardHeader>
               <CardTitle>Code Index</CardTitle>
@@ -558,6 +574,14 @@ export function Settings() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Project indicator */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Project:</span>
+                <Badge variant="outline">{selectedProject.name}</Badge>
+              </div>
+
+              <Separator />
+
               {/* T048: Chunk count and status display */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -616,6 +640,42 @@ export function Settings() {
 
               <div className="text-xs text-muted-foreground">
                 Re-indexing will scan your codebase and update the code search index.
+                This runs in the background and may take several minutes for large projects.
+              </div>
+            </CardContent>
+          </Card>
+        ) : selectedProject && !projectsLoading ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Code Index</CardTitle>
+              <CardDescription>
+                CodeRAG indexing status for code search
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Project indicator */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Project:</span>
+                <Badge variant="outline">{selectedProject.name}</Badge>
+              </div>
+
+              <Separator />
+
+              <div className="text-sm text-muted-foreground">
+                No code index found for this project. Click the button below to start indexing.
+              </div>
+
+              <Button
+                variant="outline"
+                disabled={isDemoMode || isReindexing}
+                onClick={handleReindex}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${isReindexing ? 'animate-spin' : ''}`} />
+                {isReindexing ? 'Starting...' : 'Initialize Code Index'}
+              </Button>
+
+              <div className="text-xs text-muted-foreground">
+                Indexing will scan your codebase and create a searchable code index.
                 This runs in the background and may take several minutes for large projects.
               </div>
             </CardContent>

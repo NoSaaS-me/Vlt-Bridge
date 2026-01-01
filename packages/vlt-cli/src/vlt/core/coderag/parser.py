@@ -16,28 +16,91 @@ logger = logging.getLogger(__name__)
 # Optional dependencies - graceful degradation if not installed
 try:
     from tree_sitter import Parser, Tree, Language
-    from tree_sitter_languages import get_language, get_parser
+    # tree-sitter-language-pack is the maintained replacement for tree-sitter-languages
+    # It's compatible with tree-sitter 0.25+ (the old package is not maintained)
+    try:
+        from tree_sitter_language_pack import get_language, get_parser
+    except ImportError:
+        # Fallback to deprecated tree-sitter-languages (works with tree-sitter < 0.23)
+        from tree_sitter_languages import get_language, get_parser
     TREE_SITTER_AVAILABLE = True
 except ImportError:
     TREE_SITTER_AVAILABLE = False
-    logger.warning("tree-sitter not available. Install with: pip install tree-sitter tree-sitter-languages")
+    logger.warning("tree-sitter not available. Install with: pip install tree-sitter tree-sitter-language-pack")
     Tree = Any  # Type hint placeholder
 
 
 # Language detection mapping: file extension -> tree-sitter language name
 EXTENSION_TO_LANGUAGE: Dict[str, str] = {
+    # Python
     '.py': 'python',
     '.pyi': 'python',
+    # JavaScript/TypeScript
     '.ts': 'typescript',
     '.tsx': 'tsx',
     '.js': 'javascript',
     '.jsx': 'javascript',
+    '.mjs': 'javascript',
+    '.cjs': 'javascript',
+    # Systems languages
     '.go': 'go',
     '.rs': 'rust',
+    '.c': 'c',
+    '.h': 'c',
+    '.cpp': 'cpp',
+    '.cc': 'cpp',
+    '.cxx': 'cpp',
+    '.hpp': 'cpp',
+    '.hxx': 'cpp',
+    # JVM languages
+    '.java': 'java',
+    '.kt': 'kotlin',
+    '.kts': 'kotlin',
+    '.scala': 'scala',
+    # .NET
+    '.cs': 'c_sharp',
+    # Ruby
+    '.rb': 'ruby',
+    '.rake': 'ruby',
+    # PHP
+    '.php': 'php',
+    # Swift/Objective-C
+    '.swift': 'swift',
+    '.m': 'objc',
+    '.mm': 'objc',
+    # Shell
+    '.sh': 'bash',
+    '.bash': 'bash',
+    '.zsh': 'bash',
+    # Markup/Config (useful for monorepos)
+    '.json': 'json',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+    '.toml': 'toml',
+    '.md': 'markdown',
+    # SQL
+    '.sql': 'sql',
+    # Elixir/Erlang
+    '.ex': 'elixir',
+    '.exs': 'elixir',
+    '.erl': 'erlang',
+    # Haskell
+    '.hs': 'haskell',
+    # Lua
+    '.lua': 'lua',
+    # R
+    '.r': 'r',
+    '.R': 'r',
 }
 
-# Supported languages
-SUPPORTED_LANGUAGES = {'python', 'typescript', 'tsx', 'javascript', 'go', 'rust'}
+# Supported languages (all languages with tree-sitter-languages support)
+SUPPORTED_LANGUAGES = {
+    'python', 'typescript', 'tsx', 'javascript', 'go', 'rust',
+    'c', 'cpp', 'java', 'kotlin', 'scala', 'c_sharp',
+    'ruby', 'php', 'swift', 'objc',
+    'bash', 'json', 'yaml', 'toml', 'markdown', 'sql',
+    'elixir', 'erlang', 'haskell', 'lua', 'r',
+}
 
 
 def detect_language(file_path: str) -> Optional[str]:

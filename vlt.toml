@@ -4,6 +4,8 @@ id = "vlt-bridge"
 description = ""
 
 [coderag]
+indexed_root = "/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge"
+indexed_at = "2026-01-01T12:39:19.648426+00:00"
 include = [
     "backend/**/*.py",
     "frontend/**/*.ts",

@@ -526,11 +526,11 @@ class CodeRAGIndexer:
             nodes, edges = build_graph(parsed_files, self.project_id)
 
             with Session(engine) as session:
-                # Store nodes
-                for node_dict in nodes:
+                # Store nodes (nodes are dataclass objects from graph.py, not dicts)
+                for graph_node in nodes:
                     try:
                         # Map node_type string to enum
-                        node_type_str = node_dict.get('node_type', 'function')
+                        node_type_str = graph_node.node_type or 'function'
                         node_type_map = {
                             'module': NodeType.MODULE,
                             'class': NodeType.CLASS,
@@ -541,14 +541,14 @@ class CodeRAGIndexer:
                         node_type = node_type_map.get(node_type_str, NodeType.FUNCTION)
 
                         node = CodeNode(
-                            id=node_dict['id'],
-                            project_id=node_dict['project_id'],
-                            file_path=node_dict['file_path'],
+                            id=graph_node.id,
+                            project_id=graph_node.project_id,
+                            file_path=graph_node.file_path,
                             node_type=node_type,
-                            name=node_dict['name'],
-                            signature=node_dict.get('signature'),
-                            lineno=node_dict.get('lineno'),
-                            docstring=node_dict.get('docstring'),
+                            name=graph_node.name,
+                            signature=graph_node.signature,
+                            lineno=graph_node.lineno,
+                            docstring=graph_node.docstring,
                             centrality_score=None,  # Will be calculated later
                         )
                         session.add(node)
@@ -556,11 +556,11 @@ class CodeRAGIndexer:
                     except Exception as e:
                         logger.error(f"Error storing node: {e}")
 
-                # Store edges
-                for edge_dict in edges:
+                # Store edges (edges are dataclass objects from graph.py, not dicts)
+                for graph_edge in edges:
                     try:
                         # Map edge_type string to enum
-                        edge_type_str = edge_dict.get('edge_type', 'calls')
+                        edge_type_str = graph_edge.edge_type or 'calls'
                         edge_type_map = {
                             'calls': EdgeType.CALLS,
                             'imports': EdgeType.IMPORTS,
@@ -572,12 +572,12 @@ class CodeRAGIndexer:
 
                         edge = CodeEdge(
                             id=str(uuid4()),
-                            project_id=edge_dict['project_id'],
-                            source_id=edge_dict['source_id'],
-                            target_id=edge_dict['target_id'],
+                            project_id=graph_edge.project_id,
+                            source_id=graph_edge.source_id,
+                            target_id=graph_edge.target_id,
                             edge_type=edge_type,
-                            lineno=edge_dict.get('lineno'),
-                            count=edge_dict.get('count', 1),
+                            lineno=graph_edge.lineno,
+                            count=1,  # Default count
                         )
                         session.add(edge)
                         self.stats.graph_edges += 1

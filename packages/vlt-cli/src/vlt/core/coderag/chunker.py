@@ -116,7 +116,7 @@ def chunk_file(
         splitter = CodeSplitter(
             language=language,
             chunk_lines=chunk_lines,
-            chunk_overlap=chunk_lines_overlap,
+            chunk_lines_overlap=chunk_lines_overlap,
             max_chars=max_chars,
         )
 
@@ -263,11 +263,38 @@ def _find_chunk_node(root_node: Any, chunk_text: str, source: bytes, language: s
     # Define function/class node types per language
     target_types = {
         'python': ('function_definition', 'class_definition'),
-        'typescript': ('function_declaration', 'method_definition', 'class_declaration'),
-        'tsx': ('function_declaration', 'method_definition', 'class_declaration'),
-        'javascript': ('function_declaration', 'method_definition', 'class_declaration'),
-        'go': ('function_declaration', 'method_declaration'),
-        'rust': ('function_item', 'impl_item'),
+        'typescript': ('function_declaration', 'method_definition', 'class_declaration', 'arrow_function'),
+        'tsx': ('function_declaration', 'method_definition', 'class_declaration', 'arrow_function'),
+        'javascript': ('function_declaration', 'method_definition', 'class_declaration', 'arrow_function'),
+        'go': ('function_declaration', 'method_declaration', 'type_declaration'),
+        'rust': ('function_item', 'impl_item', 'struct_item', 'enum_item', 'trait_item'),
+        # Systems languages
+        'c': ('function_definition', 'struct_specifier'),
+        'cpp': ('function_definition', 'class_specifier', 'struct_specifier', 'namespace_definition'),
+        # JVM languages
+        'java': ('method_declaration', 'class_declaration', 'interface_declaration', 'enum_declaration'),
+        'kotlin': ('function_declaration', 'class_declaration', 'object_declaration'),
+        'scala': ('function_definition', 'class_definition', 'object_definition', 'trait_definition'),
+        # .NET
+        'c_sharp': ('method_declaration', 'class_declaration', 'interface_declaration', 'struct_declaration'),
+        # Ruby
+        'ruby': ('method', 'class', 'module', 'singleton_method'),
+        # PHP
+        'php': ('function_definition', 'method_declaration', 'class_declaration', 'interface_declaration'),
+        # Swift/Objective-C
+        'swift': ('function_declaration', 'class_declaration', 'struct_declaration', 'protocol_declaration'),
+        'objc': ('function_definition', 'method_definition', 'class_interface', 'protocol_declaration'),
+        # Shell (functions only)
+        'bash': ('function_definition',),
+        # Elixir/Erlang
+        'elixir': ('call',),  # def/defp are calls in elixir grammar
+        'erlang': ('function_clause',),
+        # Haskell
+        'haskell': ('function', 'type_declaration'),
+        # Lua
+        'lua': ('function_declaration', 'local_function_declaration'),
+        # R
+        'r': ('function_definition',),
     }
 
     node_types = target_types.get(language, ())
@@ -337,14 +364,46 @@ def _get_chunk_type(node_type: str, language: str) -> str:
         Chunk type string ('function', 'method', 'class', etc.)
     """
     type_map = {
+        # Functions
         'function_definition': 'function',
         'function_declaration': 'function',
+        'function_item': 'function',
+        'local_function_declaration': 'function',
+        'arrow_function': 'function',
+        'function_clause': 'function',
+        'function': 'function',
+        # Methods
         'method_definition': 'method',
         'method_declaration': 'method',
+        'method': 'method',
+        'singleton_method': 'method',
+        # Classes
         'class_definition': 'class',
         'class_declaration': 'class',
-        'function_item': 'function',
+        'class_specifier': 'class',
+        'class_interface': 'class',
+        # Structs/Types
+        'struct_specifier': 'struct',
+        'struct_declaration': 'struct',
+        'struct_item': 'struct',
+        'type_declaration': 'type',
+        # Interfaces/Protocols/Traits
+        'interface_declaration': 'interface',
+        'protocol_declaration': 'protocol',
+        'trait_item': 'trait',
+        'trait_definition': 'trait',
+        # Enums
+        'enum_declaration': 'enum',
+        'enum_item': 'enum',
+        # Modules/Namespaces
+        'module': 'module',
+        'namespace_definition': 'namespace',
+        'object_declaration': 'object',
+        'object_definition': 'object',
+        # Rust-specific
         'impl_item': 'impl',
+        # Elixir - def/defp are parsed as calls
+        'call': 'function',
     }
     return type_map.get(node_type, 'code')
 

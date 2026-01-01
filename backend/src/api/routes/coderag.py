@@ -103,12 +103,17 @@ async def get_coderag_status(
                 started_at=job_data.get("started_at"),
             )
 
+        # Extract stats from index_stats if present, else use top-level (for compatibility)
+        index_stats = result.get("index_stats", {})
+        file_count = index_stats.get("files_count", result.get("file_count", 0))
+        chunk_count = index_stats.get("chunks_count", result.get("chunk_count", 0))
+
         return CodeRAGStatusResponse(
             project_id=result.get("project_id", project_id),
             status=result.get("status", "not_initialized"),
-            file_count=result.get("file_count", 0),
-            chunk_count=result.get("chunk_count", 0),
-            last_indexed_at=result.get("last_indexed_at"),
+            file_count=file_count,
+            chunk_count=chunk_count,
+            last_indexed_at=result.get("last_indexed_at") or result.get("completed_at"),
             error_message=result.get("error_message"),
             active_job=active_job,
         )

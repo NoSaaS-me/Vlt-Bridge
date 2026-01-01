@@ -477,7 +477,9 @@ export function ChatMessage({
           <div className="space-y-2">
             <div className="text-xs font-medium text-muted-foreground">Sources</div>
             <div className="flex flex-wrap gap-2">
-              {oracleMsg.sources.map((source, i) => (
+              {oracleMsg.sources
+                .filter(source => source.source_path) // Filter out sources without source_path
+                .map((source, i) => (
                 <button
                   key={i}
                   onClick={() => onSourceClick(source.source_path)}

@@ -36,7 +36,7 @@ Example Usage:
         print(f"{chunk['qualified_name']}: {chunk['chunk_type']}")
 
     # Graph building
-    from tree_sitter_languages import get_parser
+    from tree_sitter_language_pack import get_parser
     from vlt.core.coderag.graph import build_graph
 
     parsed_files = {}

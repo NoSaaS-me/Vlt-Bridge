@@ -54,6 +54,31 @@ class OracleBridgeError(Exception):
         self.details = details or {}
 
 
+def _find_vlt_command() -> str:
+    """Find vlt CLI executable, checking common locations.
+
+    Priority order:
+    1. VLT_CLI_PATH environment variable
+    2. packages/vlt-cli/.venv/bin/vlt (local venv)
+    3. 'vlt' in PATH
+    """
+    # 1. Check env var
+    env_path = os.getenv("VLT_CLI_PATH")
+    if env_path and os.path.isfile(env_path):
+        logger.info(f"Using vlt from VLT_CLI_PATH: {env_path}")
+        return env_path
+
+    # 2. Check packages/vlt-cli/.venv/bin/vlt
+    project_root = Path(__file__).parent.parent.parent.parent
+    vlt_venv_path = project_root / "packages" / "vlt-cli" / ".venv" / "bin" / "vlt"
+    if vlt_venv_path.exists():
+        logger.info(f"Using vlt from local venv: {vlt_venv_path}")
+        return str(vlt_venv_path)
+
+    # 3. Fall back to PATH
+    return "vlt"
+
+
 class OracleBridge:
     """
     Bridge service that integrates Document-MCP with vlt-cli oracle and coderag.
@@ -63,14 +88,14 @@ class OracleBridge:
     coupling to internal vlt modules.
     """
 
-    def __init__(self, vlt_command: str = "vlt"):
+    def __init__(self, vlt_command: Optional[str] = None):
         """
         Initialize the oracle bridge.
 
         Args:
-            vlt_command: Path to vlt CLI executable (default: "vlt" from PATH)
+            vlt_command: Path to vlt CLI executable (auto-detected if None)
         """
-        self.vlt_command = vlt_command
+        self.vlt_command = vlt_command or _find_vlt_command()
         # Store conversation history per user session
         # Key: user_id, Value: list of conversation messages
         self._conversation_history: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -80,7 +105,7 @@ class OracleBridge:
         self._coderag_initialized: Optional[bool] = None
 
     def _check_vlt_available(self) -> bool:
-        """Check if vlt command is available in PATH.
+        """Check if vlt command is available.
 
         Returns:
             True if vlt is available, False otherwise
@@ -89,14 +114,19 @@ class OracleBridge:
             return self._vlt_available
 
         try:
+            # Use --help since vlt doesn't have --version
             result = subprocess.run(
-                [self.vlt_command, "--version"],
+                [self.vlt_command, "--help"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
+            # --help returns 0 on success
             self._vlt_available = result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            if self._vlt_available:
+                logger.info(f"vlt CLI available at: {self.vlt_command}")
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            logger.warning(f"Failed to check vlt availability: {e}")
             self._vlt_available = False
 
         if not self._vlt_available:

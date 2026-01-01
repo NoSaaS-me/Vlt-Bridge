@@ -1273,20 +1273,95 @@ def link(source_node_id: str, target_thread: str, note: str = "Relates to"):
 # ============================================================================
 
 
+def _fetch_server_projects(console: Console) -> list[dict] | None:
+    """Fetch projects from the backend server.
+
+    Returns:
+        List of project dicts with 'id', 'name', 'description' keys, or None on error.
+    """
+    import httpx
+    from vlt.config import settings
+
+    vault_url = settings.vault_url
+    sync_token = settings.sync_token
+
+    if not vault_url:
+        console.print("[yellow]No vault_url configured. Using local projects only.[/yellow]")
+        return None
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            headers = {"Authorization": f"Bearer {sync_token}"} if sync_token else {}
+            response = client.get(f"{vault_url}/api/projects", headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("projects", [])
+    except httpx.ConnectError:
+        console.print(f"[yellow]Cannot connect to server at {vault_url}. Using local projects.[/yellow]")
+        return None
+    except Exception as e:
+        console.print(f"[yellow]Error fetching projects from server: {e}[/yellow]")
+        return None
+
+
+def _create_server_project(console: Console, name: str, description: str = "") -> dict | None:
+    """Create a project on the backend server.
+
+    Returns:
+        Created project dict with 'id', 'name' keys, or None on error.
+    """
+    import httpx
+    from vlt.config import settings
+
+    vault_url = settings.vault_url
+    sync_token = settings.sync_token
+
+    if not vault_url:
+        return None
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            headers = {
+                "Authorization": f"Bearer {sync_token}",
+                "Content-Type": "application/json",
+            } if sync_token else {"Content-Type": "application/json"}
+            response = client.post(
+                f"{vault_url}/api/projects",
+                headers=headers,
+                json={"name": name, "description": description},
+            )
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        console.print(f"[red]Error creating project on server: {e}[/red]")
+        return None
+
+
 def _interactive_project_selection(console: Console, svc: SqliteVaultService) -> str | None:
     """Interactive project selection with create option (T011-T014).
 
-    Displays a numbered list of existing projects (marking those with existing
-    CodeRAG indexes with a checkmark), plus an option to create a new project.
+    Fetches projects from the backend server (with fallback to local projects),
+    displays them with CodeRAG index status, and allows creating new projects.
 
     Args:
         console: Rich Console for styled output
-        svc: SqliteVaultService for project operations
+        svc: SqliteVaultService for local project operations and index checking
 
     Returns:
         Selected project ID or None if user cancels
     """
-    projects = svc.list_projects()
+    # Try to fetch projects from server first, fall back to local
+    server_projects = _fetch_server_projects(console)
+
+    if server_projects is not None:
+        projects = server_projects
+        using_server = True
+        console.print("[dim]Fetched projects from server.[/dim]")
+    else:
+        # Fallback to local projects
+        local_projects = svc.list_projects()
+        projects = [{"id": p.id, "name": p.name, "description": getattr(p, 'description', '')} for p in local_projects]
+        using_server = False
 
     # T012: Numbered project list display
     if not projects:
@@ -1298,9 +1373,21 @@ def _interactive_project_selection(console: Console, svc: SqliteVaultService) ->
                 console.print("[red]Project name cannot be empty.[/red]")
                 return None
             try:
-                project = svc.create_project(name, "Created via coderag init")
-                console.print(f"[green]Created project '{project.name}' (id: {project.id})[/green]")
-                return project.id
+                if using_server:
+                    project = _create_server_project(console, name, "Created via vlt init")
+                    if project:
+                        # Also create locally for index tracking
+                        try:
+                            svc.create_project(name, "Created via vlt init", project_id=project["id"])
+                        except Exception:
+                            pass  # Local creation is optional
+                        console.print(f"[green]Created project '{project['name']}' (id: {project['id']})[/green]")
+                        return project["id"]
+                    return None
+                else:
+                    project = svc.create_project(name, "Created via vlt init")
+                    console.print(f"[green]Created project '{project.name}' (id: {project.id})[/green]")
+                    return project.id
             except Exception as e:
                 console.print(f"[red]Error creating project: {e}[/red]")
                 return None
@@ -1309,13 +1396,17 @@ def _interactive_project_selection(console: Console, svc: SqliteVaultService) ->
     # Display project list with index status
     console.print()
     console.print("[bold]Available Projects:[/bold]")
+    if using_server:
+        console.print("[dim](from server)[/dim]")
     console.print()
 
     for i, proj in enumerate(projects, 1):
-        has_index = svc.has_coderag_index(proj.id)
+        proj_id = proj["id"] if isinstance(proj, dict) else proj.id
+        proj_name = proj["name"] if isinstance(proj, dict) else proj.name
+        has_index = svc.has_coderag_index(proj_id)
         # T012: Mark projects with existing indexes
         index_marker = "[green]\u2713[/green]" if has_index else "[ ]"
-        console.print(f"  {i}. [{index_marker}] {proj.name} [dim]({proj.id})[/dim]")
+        console.print(f"  {i}. [{index_marker}] {proj_name} [dim]({proj_id})[/dim]")
 
     # T013: Add "Create new project" option
     create_option = len(projects) + 1
@@ -1339,7 +1430,8 @@ def _interactive_project_selection(console: Console, svc: SqliteVaultService) ->
     if idx <= len(projects):
         # User selected an existing project
         selected = projects[idx - 1]
-        return selected.id
+        proj_id = selected["id"] if isinstance(selected, dict) else selected.id
+        return proj_id
     else:
         # T014: User chose to create a new project
         try:
@@ -1347,9 +1439,22 @@ def _interactive_project_selection(console: Console, svc: SqliteVaultService) ->
             if not name.strip():
                 console.print("[red]Project name cannot be empty.[/red]")
                 return None
-            project = svc.create_project(name, "Created via coderag init")
-            console.print(f"[green]Created project '{project.name}' (id: {project.id})[/green]")
-            return project.id
+
+            if using_server:
+                project = _create_server_project(console, name, "Created via vlt init")
+                if project:
+                    # Also create locally for index tracking
+                    try:
+                        svc.create_project(name, "Created via vlt init", project_id=project["id"])
+                    except Exception:
+                        pass  # Local creation is optional
+                    console.print(f"[green]Created project '{project['name']}' (id: {project['id']})[/green]")
+                    return project["id"]
+                return None
+            else:
+                project = svc.create_project(name, "Created via vlt init")
+                console.print(f"[green]Created project '{project.name}' (id: {project.id})[/green]")
+                return project.id
         except KeyboardInterrupt:
             console.print("\n[dim]Cancelled.[/dim]")
             return None

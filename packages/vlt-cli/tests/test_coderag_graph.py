@@ -4,9 +4,10 @@ import pytest
 
 # Skip all tests if tree-sitter is not available
 pytest.importorskip("tree_sitter")
-pytest.importorskip("tree_sitter_languages")
+# tree-sitter-language-pack is the maintained replacement for tree-sitter-languages
+pytest.importorskip("tree_sitter_language_pack")
 
-from tree_sitter_languages import get_parser
+from tree_sitter_language_pack import get_parser
 from vlt.core.coderag.graph import (
     build_graph,
     extract_nodes,

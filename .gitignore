@@ -75,3 +75,6 @@ docs/
 # Generated reports
 AUDIT_REPORT.md
 BACKEND_AUDIT_REPORT.md
+
+# Auto Claude data directory
+.auto-claude/

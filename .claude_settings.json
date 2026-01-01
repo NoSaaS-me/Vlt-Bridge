@@ -1,0 +1,34 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/**)",
+      "Write(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/**)",
+      "Edit(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/**)",
+      "Glob(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/**)",
+      "Grep(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/**)",
+      "Read(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.auto-claude/ideation/**)",
+      "Write(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.auto-claude/ideation/**)",
+      "Edit(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.auto-claude/ideation/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__get-library-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}
