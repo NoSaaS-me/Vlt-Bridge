@@ -1,25 +1,25 @@
 {
   "active": true,
-  "spec": "003-enforce-authentication-on-sensitive-api-routes",
+  "spec": "006-add-copy-from-chat-window",
   "state": "building",
   "subtasks": {
-    "completed": 7,
-    "total": 20,
+    "completed": 3,
+    "total": 4,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Protect Sensitive Routes",
+    "current": "Testing and Verification",
     "id": null,
-    "total": 10
+    "total": 1
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 9,
-    "started_at": "2026-01-01T07:25:00.058860"
+    "number": 2,
+    "started_at": "2026-01-01T10:07:21.110024"
   },
-  "last_update": "2026-01-01T07:44:09.098308"
+  "last_update": "2026-01-01T10:09:41.056085"
 }
