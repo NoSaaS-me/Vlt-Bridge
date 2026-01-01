@@ -35,6 +35,35 @@ const previewCache = new Map<string, NotePreview>();
 const slugCache = new Map<string, number>();
 
 /**
+ * T044: Performance optimization - Track inflight requests for deduplication
+ * Prevents multiple simultaneous requests for the same link
+ */
+const inflightRequests = new Map<string, Promise<NotePreview | null>>();
+
+/**
+ * T044: Performance optimization - Limit concurrent fetches
+ * Queue to manage preview fetch requests
+ */
+const fetchQueue: Array<() => void> = [];
+let activeFetchCount = 0;
+const MAX_CONCURRENT_FETCHES = 3;
+
+/**
+ * T044: Process next item in fetch queue if under concurrency limit
+ */
+function processQueue(): void {
+  if (activeFetchCount >= MAX_CONCURRENT_FETCHES || fetchQueue.length === 0) {
+    return;
+  }
+
+  const nextFetch = fetchQueue.shift();
+  if (nextFetch) {
+    activeFetchCount++;
+    nextFetch();
+  }
+}
+
+/**
  * T040: Slugify heading text to create valid HTML IDs
  * Handles duplicates by appending -2, -3, etc.
  */
@@ -88,18 +117,52 @@ function WikilinkPreview({
   const longPressTimerRef = React.useRef<NodeJS.Timeout | null>(null);
   const initialPointerRef = React.useRef<{ x: number; y: number } | null>(null);
 
+  // T044: Abort controller for canceling stale requests
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+
   // T090: Control open state based on hover OR focus OR long-press
   const shouldBeOpen = isOpen || isFocused || isLongPressed;
 
   // T023: Fetch preview when hover card opens (hover or focus)
+  // T044: Enhanced with request deduplication, abort on hover-out, and concurrency limiting
   React.useEffect(() => {
-    if (!shouldBeOpen) return;
+    if (!shouldBeOpen) {
+      // T044: Abort any inflight requests when card closes
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      return;
+    }
+
+    // Create new abort controller for this request
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
 
     // Start loading
     setIsLoading(true);
 
     const fetchPreview = async () => {
       try {
+        // T044: Check for inflight request (deduplication)
+        if (inflightRequests.has(linkText)) {
+          // Reuse existing inflight request
+          const result = await inflightRequests.get(linkText)!;
+
+          // Check if request was aborted
+          if (abortController.signal.aborted) return;
+
+          if (result) {
+            setPreview(result);
+            setIsBroken(false);
+          } else {
+            setIsBroken(true);
+            setPreview(null);
+          }
+          setIsLoading(false);
+          return;
+        }
+
         // Step 1: Resolve wikilink text to note path (with caching)
         let targetPath: string | null = null;
 
@@ -107,9 +170,19 @@ function WikilinkPreview({
           // Use cached resolution
           targetPath = resolutionCache.get(linkText)!;
         } else {
-          // Resolve and cache the result
-          const resolution = await resolveWikilink(linkText);
-          targetPath = resolution.is_resolved ? resolution.target_path : null;
+          // T044: Start a new inflight request promise
+          const resolutionPromise = (async () => {
+            const resolution = await resolveWikilink(linkText);
+            return resolution.is_resolved ? resolution.target_path : null;
+          })();
+
+          targetPath = await resolutionPromise;
+
+          // Check if request was aborted
+          if (abortController.signal.aborted) {
+            return null;
+          }
+
           resolutionCache.set(linkText, targetPath);
         }
 
@@ -118,7 +191,7 @@ function WikilinkPreview({
           setIsBroken(true);
           setPreview(null);
           setIsLoading(false);
-          return;
+          return null;
         }
 
         // Step 2: Fetch preview data for resolved path (with caching)
@@ -130,22 +203,69 @@ function WikilinkPreview({
         } else {
           // Fetch and cache preview data
           previewData = await getNotePreview(targetPath);
+
+          // Check if request was aborted
+          if (abortController.signal.aborted) {
+            return null;
+          }
+
           previewCache.set(targetPath, previewData);
         }
 
         // Display the preview
         setPreview(previewData);
         setIsBroken(false);
+        return previewData;
       } catch (error) {
+        // Ignore abort errors
+        if (abortController.signal.aborted) {
+          return null;
+        }
+
         // T026: Handle broken wikilinks
         setIsBroken(true);
         setPreview(null);
+        return null;
       } finally {
-        setIsLoading(false);
+        // Only update loading state if not aborted
+        if (!abortController.signal.aborted) {
+          setIsLoading(false);
+        }
       }
     };
 
-    fetchPreview();
+    // T044: Queue the fetch with concurrency limiting
+    const executeFetch = () => {
+      const fetchPromise = fetchPreview();
+
+      // Track inflight request
+      inflightRequests.set(linkText, fetchPromise);
+
+      fetchPromise.finally(() => {
+        // Clean up inflight request
+        inflightRequests.delete(linkText);
+
+        // Decrease active count and process next in queue
+        activeFetchCount--;
+        processQueue();
+      });
+    };
+
+    // Add to queue or execute immediately
+    if (activeFetchCount < MAX_CONCURRENT_FETCHES) {
+      activeFetchCount++;
+      executeFetch();
+    } else {
+      fetchQueue.push(executeFetch);
+    }
+
+    // Cleanup on unmount or when shouldBeOpen changes
+    return () => {
+      if (abortControllerRef.current === abortController) {
+        abortController.abort();
+        abortControllerRef.current = null;
+      }
+    };
   }, [shouldBeOpen, linkText]);
 
   // T043: Cleanup long-press timer on unmount

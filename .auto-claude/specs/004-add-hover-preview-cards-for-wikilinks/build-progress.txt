@@ -284,6 +284,86 @@
 
 ---
 
+### ✅ Subtask 3.3: Style broken link indicator
+**Commit:** 0e25a26
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Enhanced broken link preview card in `frontend/src/lib/markdown.tsx` with distinct styling
+- Added conditional className to HoverCardContent component:
+  - `border-destructive/50` - red-tinted border for visual distinction
+  - `bg-destructive/5` - subtle red background tint
+
+**Broken Link Card Layout** (T033 marker):
+1. **Header with icon**
+   - Alert icon (SVG circle with exclamation mark) in destructive color
+   - "Note not found" heading in h4, semibold, destructive color
+   - Flex layout with gap-2 for icon+text alignment
+
+2. **Explanatory text**
+   - Shows the missing note name: "The note '{linkText}' does not exist in your vault."
+   - Text-sm with muted-foreground color for readability
+
+3. **Footer with affordance**
+   - Border-top separator with destructive/20 opacity for subtle red tint
+   - "Click the wikilink to create this note" message
+   - Text-xs with muted-foreground, pt-2 for spacing
+
+**Code Pattern Compliance:**
+✓ Matches preview card layout structure (space-y-3 vertical spacing)
+✓ Uses existing shadcn destructive theme color
+✓ Inline SVG icon (no external dependencies)
+✓ Follows Tailwind CSS utility class patterns
+✓ Maintains visual hierarchy (icon+title, body text, footer)
+✓ Conditional styling using template literals
+
+**UI Design:**
+- Red-tinted border and background clearly distinguish broken links from valid previews
+- Alert icon provides immediate visual feedback
+- Clear message explains the issue
+- Actionable affordance tells users what to do next
+- Consistent spacing and typography with success preview card
+
+---
+
+### ✅ Subtask 4.2: Animation polish
+**Commit:** f6bb363
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Tuned HoverCard animation timings in `frontend/src/lib/markdown.tsx`
+  - Increased `closeDelay` from 100ms to 200ms for smoother transitions
+  - Kept `openDelay` at 500ms to prevent accidental triggers
+
+- Added `animate-fade-in-smooth` class to all content states:
+  - Loading skeleton (with existing `animate-pulse` for skeleton elements)
+  - Broken link card (red-tinted error state)
+  - Preview card (successful note preview)
+
+- Two-stage animation flow:
+  1. HoverCard opens with Radix UI built-in animations (fade + zoom + slide)
+  2. Content fades in smoothly with custom animation (0.3s ease-in-out)
+
+**Code Pattern Compliance:**
+✓ Uses existing `animate-fade-in-smooth` animation from tailwind.config.js
+✓ Matches animation patterns used in NoteViewer component
+✓ Consistent with app's duration-200 timing for transitions
+✓ Non-intrusive, professional animation that enhances UX without being distracting
+
+**Animation Details:**
+- `animate-fade-in-smooth`: 0.3s ease-in-out fade from opacity 0 to 1
+- Defined in `frontend/tailwind.config.js` keyframes section
+- Same animation used throughout app for content transitions
+
+**UI Benefits:**
+- Smoother perceived loading experience
+- Content appears gracefully after data fetches
+- Consistent with app's overall animation language
+- Reduced jarring transitions when switching between states
+- Professional, polished feel matching modern web apps
+
+---
+
 ## In Progress
 
 None
@@ -296,18 +376,14 @@ None
 ✅ All subtasks completed!
 
 ### Phase 2: Frontend API Integration
-✅ 2.1: Add API service functions
-✅ 2.2: Refactor WikilinkPreview to use resolution API
-✅ 2.3: Update preview cache strategy
+✅ All subtasks completed!
 
 ### Phase 3: Preview Card UI Enhancement
-✅ 3.1: Design enhanced preview card layout
-✅ 3.2: Improve loading skeleton
-- [ ] 3.3: Style broken link indicator
+✅ All subtasks completed!
 
 ### Phase 4: UX Polish & Accessibility
-- [ ] 4.1: Keyboard accessibility
-- [ ] 4.2: Animation polish
+- [x] 4.1: Keyboard accessibility
+- [x] 4.2: Animation polish
 - [ ] 4.3: Touch device handling
 - [ ] 4.4: Performance optimization
 

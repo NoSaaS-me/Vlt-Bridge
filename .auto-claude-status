@@ -3,23 +3,23 @@
   "spec": "004-add-hover-preview-cards-for-wikilinks",
   "state": "building",
   "subtasks": {
-    "completed": 7,
+    "completed": 12,
     "total": 15,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Preview Card UI Enhancement",
+    "current": "UX Polish & Accessibility",
     "id": null,
-    "total": 3
+    "total": 4
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 9,
+    "number": 14,
     "started_at": "2026-01-01T07:24:59.280697"
   },
-  "last_update": "2026-01-01T07:46:42.712571"
+  "last_update": "2026-01-01T08:00:06.373767"
 }

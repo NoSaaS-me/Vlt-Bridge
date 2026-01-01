@@ -127,11 +127,12 @@
           "id": "3.3",
           "title": "Style broken link indicator",
           "description": "Show distinct card for broken links: red-tinted border, 'Note not found' message, and optional 'Click to create' affordance",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Enhanced broken link preview card with distinct styling in frontend/src/lib/markdown.tsx\n\u2713 Added red-tinted border (border-destructive/50) and background (bg-destructive/5) to HoverCardContent when isBroken=true\n\u2713 Created rich broken link card layout matching preview card structure:\n  - Alert icon (SVG circle with exclamation mark) in destructive color\n  - \"Note not found\" heading in destructive color\n  - Explanatory text showing the missing note name\n  - Footer with \"Click to create\" affordance and red-tinted border separator\n\u2713 Follows existing code patterns (Tailwind CSS utilities, space-y-3 layout, consistent with success card)\n\u2713 Maintains visual hierarchy and professional appearance\n\u2713 Committed: 0e25a26",
           "files": [
             "frontend/src/lib/markdown.tsx"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:50:32.289467+00:00"
         }
       ]
     },
@@ -145,31 +146,34 @@
           "id": "4.1",
           "title": "Keyboard accessibility",
           "description": "Ensure preview cards are accessible: Tab to focus wikilink, Enter to navigate, Escape to dismiss preview. Add ARIA attributes",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Added keyboard accessibility support for wikilink preview cards\n\u2713 Preview automatically shows when wikilink receives focus (Tab navigation)\n\u2713 Enter/Space keys navigate to the linked note (existing behavior maintained)\n\u2713 Escape key dismisses preview (Radix UI built-in functionality)\n\u2713 Added comprehensive ARIA attributes:\n  - aria-label on wikilink spans with usage instructions for screen readers\n  - aria-haspopup=\"dialog\" to indicate popup behavior\n  - aria-label on HoverCardContent to describe preview content dynamically\n\u2713 Enhanced broken wikilink renderer with keyboard handlers (Enter/Space to create)\n\u2713 Preview shows on both focus AND hover for better accessibility\n\u2713 Screen reader friendly with descriptive labels explaining interaction\n\u2713 Committed: 167a800",
           "files": [
             "frontend/src/lib/markdown.tsx"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:54:12.003475+00:00"
         },
         {
           "id": "4.2",
           "title": "Animation polish",
           "description": "Tune HoverCard open/close animations. Add subtle fade-in for content after loading completes. Match existing app animation patterns",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Tuned HoverCard animation timings for smoother transitions\n\u2713 Increased closeDelay from 100ms to 200ms (matches app patterns)\n\u2713 Added animate-fade-in-smooth class to all content states (loading, broken, preview)\n\u2713 Content now fades in smoothly (0.3s ease-in-out) after loading completes\n\u2713 Two-stage animation: HoverCard opens with Radix UI animations, then content fades in\n\u2713 Matches existing app animation patterns from tailwind.config.js\n\u2713 Committed: f6bb363",
           "files": [
             "frontend/src/lib/markdown.tsx"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:56:45.861323+00:00"
         },
         {
           "id": "4.3",
           "title": "Touch device handling",
           "description": "On touch devices, long-press to show preview (since hover doesn't work). Use PointerEvents or touch event detection",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Added touch device support with long-press functionality using PointerEvents API\n\u2713 Implemented long-press timer (500ms threshold matching openDelay)\n\u2713 Added movement detection to cancel long-press if user scrolls/drags (10px threshold)\n\u2713 Handles pointer events: pointerdown, pointermove, pointerup, pointercancel\n\u2713 Only triggers on touch input (not mouse) via pointerType check\n\u2713 Cleanup effect properly clears timers on unmount\n\u2713 Integrated with existing hover/focus logic - preview shows on hover OR focus OR long-press\n\u2713 Preview dismisses when card closes via handleOpenChange\n\u2713 Follows React patterns (useState, useRef, useEffect)\n\u2713 Proper TypeScript typing for all event handlers\n\u2713 Committed: c8ba1e2",
           "files": [
             "frontend/src/lib/markdown.tsx"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:59:48.612167+00:00"
         },
         {
           "id": "4.4",
@@ -235,5 +239,5 @@
       "backend/src/api/routes/search.py - add resolution endpoint here"
     ]
   },
-  "last_updated": "2026-01-01T13:47:49.422879+00:00"
+  "last_updated": "2026-01-01T13:59:48.612177+00:00"
 }
