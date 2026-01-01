@@ -296,7 +296,108 @@ This repo uses the SpecKit methodology for feature planning:
 - **Slash commands**: `/speckit.specify`, `/speckit.plan`, `/speckit.tasks`, `/speckit.implement`
 - **Scripts**: `.specify/scripts/bash/` (feature scaffolding, context updates)
 
-Implemented features: `001-obsidian-docs-viewer`, `002-add-graph-view`, `003-ai-chat-window`, `004-gemini-vault-chat`, `006-ui-polish`
+Implemented features: `001-obsidian-docs-viewer`, `002-add-graph-view`, `003-ai-chat-window`, `004-gemini-vault-chat`, `006-ui-polish`, `011-coderag-project-init`
+
+## CodeRAG Commands
+
+The vlt CLI includes CodeRAG functionality for indexing and searching codebases with hybrid retrieval (vector + BM25 + graph).
+
+### Initialize Code Index
+
+```bash
+# Interactive project selection
+vlt coderag init
+
+# Specify project directly
+vlt coderag init --project <project-id>
+
+# Index specific directory
+vlt coderag init --project <project-id> --path /path/to/codebase
+
+# Force re-index (overwrite existing)
+vlt coderag init --project <project-id> --force
+
+# Run in foreground with progress display
+vlt coderag init --project <project-id> --foreground
+```
+
+**Notes:**
+- By default, indexing runs in background via the daemon
+- If daemon is not running, you will be prompted to run in foreground
+- Existing indexes require `--force` to overwrite
+
+### Check Indexing Status
+
+```bash
+# Human-readable status
+vlt coderag status --project <project-id>
+
+# JSON output for scripting
+vlt coderag status --project <project-id> --json
+```
+
+**Status values:**
+- `pending`: Job queued, waiting for daemon
+- `running`: Indexing in progress
+- `completed`: Indexing finished successfully
+- `failed`: Indexing failed (check error_message)
+- `cancelled`: Job was cancelled by user
+
+### Search Code Index
+
+```bash
+# Semantic search
+vlt coderag search "function that handles authentication" --project <project-id>
+
+# Limit results
+vlt coderag search "error handling" --project <project-id> --limit 5
+```
+
+### Repository Map
+
+```bash
+# Generate overview of codebase structure
+vlt coderag map --project <project-id>
+
+# Focus on specific directory
+vlt coderag map --project <project-id> --scope src/api/
+```
+
+### Daemon Management (for background indexing)
+
+```bash
+# Start daemon
+vlt daemon start
+
+# Stop daemon
+vlt daemon stop
+
+# Check daemon status
+vlt daemon status
+```
+
+### Supported Languages
+
+CodeRAG supports: `python`, `typescript`, `tsx`, `javascript`, `go`, `rust`
+
+Files matching patterns in `coderag.toml` (or default `**/*.py`) are indexed.
+
+### Configuration (coderag.toml)
+
+Place in project root for custom settings:
+
+```toml
+[coderag]
+include = ["**/*.py", "**/*.ts", "**/*.tsx"]
+exclude = ["**/node_modules/**", "**/.venv/**", "**/dist/**"]
+
+[coderag.embedding]
+batch_size = 10
+
+[coderag.repomap]
+max_tokens = 4000
+include_signatures = true
+```
 
 ## MCP Client Configuration
 

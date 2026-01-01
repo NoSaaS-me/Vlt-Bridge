@@ -450,3 +450,179 @@ except Exception as e:
 - [ ] Progress bar updates during active indexing
 - [ ] Project deletion cleans up CodeRAG data
 - [ ] Job cancellation works from CLI and API
+
+---
+
+## End-to-End Validation Scenarios (T067)
+
+This section documents the scenarios that should be manually tested to validate the full feature.
+
+### Scenario 1: Fresh Project Interactive Init
+
+**Steps:**
+1. Ensure no projects exist: `vlt project list`
+2. Navigate to a codebase directory with Python files
+3. Run `vlt coderag init` (no flags)
+4. When prompted, select "Create new project"
+5. Enter project name and confirm
+
+**Expected:**
+- Interactive prompt appears for project creation
+- New project is created
+- Indexing starts (foreground or background depending on daemon status)
+- Progress is displayed
+- Status command shows indexed files
+
+### Scenario 2: Background Indexing with Daemon
+
+**Steps:**
+1. Start the daemon: `vlt daemon start`
+2. Run `vlt coderag init --project <id> --path <codebase>`
+3. Immediately check status: `vlt coderag status --project <id>`
+4. Wait for progress updates
+5. Close terminal
+6. Open new terminal and check status again
+
+**Expected:**
+- Job is queued (displays job ID)
+- Status shows "running" with progress percentage
+- After terminal close, indexing continues
+- Status shows "completed" when done
+
+### Scenario 3: Daemon Not Running Fallback (T064)
+
+**Steps:**
+1. Stop daemon if running: `vlt daemon stop`
+2. Run `vlt coderag init --project <id>`
+3. Observe warning message
+4. Accept prompt to run in foreground
+
+**Expected:**
+- Warning: "Daemon is not running"
+- Options displayed for starting daemon or foreground mode
+- Prompt to run in foreground instead
+- Foreground indexing with progress bar runs successfully
+
+### Scenario 4: Overwrite Protection
+
+**Steps:**
+1. Run `vlt coderag init --project <id>` on a project with existing index
+2. Observe warning and prompt
+3. Decline to overwrite (answer "no")
+4. Run again with `--force` flag
+
+**Expected:**
+- Warning about existing index is displayed
+- Confirmation prompt appears
+- Declining aborts without data loss
+- `--force` flag bypasses the prompt
+
+### Scenario 5: No Indexable Files (T063)
+
+**Steps:**
+1. Create empty directory or directory with only non-code files
+2. Run `vlt coderag init --project <id> --path <empty-dir> --foreground`
+
+**Expected:**
+- Warning: "No indexable files found"
+- Supported languages listed
+- Recovery suggestions displayed
+- No indexing job created
+
+### Scenario 6: Job Cancellation (T062)
+
+**Steps:**
+1. Start daemon: `vlt daemon start`
+2. Start large indexing job: `vlt coderag init --project <id> --path <large-codebase>`
+3. Note the job ID from output
+4. Cancel via API: `curl -X POST http://localhost:8000/api/coderag/jobs/<job_id>/cancel`
+5. Check status: `vlt coderag status --project <id>`
+
+**Expected:**
+- Job starts running
+- Cancel request succeeds
+- Job status changes to "cancelled"
+- Error message shows "Cancelled by user"
+
+### Scenario 7: Status Command JSON Output
+
+**Steps:**
+1. Run `vlt coderag status --project <id> --json`
+2. Pipe to jq: `vlt coderag status --project <id> --json | jq .`
+
+**Expected:**
+- Valid JSON output
+- Contains: job_id, status, progress_percent, files_processed, files_total
+- Contains: index_stats with chunks_count, symbols_count
+
+### Scenario 8: Progress Visibility During Active Indexing
+
+**Steps:**
+1. Start indexing on medium-sized codebase
+2. Run `vlt coderag status --project <id>` repeatedly
+3. Observe progress percentage changes
+
+**Expected:**
+- progress_percent increases over time
+- files_processed/files_total updates
+- Time elapsed and ETA displayed
+- Upon completion, status changes to "completed"
+
+### Scenario 9: Error Recovery - Disk Space (T065)
+
+**Note:** This is a destructive test - simulate only if you have a test environment.
+
+**Steps:**
+1. Fill disk to near capacity (simulate low space)
+2. Run `vlt coderag init --project <id> --foreground`
+3. Observe error when disk fills
+
+**Expected:**
+- Error: "Disk space exhausted during indexing"
+- Recovery suggestions displayed
+- Retry command provided
+
+### Scenario 10: Web UI Status Panel
+
+**Steps:**
+1. Start backend: `./start-dev.sh`
+2. Navigate to Settings page in browser
+3. Observe Code Index section
+4. Start indexing via CLI
+5. Refresh Settings page
+
+**Expected:**
+- Code Index card displays status
+- During indexing: progress bar with percentage
+- After completion: chunk count and last indexed timestamp
+- Re-index button available when not indexing
+
+---
+
+## Validation Commands Quick Reference
+
+```bash
+# Check project list
+vlt project list
+
+# Interactive init
+vlt coderag init
+
+# Specific project init
+vlt coderag init --project <id> --path .
+
+# Foreground with force
+vlt coderag init --project <id> --foreground --force
+
+# Check status
+vlt coderag status --project <id>
+vlt coderag status --project <id> --json
+
+# Daemon management
+vlt daemon start
+vlt daemon stop
+vlt daemon status
+
+# Cancel job via API
+curl -X POST http://localhost:8000/api/coderag/jobs/<job_id>/cancel
+```

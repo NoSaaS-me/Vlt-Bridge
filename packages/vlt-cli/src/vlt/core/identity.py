@@ -93,6 +93,15 @@ class CodeRAGConfig(BaseModel):
         default_factory=CodeRAGDeltaConfig,
         description="Delta-based indexing configuration"
     )
+    # Indexed root tracking (set by vlt init)
+    indexed_root: Optional[str] = Field(
+        default=None,
+        description="Absolute path of the indexed project root"
+    )
+    indexed_at: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp of when the project was indexed"
+    )
 
 
 # ============================================================================
@@ -140,6 +149,81 @@ def find_vlt_toml(start_path: Path = Path(".")) -> Optional[Path]:
             break
         current = current.parent
     return None
+
+
+def find_parent_indexed_root(start_path: Path = Path(".")) -> Optional[tuple[Path, str]]:
+    """Find if a parent directory has a vlt.toml with coderag indexed_root set.
+
+    Walks UP the directory tree looking for existing vlt.toml files that have
+    the coderag.indexed_root field set, indicating this directory is already
+    covered by an existing index.
+
+    Args:
+        start_path: Starting directory to search from
+
+    Returns:
+        Tuple of (vlt_toml_path, indexed_root) if found, None otherwise
+    """
+    current = start_path.resolve().parent  # Start from parent, not current
+
+    for _ in range(len(current.parts)):
+        check_path = current / "vlt.toml"
+        if check_path.exists():
+            try:
+                with open(check_path, "rb") as f:
+                    data = tomllib.load(f)
+                coderag = data.get("coderag", {})
+                indexed_root = coderag.get("indexed_root")
+                if indexed_root:
+                    return (check_path, indexed_root)
+            except Exception:
+                pass  # Malformed TOML, continue searching
+
+        if current == current.parent:  # Root reached
+            break
+        current = current.parent
+
+    return None
+
+
+def update_vlt_toml_coderag_indexed(toml_path: Path, indexed_root: str, indexed_at: str) -> None:
+    """Update vlt.toml with coderag indexed_root and indexed_at fields.
+
+    This preserves all existing content while adding/updating the indexed tracking fields.
+
+    Args:
+        toml_path: Path to vlt.toml file
+        indexed_root: Absolute path of the indexed project root
+        indexed_at: ISO timestamp of when the project was indexed
+    """
+    import re
+
+    with open(toml_path, "r") as f:
+        content = f.read()
+
+    # Check if [coderag] section exists
+    if "[coderag]" not in content:
+        # Add coderag section at the end
+        content += f"\n[coderag]\nindexed_root = \"{indexed_root}\"\nindexed_at = \"{indexed_at}\"\n"
+    else:
+        # Find the coderag section and add/update the fields
+        # First, remove existing indexed_root and indexed_at if present
+        content = re.sub(r'\nindexed_root\s*=\s*"[^"]*"', '', content)
+        content = re.sub(r'\nindexed_at\s*=\s*"[^"]*"', '', content)
+
+        # Find the position right after [coderag] line
+        match = re.search(r'(\[coderag\]\n)', content)
+        if match:
+            insert_pos = match.end()
+            content = (
+                content[:insert_pos] +
+                f'indexed_root = "{indexed_root}"\n' +
+                f'indexed_at = "{indexed_at}"\n' +
+                content[insert_pos:]
+            )
+
+    with open(toml_path, "w") as f:
+        f.write(content)
 
 def load_vlt_config(start_path: Path = Path(".")) -> Optional[VltConfig]:
     """Load complete vlt.toml configuration."""

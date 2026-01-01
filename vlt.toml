@@ -4,9 +4,22 @@ id = "vlt-bridge"
 description = ""
 
 [coderag]
-include = ["src/**/*.py", "lib/**/*.py", "tests/**/*.py"]
-exclude = ["**/node_modules/**", "**/__pycache__/**", "**/.git/**"]
-languages = ["python", "typescript", "javascript"]
+include = [
+    "backend/**/*.py",
+    "frontend/**/*.ts",
+    "frontend/**/*.tsx",
+    "packages/**/*.py",
+]
+exclude = [
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "**/.git/**",
+    "**/dist/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/*.min.js",
+]
+languages = ["python", "typescript", "tsx", "javascript"]
 
 [coderag.embedding]
 model = "qwen/qwen3-embedding-8b"

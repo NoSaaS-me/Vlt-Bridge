@@ -363,6 +363,30 @@ class ProjectService:
                 import shutil
                 shutil.rmtree(rag_dir, ignore_errors=True)
 
+            # T060: Delete CodeRAG index via vlt CLI
+            # T061: Wrap in try/except with logger.warning if cleanup fails
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["vlt", "coderag", "delete", "--project", project_id, "--yes", "--json"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if result.returncode == 0:
+                    logger.info(f"Deleted CodeRAG index for project {project_id}")
+                else:
+                    # Non-zero exit might mean no index exists, which is fine
+                    logger.debug(f"CodeRAG delete returned: {result.stdout}")
+            except FileNotFoundError:
+                # vlt CLI not available - this is OK in environments without vlt
+                logger.debug("vlt CLI not available, skipping CodeRAG cleanup")
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Timeout while deleting CodeRAG index for project {project_id}")
+            except Exception as e:
+                # T061: Log warning but don't fail project deletion
+                logger.warning(f"Failed to delete CodeRAG index for {project_id}: {e}")
+
             logger.info(f"Deleted project {project_id} for user {user_id}")
             return True
 

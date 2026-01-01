@@ -567,15 +567,47 @@ async def _run_indexing_job(job):
                 j.error_message = "Cancelled by user"
                 session.commit()
 
-    except Exception as e:
-        # T028: Update job status to FAILED
-        logger.error(f"CodeRAG indexing job {job_id} failed: {e}")
+    except OSError as e:
+        # T065: Handle disk space and other OS errors with clear messages
+        error_msg = str(e)
+        if "No space left on device" in error_msg or e.errno == 28:  # ENOSPC
+            error_msg = (
+                "Disk space exhausted during indexing. "
+                "Free up disk space and retry with: vlt coderag init --force"
+            )
+            logger.error(f"CodeRAG indexing job {job_id} failed: disk space exhausted")
+        else:
+            logger.error(f"CodeRAG indexing job {job_id} failed with OS error: {e}")
+
         with Session(engine) as session:
             j = session.get(CodeRAGIndexJob, job_id)
             if j:
                 j.status = JobStatus.FAILED
                 j.completed_at = datetime.now(timezone.utc)
-                j.error_message = str(e)
+                j.error_message = error_msg
+                session.commit()
+
+    except Exception as e:
+        # T028 + T066: Update job status to FAILED with recovery suggestions
+        error_msg = str(e)
+        logger.error(f"CodeRAG indexing job {job_id} failed: {e}")
+
+        # T066: Add recovery suggestions for common errors
+        if "database is locked" in error_msg.lower():
+            error_msg = (
+                f"{error_msg}. Recovery: Close other vlt processes and retry."
+            )
+        elif "permission denied" in error_msg.lower():
+            error_msg = (
+                f"{error_msg}. Recovery: Check file permissions for the target directory."
+            )
+
+        with Session(engine) as session:
+            j = session.get(CodeRAGIndexJob, job_id)
+            if j:
+                j.status = JobStatus.FAILED
+                j.completed_at = datetime.now(timezone.utc)
+                j.error_message = error_msg
                 session.commit()
 
 

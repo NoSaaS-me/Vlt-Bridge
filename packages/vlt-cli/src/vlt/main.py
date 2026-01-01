@@ -134,7 +134,14 @@ def set_key(
         print(f"[green]Server URL set to {server_url}[/green]")
     print("[dim]The CLI will now authenticate with the backend server for sync operations.[/dim]")
 
-from vlt.core.identity import create_vlt_toml, load_project_identity
+from vlt.core.identity import (
+    create_vlt_toml,
+    load_project_identity,
+    load_vlt_config,
+    find_vlt_toml,
+    find_parent_indexed_root,
+    update_vlt_toml_coderag_indexed,
+)
 
 # ============================================================================
 # Sync Commands (T028-T029)
@@ -398,31 +405,470 @@ def main(
     else:
         state["author"] = author or os.environ.get("VLT_AUTHOR", "user")
 
+def _get_platform_service_instructions(vlt_executable: str) -> str:
+    """Generate platform-specific daemon startup service instructions.
+
+    Args:
+        vlt_executable: Path to the vlt executable
+
+    Returns:
+        String with platform-specific instructions
+    """
+    import platform
+
+    system = platform.system().lower()
+
+    if system == "linux":
+        return f"""
+[bold]To run vlt daemon on startup (Linux systemd):[/bold]
+
+  mkdir -p ~/.config/systemd/user
+  cat > ~/.config/systemd/user/vlt-daemon.service << 'EOF'
+  [Unit]
+  Description=VLT Daemon
+  After=network.target
+
+  [Service]
+  ExecStart={vlt_executable} daemon start --foreground
+  Restart=on-failure
+  RestartSec=5
+
+  [Install]
+  WantedBy=default.target
+  EOF
+
+  systemctl --user daemon-reload
+  systemctl --user enable vlt-daemon
+  systemctl --user start vlt-daemon
+"""
+    elif system == "darwin":  # macOS
+        return f"""
+[bold]To run vlt daemon on startup (macOS launchd):[/bold]
+
+  cat > ~/Library/LaunchAgents/com.vlt.daemon.plist << 'EOF'
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.vlt.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>{vlt_executable}</string>
+      <string>daemon</string>
+      <string>start</string>
+      <string>--foreground</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/vlt-daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/vlt-daemon.err</string>
+  </dict>
+  </plist>
+  EOF
+
+  launchctl load ~/Library/LaunchAgents/com.vlt.daemon.plist
+"""
+    elif system == "windows":
+        return f"""
+[bold]To run vlt daemon on startup (Windows):[/bold]
+
+Option 1: Task Scheduler (GUI)
+  1. Open Task Scheduler (taskschd.msc)
+  2. Create Basic Task > Name: "VLT Daemon"
+  3. Trigger: "When I log on"
+  4. Action: Start a program
+     Program: {vlt_executable}
+     Arguments: daemon start --foreground
+  5. Finish
+
+Option 2: Using NSSM (Non-Sucking Service Manager)
+  # Install NSSM from https://nssm.cc/
+  nssm install VLTDaemon "{vlt_executable}" daemon start --foreground
+  nssm start VLTDaemon
+"""
+    else:
+        return f"""
+[bold]To run vlt daemon on startup:[/bold]
+
+  Add this command to your system's startup scripts:
+    {vlt_executable} daemon start
+
+  Or run manually:
+    vlt daemon start
+"""
+
+
+def _perform_health_check(console: Console, target_path: Path) -> dict:
+    """Perform health check on existing vlt initialization.
+
+    Verifies:
+    - vlt.toml exists and is valid
+    - Threads DB connection works
+    - CodeRAG index status
+
+    Args:
+        console: Rich console for output
+        target_path: Path to check
+
+    Returns:
+        Dict with health check results
+    """
+    from vlt.daemon.client import is_daemon_running
+    from vlt.db import engine
+    from sqlalchemy import text
+
+    results = {
+        "vlt_toml": {"status": "unknown", "message": ""},
+        "threads_db": {"status": "unknown", "message": ""},
+        "coderag_index": {"status": "unknown", "message": ""},
+        "daemon": {"status": "unknown", "message": ""},
+    }
+
+    # Check vlt.toml
+    toml_path = find_vlt_toml(target_path)
+    if toml_path:
+        try:
+            config = load_vlt_config(target_path)
+            if config:
+                results["vlt_toml"] = {
+                    "status": "ok",
+                    "message": f"Project: {config.project.name} ({config.project.id})",
+                    "path": str(toml_path),
+                }
+            else:
+                results["vlt_toml"] = {
+                    "status": "error",
+                    "message": "Invalid vlt.toml format",
+                    "path": str(toml_path),
+                }
+        except Exception as e:
+            results["vlt_toml"] = {
+                "status": "error",
+                "message": f"Error reading vlt.toml: {e}",
+            }
+    else:
+        results["vlt_toml"] = {
+            "status": "missing",
+            "message": "No vlt.toml found",
+        }
+
+    # Check threads DB
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT COUNT(*) FROM threads"))
+            thread_count = result.scalar()
+            results["threads_db"] = {
+                "status": "ok",
+                "message": f"{thread_count} threads in database",
+            }
+    except Exception as e:
+        results["threads_db"] = {
+            "status": "error",
+            "message": f"Database error: {e}",
+        }
+
+    # Check CodeRAG index status
+    if results["vlt_toml"]["status"] == "ok" and config:
+        try:
+            project_id = config.project.id
+            if service.has_coderag_index(project_id):
+                # Get chunk count
+                from sqlalchemy import func, select
+                from vlt.core.models import CodeChunk
+                from sqlalchemy.orm import Session
+
+                with Session(engine) as session:
+                    count = session.scalar(
+                        select(func.count()).select_from(CodeChunk)
+                        .where(CodeChunk.project_id == project_id)
+                    )
+                results["coderag_index"] = {
+                    "status": "ok",
+                    "message": f"{count} code chunks indexed",
+                }
+            else:
+                results["coderag_index"] = {
+                    "status": "missing",
+                    "message": "No CodeRAG index found",
+                }
+        except Exception as e:
+            results["coderag_index"] = {
+                "status": "error",
+                "message": f"Error checking index: {e}",
+            }
+    else:
+        results["coderag_index"] = {
+            "status": "skipped",
+            "message": "No project configured",
+        }
+
+    # Check daemon
+    if is_daemon_running():
+        results["daemon"] = {
+            "status": "ok",
+            "message": "Daemon is running",
+        }
+    else:
+        results["daemon"] = {
+            "status": "stopped",
+            "message": "Daemon is not running",
+        }
+
+    return results
+
+
 @app.command()
 def init(
-    project: str = typer.Option(None, "--project", "-p", help="Initialize a vlt.toml for this directory with the given project name.")
+    path: Path = typer.Option(None, "--path", "-p", help="Directory to initialize (defaults to current directory)"),
+    override_nesting: bool = typer.Option(False, "--override-directory-nesting", help="Allow nested initialization even if parent has index"),
+    skip_coderag: bool = typer.Option(False, "--skip-coderag", help="Skip code indexing"),
+    skip_daemon: bool = typer.Option(False, "--skip-daemon", help="Don't start daemon"),
 ):
     """
-    Initialize the Vault DB or a Project Context.
-    
-    - Default: Initializes the local DB (~/.vlt/vault.db).
-    - With --project: Creates a 'vlt.toml' file in the current directory, anchoring it to a project.
+    Initialize vlt for a project directory.
+
+    This unified command consolidates the initialization workflow:
+
+    FIRST RUN (new project folder):
+      1. Initialize threads database (ensure tables exist)
+      2. Run coderag init wizard (interactive project selection)
+      3. Start the daemon if not already running
+      4. Print platform-specific instructions for running daemon as startup service
+
+    SECOND RUN (already initialized):
+      1. Perform health check (vlt.toml, DB, CodeRAG index, daemon)
+      2. Ensure daemon is running, start if not
+      3. Report health status
+
+    CHILD DIRECTORY DETECTION:
+      Before initializing, walks up the directory tree looking for existing
+      vlt.toml files with coderag indexed. If found, prints a warning and
+      exits (use --override-directory-nesting to bypass).
+
+    Examples:
+        vlt init                           # Initialize current directory
+        vlt init --path /my/project        # Initialize specific directory
+        vlt init --skip-coderag            # Skip code indexing
+        vlt init --skip-daemon             # Don't start daemon
+        vlt init --override-directory-nesting  # Force init in child of indexed dir
     """
-    if project:
-        # Create vlt.toml
-        project_id = project.lower().replace(" ", "-")
-        create_vlt_toml(Path("."), name=project, id=project_id)
-        print(f"[bold green]Initialized project '{project}' (id: {project_id}) in vlt.toml[/bold green]")
-        
-        # Ensure project exists in DB too
-        try:
-            service.create_project(name=project, description="Initialized via vlt init")
-        except Exception:
-            pass
+    from vlt.daemon.client import is_daemon_running
+    from vlt.daemon.manager import DaemonManager
+    from vlt.config import settings
+    import shutil
+
+    console = Console()
+    target_path = (path or Path(".")).resolve()
+
+    # =========================================================================
+    # Child Directory Detection
+    # =========================================================================
+    if not override_nesting:
+        parent_result = find_parent_indexed_root(target_path)
+        if parent_result:
+            parent_toml, indexed_root = parent_result
+            console.print()
+            console.print("[bold yellow]Warning: This directory is already covered by an existing index.[/bold yellow]")
+            console.print()
+            console.print(f"  Parent vlt.toml: [cyan]{parent_toml}[/cyan]")
+            console.print(f"  Indexed root: [cyan]{indexed_root}[/cyan]")
+            console.print()
+            console.print("[dim]Use --override-directory-nesting to bypass this check.[/dim]")
+            raise typer.Exit(code=1)
+
+    # =========================================================================
+    # Check if already initialized (second run)
+    # =========================================================================
+    existing_toml = find_vlt_toml(target_path)
+    is_second_run = existing_toml is not None and existing_toml.parent == target_path
+
+    if is_second_run:
+        # =====================================================================
+        # Second Run: Health Check
+        # =====================================================================
+        console.print("[bold blue]VLT Health Check[/bold blue]")
+        console.print()
+
+        health = _perform_health_check(console, target_path)
+
+        # Display health status
+        status_icons = {
+            "ok": "[green]\u2713[/green]",
+            "error": "[red]\u2717[/red]",
+            "missing": "[yellow]![/yellow]",
+            "stopped": "[yellow]\u25cb[/yellow]",
+            "skipped": "[dim]-[/dim]",
+            "unknown": "[dim]?[/dim]",
+        }
+
+        table = Table(title="Health Status", show_header=True)
+        table.add_column("Component", style="cyan")
+        table.add_column("Status")
+        table.add_column("Details")
+
+        for component, info in health.items():
+            icon = status_icons.get(info["status"], "[dim]?[/dim]")
+            table.add_row(
+                component.replace("_", " ").title(),
+                f"{icon} {info['status']}",
+                info["message"],
+            )
+
+        console.print(table)
+        console.print()
+
+        # Ensure daemon is running
+        if not skip_daemon and health["daemon"]["status"] != "ok":
+            console.print("[dim]Starting daemon...[/dim]")
+            manager = DaemonManager(port=settings.daemon_port)
+            result = manager.start(foreground=False)
+            if result["success"]:
+                console.print(f"[green]Daemon started (PID: {result.get('pid')})[/green]")
+            else:
+                console.print(f"[yellow]Warning: Could not start daemon: {result.get('message')}[/yellow]")
+
+        # Offer to initialize CodeRAG if missing
+        if not skip_coderag and health.get("coderag_index", {}).get("status") == "missing":
+            console.print()
+            if Confirm.ask("[yellow]CodeRAG index is missing. Would you like to initialize it now?[/yellow]"):
+                console.print()
+                # Get project from vlt.toml
+                vlt_config = load_vlt_config(target_path)
+                if vlt_config and vlt_config.project:
+                    project_id = vlt_config.project.id
+                    console.print(f"[dim]Starting CodeRAG indexing for project '{project_id}'...[/dim]")
+                    console.print()
+
+                    # Run foreground indexing with progress
+                    _run_foreground_indexing(project_id, target_path, force=False, console=console)
+
+                    # Update vlt.toml with indexed timestamp
+                    from datetime import datetime, timezone
+                    indexed_at = datetime.now(timezone.utc).isoformat()
+                    update_vlt_toml_coderag_indexed(target_path / "vlt.toml", str(target_path), indexed_at)
+
+                    console.print()
+                    console.print(f"[green]✓ CodeRAG index created![/green]")
+                    console.print(f"[dim]Check status anytime: vlt coderag status --project {project_id}[/dim]")
+                else:
+                    console.print("[red]Could not determine project from vlt.toml[/red]")
+            else:
+                console.print("[dim]Skipping CodeRAG initialization. Run 'vlt coderag init' later.[/dim]")
+            console.print()
+
+        # Overall status
+        all_ok = all(
+            info["status"] in ("ok", "skipped")
+            for info in health.values()
+        )
+        if all_ok:
+            console.print("[bold green]All systems healthy![/bold green]")
+        else:
+            # Re-check after potential fixes
+            if health.get("coderag_index", {}).get("status") == "missing":
+                console.print("[yellow]Some issues detected. See above for details.[/yellow]")
+            else:
+                console.print("[bold green]All systems healthy![/bold green]")
+
         return
 
-    print("[bold green]Initializing Vault database...[/bold green]")
-    init_db()
+    # =========================================================================
+    # First Run: Full Initialization
+    # =========================================================================
+    console.print("[bold blue]Initializing VLT...[/bold blue]")
+    console.print()
+
+    # Step 1: Initialize threads database
+    console.print("[dim]Step 1/4: Initializing database...[/dim]")
+    try:
+        init_db()
+        console.print("[green]\u2713 Database initialized[/green]")
+    except Exception as e:
+        console.print(f"[red]Error initializing database: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    # Step 2: Interactive project selection and vlt.toml creation
+    console.print()
+    console.print("[dim]Step 2/4: Project configuration...[/dim]")
+
+    project_id = _interactive_project_selection(console, service)
+    if not project_id:
+        console.print("[yellow]No project selected. Exiting.[/yellow]")
+        raise typer.Exit(code=1)
+
+    # Create vlt.toml if it doesn't exist
+    toml_path = target_path / "vlt.toml"
+    if not toml_path.exists():
+        # Get project name
+        try:
+            project = service.db.get(service.db.get.__self__.__class__.__bases__[0], project_id)
+            project_name = project.name if project else project_id
+        except Exception:
+            project_name = project_id
+
+        create_vlt_toml(target_path, name=project_name, id=project_id)
+        console.print(f"[green]\u2713 Created vlt.toml for project '{project_id}'[/green]")
+    else:
+        console.print(f"[green]\u2713 Using existing vlt.toml[/green]")
+
+    # Step 3: CodeRAG indexing
+    console.print()
+    if skip_coderag:
+        console.print("[dim]Step 3/4: Skipping code indexing (--skip-coderag)[/dim]")
+    else:
+        console.print("[dim]Step 3/4: Initializing code index...[/dim]")
+
+        # Check for daemon (needed for background indexing)
+        daemon_running = is_daemon_running()
+
+        if daemon_running:
+            # Queue background indexing job
+            job_id = _queue_background_indexing(project_id, target_path, force=False)
+            console.print(f"[green]\u2713 Indexing job queued (ID: {job_id[:8]}...)[/green]")
+            console.print(f"[dim]  Check status: vlt coderag status --project {project_id}[/dim]")
+        else:
+            # Run foreground indexing
+            console.print("[dim]  (Running in foreground since daemon is not started yet)[/dim]")
+            _run_foreground_indexing(project_id, target_path, force=False, console=console)
+
+    # Update vlt.toml with indexed_root tracking
+    indexed_at = datetime.now(timezone.utc).isoformat()
+    update_vlt_toml_coderag_indexed(toml_path, str(target_path), indexed_at)
+
+    # Step 4: Start daemon
+    console.print()
+    if skip_daemon:
+        console.print("[dim]Step 4/4: Skipping daemon start (--skip-daemon)[/dim]")
+    else:
+        console.print("[dim]Step 4/4: Starting daemon...[/dim]")
+
+        if is_daemon_running():
+            console.print("[green]\u2713 Daemon already running[/green]")
+        else:
+            manager = DaemonManager(port=settings.daemon_port)
+            result = manager.start(foreground=False)
+            if result["success"]:
+                console.print(f"[green]\u2713 Daemon started (PID: {result.get('pid')})[/green]")
+            else:
+                console.print(f"[yellow]Warning: Could not start daemon: {result.get('message')}[/yellow]")
+
+    # Final summary
+    console.print()
+    console.print("[bold green]VLT initialization complete![/bold green]")
+    console.print()
+    console.print(f"  Project: [cyan]{project_id}[/cyan]")
+    console.print(f"  Path: [cyan]{target_path}[/cyan]")
+    console.print()
+
+    # Platform-specific service instructions
+    vlt_executable = shutil.which("vlt") or "vlt"
+    instructions = _get_platform_service_instructions(vlt_executable)
+    console.print(Panel(instructions, title="Daemon Startup Service", border_style="dim"))
 # ...
 
 @thread_app.command("new")
@@ -971,8 +1417,12 @@ def _run_foreground_indexing(
         target_path: Directory to index
         force: If True, ignore incremental caching
         console: Rich console for output
+
+    T063: Handles edge case when no indexable files are found by displaying
+    a clear warning with supported file types and recovery suggestions.
     """
     from vlt.core.coderag.indexer import CodeRAGIndexer
+    from vlt.core.coderag.parser import SUPPORTED_LANGUAGES
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TaskProgressColumn
 
     # Create indexer
@@ -1007,6 +1457,24 @@ def _run_foreground_indexing(
         try:
             # Run index with progress callback
             stats = indexer.index_full(force=force, progress_callback=on_progress)
+
+            # T063: Handle no files found edge case
+            if stats.files_discovered == 0:
+                progress.update(task, description="[yellow]No files found[/yellow]", total=1, completed=1)
+                console.print()
+                console.print("[yellow]Warning: No indexable files found.[/yellow]")
+                console.print()
+                console.print("[bold]Supported languages:[/bold]")
+                console.print(f"  {', '.join(sorted(SUPPORTED_LANGUAGES))}")
+                console.print()
+                console.print("[bold]Recovery suggestions:[/bold]")
+                console.print("  1. Check that the target directory contains source code files")
+                console.print("  2. Verify include patterns in coderag.toml (default: **/*.py)")
+                console.print("  3. Ensure files are not excluded by patterns in .gitignore")
+                console.print("  4. Try specifying a different path: vlt coderag init --path <dir>")
+                console.print()
+                console.print("[dim]No indexing job was created.[/dim]")
+                return
 
             progress.update(task, description="Indexing complete!", total=1, completed=1)
 
@@ -1046,9 +1514,35 @@ def _run_foreground_indexing(
             console.print()
             console.print(f"[bold]Check status:[/bold] vlt coderag status --project {project_id}")
 
-        except Exception as e:
+        except OSError as e:
+            # T065: Handle disk space exhaustion with clear message
             progress.update(task, description="[red]Indexing failed![/red]")
-            console.print(f"[red]Error: {e}[/red]")
+            error_str = str(e)
+            if "No space left on device" in error_str or getattr(e, 'errno', 0) == 28:
+                console.print()
+                console.print("[red]Error: Disk space exhausted during indexing.[/red]")
+                console.print()
+                console.print("[bold]Recovery:[/bold]")
+                console.print("  1. Free up disk space")
+                console.print(f"  2. Retry with: vlt coderag init --project {project_id} --force")
+            else:
+                console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(code=1)
+
+        except Exception as e:
+            # T066: Handle other errors with recovery suggestions
+            progress.update(task, description="[red]Indexing failed![/red]")
+            error_str = str(e)
+            console.print(f"[red]Error: {error_str}[/red]")
+
+            # Add recovery suggestions for common errors
+            if "database is locked" in error_str.lower():
+                console.print()
+                console.print("[bold]Recovery:[/bold] Close other vlt processes and retry.")
+            elif "permission denied" in error_str.lower():
+                console.print()
+                console.print("[bold]Recovery:[/bold] Check file permissions for the target directory.")
+
             raise typer.Exit(code=1)
 
 
@@ -1130,14 +1624,29 @@ def coderag_init(
 
     # Run indexing
     if background:
-        # Queue job for background processing
-        job_id = _queue_background_indexing(project, path, force)
-        console.print(f"[green]Indexing job queued.[/green] Job ID: {job_id[:8]}...")
-        console.print()
-        console.print("[dim]The daemon will process this job in the background.[/dim]")
-        console.print(f"[dim]Check status: [bold]vlt coderag status --project {project}[/bold][/dim]")
-        console.print()
-        console.print("[yellow]Note:[/yellow] Ensure the daemon is running with [bold]vlt daemon start[/bold]")
+        # T064: Check if daemon is running before queuing job
+        from vlt.daemon.client import is_daemon_running
+        if not is_daemon_running():
+            console.print("[yellow]Warning: Daemon is not running.[/yellow]")
+            console.print()
+            console.print("[bold]Options:[/bold]")
+            console.print("  1. Start the daemon: [bold]vlt daemon start[/bold]")
+            console.print("  2. Run in foreground: [bold]vlt coderag init --foreground[/bold]")
+            console.print()
+            # Ask user if they want to run in foreground instead
+            if Confirm.ask("Run indexing in foreground instead?", default=True):
+                console.print()
+                _run_foreground_indexing(project, path, force, console)
+            else:
+                console.print("[dim]Indexing cancelled. Start daemon first or use --foreground.[/dim]")
+                raise typer.Exit(code=1)
+        else:
+            # Daemon is running - queue job for background processing
+            job_id = _queue_background_indexing(project, path, force)
+            console.print(f"[green]Indexing job queued.[/green] Job ID: {job_id[:8]}...")
+            console.print()
+            console.print("[dim]The daemon will process this job in the background.[/dim]")
+            console.print(f"[dim]Check status: [bold]vlt coderag status --project {project}[/bold][/dim]")
     else:
         # Run in foreground with progress display
         _run_foreground_indexing(project, path, force, console)

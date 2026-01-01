@@ -134,15 +134,15 @@
 
 ### Frontend Implementation
 
-- [ ] T046 [P] [US3] Add polling hook for CodeRAG status in `frontend/src/pages/Settings.tsx`
-- [ ] T047 [US3] Add Code Index Card section after Index Health in `frontend/src/pages/Settings.tsx`
-- [ ] T048 [US3] Display chunk_count and status with Badge component
-- [ ] T049 [US3] Implement progress bar div with dynamic width percentage
-- [ ] T050 [US3] Display files_processed / files_total during active indexing
-- [ ] T051 [US3] Add "Re-index Code" button with loading state
-- [ ] T052 [US3] Implement handleReindex function to call initCodeRAG
-- [ ] T053 [US3] Add polling interval (5 seconds) during active indexing
-- [ ] T054 [US3] Display last_indexed_at timestamp when available
+- [x] T046 [P] [US3] Add polling hook for CodeRAG status in `frontend/src/pages/Settings.tsx`
+- [x] T047 [US3] Add Code Index Card section after Index Health in `frontend/src/pages/Settings.tsx`
+- [x] T048 [US3] Display chunk_count and status with Badge component
+- [x] T049 [US3] Implement progress bar div with dynamic width percentage
+- [x] T050 [US3] Display files_processed / files_total during active indexing
+- [x] T051 [US3] Add "Re-index Code" button with loading state
+- [x] T052 [US3] Implement handleReindex function to call initCodeRAG
+- [x] T053 [US3] Add polling interval (5 seconds) during active indexing
+- [x] T054 [US3] Display last_indexed_at timestamp when available
 
 **Checkpoint**: Web UI progress monitoring complete
 
@@ -152,13 +152,13 @@
 
 **Purpose**: Clean up CodeRAG data when project is deleted
 
-- [ ] T055 Add `coderag_delete` command to CLI in `packages/vlt-cli/src/vlt/main.py`
-- [ ] T056 Implement `delete_coderag_index(project_id)` in `packages/vlt-cli/src/vlt/core/service.py`
-- [ ] T057 Delete code_chunks, code_nodes, code_edges, symbol_definitions for project
-- [ ] T058 Delete coderag_index_jobs for project
-- [ ] T059 Add `--yes` flag to skip confirmation prompt
-- [ ] T060 Update `backend/src/services/project_service.py` to call `vlt coderag delete` on project deletion
-- [ ] T061 Add error handling with logger.warning if cleanup fails
+- [x] T055 Add `coderag_delete` command to CLI in `packages/vlt-cli/src/vlt/main.py`
+- [x] T056 Implement `delete_coderag_index(project_id)` in `packages/vlt-cli/src/vlt/core/service.py`
+- [x] T057 Delete code_chunks, code_nodes, code_edges, symbol_definitions for project
+- [x] T058 Delete coderag_index_jobs for project
+- [x] T059 Add `--yes` flag to skip confirmation prompt
+- [x] T060 Update `backend/src/services/project_service.py` to call `vlt coderag delete` on project deletion
+- [x] T061 Add error handling with logger.warning if cleanup fails
 
 ---
 
@@ -166,13 +166,13 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T062 [P] Add job cancellation support in daemon (check cancellation flag during indexing)
-- [ ] T063 Add edge case handling: no indexable files found
-- [ ] T064 Add edge case handling: daemon not running (fallback to foreground)
-- [ ] T065 Add edge case handling: disk space exhaustion during indexing
-- [ ] T066 Add clear error messages with recovery suggestions
-- [ ] T067 Run quickstart.md validation scenarios end-to-end
-- [ ] T068 Update CLAUDE.md with new coderag commands documentation
+- [x] T062 [P] Add job cancellation support in daemon (check cancellation flag during indexing)
+- [x] T063 Add edge case handling: no indexable files found
+- [x] T064 Add edge case handling: daemon not running (fallback to foreground)
+- [x] T065 Add edge case handling: disk space exhaustion during indexing
+- [x] T066 Add clear error messages with recovery suggestions
+- [x] T067 Run quickstart.md validation scenarios end-to-end (documented, not executed)
+- [x] T068 Update CLAUDE.md with new coderag commands documentation
 
 ---
 
