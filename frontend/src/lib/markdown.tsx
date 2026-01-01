@@ -145,7 +145,7 @@ function WikilinkPreview({
   return (
     <HoverCard
       openDelay={500}
-      closeDelay={100}
+      closeDelay={200}
       open={shouldBeOpen}
       onOpenChange={setIsOpen}
     >
@@ -164,7 +164,7 @@ function WikilinkPreview({
       >
         {isLoading ? (
           // T025: Loading skeleton matching preview card layout
-          <div className="space-y-3">
+          <div className="space-y-3 animate-fade-in-smooth">
             {/* Title skeleton (h4 height, slightly larger) */}
             <div className="h-5 bg-muted animate-pulse rounded w-3/4" />
 
@@ -187,8 +187,8 @@ function WikilinkPreview({
             </div>
           </div>
         ) : isBroken ? (
-          // T033: Broken link card with red-tinted styling
-          <div className="space-y-3">
+          // T033: Broken link card with red-tinted styling and fade-in animation
+          <div className="space-y-3 animate-fade-in-smooth">
             <div className="flex items-center gap-2">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -218,8 +218,8 @@ function WikilinkPreview({
             </div>
           </div>
         ) : preview ? (
-          // T031: Rich preview card
-          <div className="space-y-3">
+          // T031: Rich preview card with fade-in animation after loading
+          <div className="space-y-3 animate-fade-in-smooth">
             {/* Title */}
             <h4 className="font-semibold text-base leading-tight">
               {preview.title}
