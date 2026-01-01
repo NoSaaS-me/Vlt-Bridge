@@ -168,6 +168,38 @@
 
 ---
 
+### ✅ Subtask 2.3: Update preview cache strategy
+**Commit:** ebd8213
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Separated single cache into two distinct caches with different purposes:
+  - `resolutionCache: Map<string, string | null>` - maps linkText to resolved note path
+  - `previewCache: Map<string, NotePreview>` - maps note path to preview data
+
+- Updated fetchPreview logic in `WikilinkPreview` component:
+  - Step 1: Check resolutionCache for linkText → path mapping
+    - If not cached, call `resolveWikilink()` and cache the result
+    - Cache stores null for broken links
+  - Step 2: If path exists, check previewCache for path → preview data
+    - If not cached, call `getNotePreview()` and cache the result
+  - Multiple wikilinks pointing to the same note now share the same preview data
+
+**Code Pattern Compliance:**
+✓ Proper TypeScript type annotations
+✓ Maintains existing React patterns (useState, useEffect)
+✓ Cache keys properly scoped (linkText for resolution, path for preview)
+✓ Non-null assertions used safely with .has() checks
+
+**Benefits:**
+- More efficient memory usage (deduplicated preview data for same note)
+- Separation of concerns (resolution logic vs content caching)
+- Resolution cache can be longer-lived since paths rarely change
+- Preview cache can be independently invalidated when note content changes
+- Reduces API calls when same note is linked multiple times
+
+---
+
 ## In Progress
 
 None
@@ -182,7 +214,7 @@ None
 ### Phase 2: Frontend API Integration
 ✅ 2.1: Add API service functions
 ✅ 2.2: Refactor WikilinkPreview to use resolution API
-- [ ] 2.3: Update preview cache strategy
+✅ 2.3: Update preview cache strategy
 
 ### Phase 3: Preview Card UI Enhancement
 - [ ] 3.1: Design enhanced preview card layout
