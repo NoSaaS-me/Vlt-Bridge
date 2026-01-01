@@ -1,0 +1,302 @@
+{
+  "feature": "003-enforce-authentication-on-sensitive-api-routes",
+  "description": "Enforce authentication on all sensitive API routes to prevent unauthorized access. The ENABLE_NOAUTH_MCP flag currently bypasses all authentication, allowing unauthenticated access to user data, administrative functions, and paid API resources (Oracle/RAG/TTS).",
+  "created_at": "2026-01-01T13:24:17.010Z",
+  "updated_at": "2026-01-01T13:30:00.000Z",
+  "status": "in_progress",
+  "planStatus": "in_progress",
+  "workflow_type": "development",
+  "spec_file": "spec.md",
+  "phases": [
+    {
+      "id": "P1",
+      "name": "Foundational Security Improvements",
+      "description": "Create new authentication patterns and middleware to enforce strict authentication",
+      "subtasks": [
+        {
+          "id": "P1.1",
+          "title": "Create strict authentication dependency",
+          "description": "Create a new `require_auth_context` dependency that NEVER falls back to demo-user, regardless of ENABLE_NOAUTH_MCP. This will raise 401 Unauthorized if no valid Authorization header is present. Keep the existing `get_auth_context` for backwards compatibility with intentionally public/demo routes.",
+          "status": "completed",
+          "files": [
+            "backend/src/api/middleware/auth_middleware.py"
+          ],
+          "notes": "Created require_auth_context() dependency that enforces strict authentication without any demo-user fallback. Function validates JWT tokens and raises 401 Unauthorized if no valid Authorization header is present. Kept get_auth_context() unchanged for backwards compatibility with intentionally public/demo routes.",
+          "updated_at": "2026-01-01T13:31:09.907128+00:00"
+        },
+        {
+          "id": "P1.2",
+          "title": "Create admin-only authentication dependency",
+          "description": "Create `require_admin_context` that validates the user has admin privileges. Initially, this can check against a list of admin user IDs from environment variable (ADMIN_USER_IDS). System routes like /api/system/logs should use this.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/middleware/auth_middleware.py",
+            "backend/src/services/config.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P1.3",
+          "title": "Add authentication mode enum and helper",
+          "description": "Create an AuthMode enum (STRICT, OPTIONAL, ADMIN) and a factory function to get the appropriate dependency. This makes it explicit which routes require what level of authentication.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/middleware/auth_middleware.py"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "id": "P2",
+      "name": "Protect Sensitive Routes",
+      "description": "Update all sensitive routes to use strict authentication. Routes that modify data or consume paid resources MUST require authentication.",
+      "subtasks": [
+        {
+          "id": "P2.1",
+          "title": "Protect notes CRUD routes",
+          "description": "Update /api/notes endpoints to use require_auth_context. All operations (list, create, read, update, move) should require strict authentication. Remove the ENABLE_NOAUTH_MCP bypass path for these endpoints.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/notes.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P2.2",
+          "title": "Protect index routes",
+          "description": "Update /api/index/rebuild to use require_auth_context. The rebuild endpoint is administrative and should never be accessible without authentication. Index health can remain optional auth.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/index.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P2.3",
+          "title": "Protect search and graph routes",
+          "description": "Update /api/search, /api/backlinks, /api/tags, and /api/graph to use require_auth_context. These expose user vault data.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/search.py",
+            "backend/src/api/routes/graph.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P2.4",
+          "title": "Protect Oracle routes (resource-consuming)",
+          "description": "Update ALL /api/oracle/* endpoints to use require_auth_context. These consume OpenRouter API credits and must be protected. Includes: query, stream, cancel, history endpoints.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/oracle.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P2.5",
+          "title": "Protect Oracle Context routes",
+          "description": "Update ALL /api/oracle/context/* endpoints to use require_auth_context. These manage conversation context trees which are user-specific.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/oracle_context.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P2.6",
+          "title": "Protect Thread routes",
+          "description": "Update ALL /api/threads/* endpoints to use require_auth_context. Threads contain development history and reasoning chains that are sensitive.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/threads.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P2.7",
+          "title": "Protect RAG routes (resource-consuming)",
+          "description": "Update /api/rag/status and /api/rag/chat to use require_auth_context. Chat uses LLM resources which cost money.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/rag.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P2.8",
+          "title": "Protect TTS routes (resource-consuming)",
+          "description": "Update /api/tts to use require_auth_context. TTS uses ElevenLabs API which costs money per character.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/tts.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P2.9",
+          "title": "Protect system routes with admin auth",
+          "description": "Update /api/system/logs to use require_admin_context. System logs can leak sensitive information. Add authentication to /api/system/debug/widget or remove it in production.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/system.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P2.10",
+          "title": "Protect auth routes appropriately",
+          "description": "Ensure /api/tokens and /api/me use require_auth_context. The /auth/login and /auth/callback remain public. /api/demo/token remains intentionally public.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/routes/auth.py"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "id": "P3",
+      "name": "Secure MCP HTTP Endpoint",
+      "description": "Ensure the MCP HTTP endpoint properly enforces authentication and the ENABLE_NOAUTH_MCP bypass is removed or restricted",
+      "subtasks": [
+        {
+          "id": "P3.1",
+          "title": "Update MCP _current_user_id() to enforce auth",
+          "description": "Modify the _current_user_id() function in mcp/server.py to remove the ENABLE_NOAUTH_MCP bypass for HTTP transport. STDIO transport can keep the local-dev fallback. Add a deprecation warning if ENABLE_NOAUTH_MCP is enabled.",
+          "status": "pending",
+          "files": [
+            "backend/src/mcp/server.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P3.2",
+          "title": "Add environment variable documentation",
+          "description": "Update .env.example to clearly document that ENABLE_NOAUTH_MCP is DANGEROUS and should ONLY be used in isolated development environments, never in production.",
+          "status": "pending",
+          "files": [
+            "backend/.env.example"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P3.3",
+          "title": "Add startup warning for insecure config",
+          "description": "Add a prominent warning log at startup if ENABLE_NOAUTH_MCP is enabled, making it clear the server is running in an insecure mode.",
+          "status": "pending",
+          "files": [
+            "backend/src/api/main.py"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "id": "P4",
+      "name": "Testing and Validation",
+      "description": "Add tests to verify authentication enforcement and prevent regressions",
+      "subtasks": [
+        {
+          "id": "P4.1",
+          "title": "Add unit tests for auth middleware",
+          "description": "Create tests for require_auth_context, require_admin_context, and the existing get_auth_context. Test scenarios: valid JWT, expired JWT, missing header, invalid header format, noauth bypass disabled/enabled.",
+          "status": "pending",
+          "files": [
+            "backend/tests/unit/test_auth_middleware.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P4.2",
+          "title": "Add integration tests for protected routes",
+          "description": "Create integration tests that verify routes return 401 when accessed without authentication. Cover notes, oracle, threads, rag, tts, and system routes.",
+          "status": "pending",
+          "files": [
+            "backend/tests/integration/test_route_authentication.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P4.3",
+          "title": "Add MCP authentication tests",
+          "description": "Create tests for MCP HTTP endpoint authentication. Verify that requests without Authorization header are rejected in HTTP mode, and that STDIO mode still works with local-dev fallback.",
+          "status": "pending",
+          "files": [
+            "backend/tests/integration/test_mcp_auth.py"
+          ],
+          "notes": ""
+        },
+        {
+          "id": "P4.4",
+          "title": "Manual testing and validation",
+          "description": "Perform manual testing: 1) Verify demo mode still works via /api/demo/token, 2) Verify protected routes reject unauthenticated requests, 3) Verify authenticated users can access their data, 4) Verify MCP STDIO still works, 5) Verify frontend login flow works.",
+          "status": "pending",
+          "files": [],
+          "notes": ""
+        }
+      ]
+    }
+  ],
+  "qa_signoff": {
+    "status": "pending",
+    "issues": "",
+    "tests_passed": ""
+  },
+  "security_notes": [
+    "CRITICAL: ENABLE_NOAUTH_MCP currently bypasses ALL authentication - this is the primary vulnerability",
+    "Routes consuming paid APIs (Oracle, RAG, TTS) must require auth to prevent resource abuse",
+    "System logs (/api/system/logs) can leak sensitive info and should require admin auth",
+    "Demo mode (/api/demo/token) is intentionally public but demo-user is read-only",
+    "MCP STDIO transport can use local-dev fallback since it's local execution only",
+    "MCP HTTP transport MUST require authentication in production"
+  ],
+  "affected_routes": {
+    "require_strict_auth": [
+      "/api/notes",
+      "/api/notes/{path}",
+      "/api/index/rebuild",
+      "/api/search",
+      "/api/backlinks/{path}",
+      "/api/tags",
+      "/api/graph",
+      "/api/oracle",
+      "/api/oracle/stream",
+      "/api/oracle/cancel",
+      "/api/oracle/history",
+      "/api/oracle/context/*",
+      "/api/threads/*",
+      "/api/rag/status",
+      "/api/rag/chat",
+      "/api/tts",
+      "/api/tokens",
+      "/api/me"
+    ],
+    "require_admin_auth": [
+      "/api/system/logs"
+    ],
+    "remain_public": [
+      "/api/demo/token",
+      "/health",
+      "/auth/login",
+      "/auth/callback"
+    ],
+    "optional_auth": [
+      "/api/index/health"
+    ]
+  },
+  "services_involved": [
+    "backend/src/api/middleware/auth_middleware.py",
+    "backend/src/services/config.py",
+    "backend/src/mcp/server.py"
+  ],
+  "final_acceptance": [
+    "All sensitive routes return 401 without valid Authorization header",
+    "ENABLE_NOAUTH_MCP bypass is removed from HTTP paths",
+    "Demo mode still works via /api/demo/token endpoint",
+    "MCP STDIO mode still works with local-dev fallback",
+    "All existing functionality works for authenticated users",
+    "Unit and integration tests pass"
+  ],
+  "last_updated": "2026-01-01T13:31:09.907138+00:00"
+}
