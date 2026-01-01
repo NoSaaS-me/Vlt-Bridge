@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 from ...models.oracle import (
     OracleRequest,
     OracleResponse,
@@ -53,7 +53,7 @@ def get_oracle_bridge() -> OracleBridge:
 @router.post("", response_model=OracleResponse)
 async def query_oracle(
     request: OracleRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """
@@ -162,7 +162,7 @@ async def query_oracle(
 @router.post("/stream")
 async def query_oracle_stream(
     request: OracleRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """
@@ -279,7 +279,7 @@ async def query_oracle_stream(
 
 @router.post("/cancel")
 async def cancel_oracle_session(
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """
     Cancel the active Oracle session for this user.
@@ -306,7 +306,7 @@ async def cancel_oracle_session(
 
 @router.get("/history", response_model=ConversationHistoryResponse)
 async def get_conversation_history(
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     oracle: OracleBridge = Depends(get_oracle_bridge),
 ):
     """
@@ -356,7 +356,7 @@ async def get_conversation_history(
 
 @router.delete("/history")
 async def clear_conversation_history(
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     oracle: OracleBridge = Depends(get_oracle_bridge),
 ):
     """
