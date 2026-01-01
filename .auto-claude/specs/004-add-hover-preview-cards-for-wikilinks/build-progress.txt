@@ -237,6 +237,53 @@
 
 ---
 
+### ✅ Subtask 3.2: Improve loading skeleton
+**Commit:** 2f3df12
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Enhanced loading skeleton in `frontend/src/lib/markdown.tsx` to match preview card structure
+- Replaced simple 3-bar skeleton with structured 4-part layout matching actual content
+
+**Skeleton Structure:**
+1. **Title skeleton**
+   - Height: h-5 (larger than text to match h4 element)
+   - Width: w-3/4 (75% width)
+   - Style: bg-muted animate-pulse rounded
+
+2. **Snippet skeleton** (3 text lines)
+   - Container: space-y-2 for line spacing
+   - Line height: h-3.5 (matching text size)
+   - Widths: 100%, 83% (w-5/6), 66% (w-4/6) - decreasing for natural text appearance
+   - Style: bg-muted animate-pulse rounded
+
+3. **Badge placeholders** (2 elements)
+   - Container: flex gap-1.5 (matching badge layout)
+   - Size: h-5 w-16 and h-5 w-20 (matching badge dimensions)
+   - Shape: rounded-full (pill-shaped like badges)
+   - Style: bg-muted animate-pulse
+
+4. **Footer skeleton**
+   - Container: pt-2 border-t (matching timestamp footer separator)
+   - Size: h-3 w-32 (small, fixed width for timestamp)
+   - Style: bg-muted animate-pulse rounded
+
+**Code Pattern Compliance:**
+✓ Uses space-y-3 vertical spacing matching the preview card layout
+✓ All elements use consistent bg-muted and animate-pulse classes
+✓ Follows Tailwind CSS utility class patterns
+✓ Maintains visual hierarchy (title larger, text medium, footer smaller)
+✓ Comments document each skeleton section
+
+**UI Benefits:**
+- Skeleton now accurately represents final content structure
+- Users can anticipate what information will load
+- Matches spacing and layout of loaded preview card
+- Provides better visual feedback during loading state
+- Professional loading experience with attention to detail
+
+---
+
 ## In Progress
 
 None
@@ -255,7 +302,7 @@ None
 
 ### Phase 3: Preview Card UI Enhancement
 ✅ 3.1: Design enhanced preview card layout
-- [ ] 3.2: Improve loading skeleton
+✅ 3.2: Improve loading skeleton
 - [ ] 3.3: Style broken link indicator
 
 ### Phase 4: UX Polish & Accessibility
