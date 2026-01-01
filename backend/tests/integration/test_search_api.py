@@ -99,10 +99,10 @@ def seeded_indexer(indexer: IndexerService) -> IndexerService:
         {
             "path": "docs/python-web.md",
             "metadata": {
-                "title": "Python Web Development",
+                "title": "Python Web Development Guide",
                 "tags": ["python", "web", "backend"],
             },
-            "body": "Building web applications with Python frameworks.",
+            "body": "A guide to building web applications with Python frameworks.",
         },
     )
 
