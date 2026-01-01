@@ -1,6 +1,7 @@
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Search } from 'lucide-react';
 import type { SearchResult } from '@/types/search';
+import { SafeSnippet } from '@/components/SafeSnippet';
 
 interface SearchWidgetProps {
   results: SearchResult[];
@@ -32,9 +33,9 @@ export function SearchWidget({ results, onSelectNote }: SearchWidgetProps) {
                   {result.title}
                 </h3>
                 {result.snippet && (
-                  <p 
+                  <SafeSnippet
+                    snippet={result.snippet}
                     className="text-xs text-muted-foreground line-clamp-2"
-                    dangerouslySetInnerHTML={{ __html: result.snippet }}
                   />
                 )}
                 <div className="mt-2 text-[10px] text-muted-foreground font-mono">
