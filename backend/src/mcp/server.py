@@ -90,6 +90,14 @@ def widget_resource() -> str:
 
 def _current_user_id() -> str:
     """Resolve the acting user ID (local mode defaults to local-dev)."""
+    # Check for deprecated noauth mode and log warning
+    config = get_config()
+    if config.enable_noauth_mcp:
+        logger.warning(
+            "ENABLE_NOAUTH_MCP is enabled. This setting is DEPRECATED and should ONLY be used "
+            "in isolated development environments, NEVER in production. It will be removed in a future version."
+        )
+
     # HTTP transport (hosted) uses Authorization headers
     if _current_http_request is not None:
         try:
@@ -98,14 +106,10 @@ def _current_user_id() -> str:
             request = None
         if request is not None:
             header = request.headers.get("Authorization")
-            
-            # Check for No-Auth mode if header is missing
+
             if not header:
-                config = get_config()
-                if config.enable_noauth_mcp:
-                    return "demo-user"
                 raise PermissionError("Authorization header required")
-                
+
             scheme, _, token = header.partition(" ")
             if scheme.lower() != "bearer" or not token:
                 raise PermissionError("Authorization header must be 'Bearer <token>'")
