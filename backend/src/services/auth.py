@@ -122,9 +122,10 @@ class AuthService:
         self.validators: List[TokenValidator] = []
         
         # 1. Local Dev Token (Highest priority)
+        # Maps to "local-dev" user which has full write access (not demo-user)
         if self.config.enable_local_mode:
             self.validators.append(
-                StaticTokenValidator(self.config.local_dev_token, "demo-user")
+                StaticTokenValidator(self.config.local_dev_token, "local-dev")
             )
             
         # 2. ChatGPT Service Token

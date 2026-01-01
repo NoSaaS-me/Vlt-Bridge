@@ -502,7 +502,7 @@ export function ChatMessage({
 
         {/* ===== LEGACY RAG SOURCES ===== */}
         {!isUser && showSources && !oracleMsg && message.sources && (
-          <SourceList sources={message.sources} onSourceClick={onSourceClick} />
+          <SourceList sources={message.sources as import('@/types/rag').SourceReference[]} onSourceClick={onSourceClick} />
         )}
       </div>
     </div>

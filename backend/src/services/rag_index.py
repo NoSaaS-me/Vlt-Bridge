@@ -35,6 +35,7 @@ from llama_index.core.memory import ChatMemoryBuffer
 from .config import get_config
 from .vault import VaultService
 from ..models.rag import ChatMessage, ChatResponse, SourceReference, StatusResponse, NoteWritten
+from ..models.project import DEFAULT_PROJECT_ID
 
 class RAGIndexService:
     """Service for managing LlamaIndex vector stores."""
@@ -96,37 +97,37 @@ class RAGIndexService:
         except Exception as e:
             logger.error(f"Failed to setup Gemini: {e}")
 
-    def get_persist_dir(self, user_id: str) -> str:
-        """Get persistence directory for a user's index."""
-        user_dir = self.config.llamaindex_persist_dir / user_id
+    def get_persist_dir(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> str:
+        """Get persistence directory for a user's project index."""
+        user_dir = self.config.llamaindex_persist_dir / user_id / project_id
         user_dir.mkdir(parents=True, exist_ok=True)
         return str(user_dir)
 
-    def get_or_build_index(self, user_id: str) -> VectorStoreIndex:
+    def get_or_build_index(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> VectorStoreIndex:
         """Load existing index or build a new one from vault notes."""
         with self._index_lock:
-            persist_dir = self.get_persist_dir(user_id)
-            
+            persist_dir = self.get_persist_dir(user_id, project_id)
+
             # check if index files exist (docstore.json, index_store.json etc)
             try:
                 storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
                 index = load_index_from_storage(storage_context)
-                logger.info(f"Loaded existing index for user {user_id}")
+                logger.info(f"Loaded existing index for user {user_id}, project {project_id}")
                 return index
             except Exception:
-                logger.info(f"No valid index found for {user_id}, building new one...")
-                return self.build_index(user_id)
+                logger.info(f"No valid index found for {user_id}/{project_id}, building new one...")
+                return self.build_index(user_id, project_id)
 
-    def build_index(self, user_id: str) -> VectorStoreIndex:
-        """Build a new index from the user's vault."""
+    def build_index(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> VectorStoreIndex:
+        """Build a new index from the user's project vault."""
         if not self.config.google_api_key:
             raise ValueError("GOOGLE_API_KEY required to build index")
 
         # Read notes from VaultService
-        notes = self.vault_service.list_notes(user_id)
+        notes = self.vault_service.list_notes(user_id, project_id=project_id)
         if not notes:
             # Handle empty vault (Fix #8)
-            logger.info(f"No notes found for {user_id}, creating empty index")
+            logger.info(f"No notes found for {user_id}/{project_id}, creating empty index")
             index = VectorStoreIndex.from_documents([])
             # Persist empty index to avoid rebuilding every time?
             # LlamaIndex might not persist empty index well.
@@ -134,11 +135,11 @@ class RAGIndexService:
             return index
 
         documents = []
-        
+
         for note_summary in notes:
             path = note_summary["path"]
             try:
-                note = self.vault_service.read_note(user_id, path)
+                note = self.vault_service.read_note(user_id, path, project_id)
                 # Create Document
                 metadata = {
                     "path": path,
@@ -148,35 +149,35 @@ class RAGIndexService:
                 doc = Document(
                     text=note["body"],
                     metadata=metadata,
-                    id_=path # Use path as ID for stability
+                    id_=path  # Use path as ID for stability
                 )
                 documents.append(doc)
             except Exception as e:
                 logger.warning(f"Failed to index note {path}: {e}")
 
-        logger.info(f"Indexing {len(documents)} documents for {user_id}")
-        
+        logger.info(f"Indexing {len(documents)} documents for {user_id}/{project_id}")
+
         index = VectorStoreIndex.from_documents(documents)
-        
+
         # Persist
-        persist_dir = self.get_persist_dir(user_id)
+        persist_dir = self.get_persist_dir(user_id, project_id)
         index.storage_context.persist(persist_dir=persist_dir)
         logger.info(f"Persisted index to {persist_dir}")
-        
+
         return index
 
-    def rebuild_index(self, user_id: str) -> VectorStoreIndex:
+    def rebuild_index(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> VectorStoreIndex:
         """Force rebuild of index."""
-        return self.build_index(user_id)
+        return self.build_index(user_id, project_id)
 
-    def get_status(self, user_id: str) -> StatusResponse:
+    def get_status(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> StatusResponse:
         """Get index status."""
-        persist_dir = self.get_persist_dir(user_id)
+        persist_dir = self.get_persist_dir(user_id, project_id)
         doc_store_path = os.path.join(persist_dir, "docstore.json")
-        
+
         doc_count = 0
         status = "building"
-        
+
         if os.path.exists(doc_store_path):
             status = "ready"
             try:
@@ -191,7 +192,7 @@ class RAGIndexService:
                     doc_count = len(data.get("docstore/data", {}))
             except Exception:
                 logger.warning(f"Failed to read docstore for status: {doc_store_path}")
-                
+
         return StatusResponse(status=status, doc_count=doc_count, last_updated=None)
 
     def _create_note_tool(self, user_id: str):
@@ -385,12 +386,12 @@ class RAGIndexService:
 
         return FunctionTool.from_defaults(fn=update_note)
 
-    async def chat(self, user_id: str, messages: list[ChatMessage]) -> ChatResponse:
+    async def chat(self, user_id: str, messages: list[ChatMessage], project_id: str = DEFAULT_PROJECT_ID) -> ChatResponse:
         """Run RAG chat query with history."""
         if not self.config.google_api_key:
             raise ValueError("Google API Key is not configured. Please set GOOGLE_API_KEY in settings or env.")
 
-        index = self.get_or_build_index(user_id)
+        index = self.get_or_build_index(user_id, project_id)
         
         if not messages:
              raise ValueError("No messages provided")

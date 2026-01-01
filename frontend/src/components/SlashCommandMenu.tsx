@@ -124,7 +124,7 @@ export function SlashCommandMenu({
         {filteredCommands.map((cmd, index) => (
           <div
             key={cmd.name}
-            ref={(el) => (itemRefs.current[index] = el)}
+            ref={(el) => { itemRefs.current[index] = el; }}
             className={cn(
               'flex items-start gap-3 px-4 py-3 cursor-pointer transition-colors',
               selectedIndex === index

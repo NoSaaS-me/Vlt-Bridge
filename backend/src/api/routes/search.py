@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ...models.index import Tag
+from ...models.project import DEFAULT_PROJECT_ID
 from ...models.search import SearchResult
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
@@ -28,26 +29,27 @@ class BacklinkResult(BaseModel):
 @router.get("/api/search", response_model=list[SearchResult])
 async def search_notes(
     q: str = Query(..., min_length=1, max_length=256),
+    project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
     auth: AuthContext = Depends(get_auth_context),
 ):
-    """Full-text search across all notes."""
+    """Full-text search across all notes in a project."""
     user_id = auth.user_id
     indexer_service = IndexerService()
-    
+
     try:
-        results = indexer_service.search_notes(user_id, q, limit=50)
-        
+        results = indexer_service.search_notes(user_id, q, limit=50, project_id=project_id)
+
         search_results = []
         for result in results:
             # Use snippet from search results
             snippet = result.get("snippet", "")
-            
+
             updated = result.get("updated")
             if isinstance(updated, str):
                 updated = datetime.fromisoformat(updated.replace("Z", "+00:00"))
             elif not isinstance(updated, datetime):
                 updated = datetime.now()
-            
+
             search_results.append(
                 SearchResult(
                     note_path=result["path"],
@@ -57,24 +59,28 @@ async def search_notes(
                     updated=updated,
                 )
             )
-        
+
         return search_results
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
 @router.get("/api/backlinks/{path:path}", response_model=list[BacklinkResult])
-async def get_backlinks(path: str, auth: AuthContext = Depends(get_auth_context)):
+async def get_backlinks(
+    path: str,
+    project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
+    auth: AuthContext = Depends(get_auth_context),
+):
     """Get all notes that link to this note."""
     user_id = auth.user_id
     indexer_service = IndexerService()
-    
+
     try:
         # URL decode the path
         note_path = unquote(path)
-        
-        backlinks = indexer_service.get_backlinks(user_id, note_path)
-        
+
+        backlinks = indexer_service.get_backlinks(user_id, note_path, project_id)
+
         return [
             BacklinkResult(
                 note_path=backlink["path"],
@@ -87,14 +93,17 @@ async def get_backlinks(path: str, auth: AuthContext = Depends(get_auth_context)
 
 
 @router.get("/api/tags", response_model=list[Tag])
-async def get_tags(auth: AuthContext = Depends(get_auth_context)):
-    """Get all tags with usage counts."""
+async def get_tags(
+    project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """Get all tags with usage counts for a project."""
     user_id = auth.user_id
     indexer_service = IndexerService()
-    
+
     try:
-        tags = indexer_service.get_tags(user_id)
-        
+        tags = indexer_service.get_tags(user_id, project_id)
+
         return [
             Tag(tag_name=tag["tag"], count=tag["count"])
             for tag in tags

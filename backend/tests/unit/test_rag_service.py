@@ -26,6 +26,16 @@ def test_get_persist_dir(rag_service):
     user_id = "test-user"
     persist_dir = rag_service.get_persist_dir(user_id)
     assert user_id in persist_dir
+    assert "default" in persist_dir  # Now includes project_id
+    assert Path(persist_dir).exists()
+
+
+def test_get_persist_dir_with_project(rag_service):
+    user_id = "test-user"
+    project_id = "my-project"
+    persist_dir = rag_service.get_persist_dir(user_id, project_id)
+    assert user_id in persist_dir
+    assert project_id in persist_dir
     assert Path(persist_dir).exists()
 
 @patch("backend.src.services.rag_index.load_index_from_storage")
@@ -63,8 +73,9 @@ def test_get_or_build_index_new(mock_load, mock_vector_store, rag_service):
     }
     
     index = rag_service.get_or_build_index(user_id)
-    
-    rag_service.vault_service.list_notes.assert_called_with(user_id)
+
+    # Now includes project_id='default' parameter
+    rag_service.vault_service.list_notes.assert_called_with(user_id, project_id='default')
 
 @patch("backend.src.services.rag_index.os.path.exists")
 def test_get_status(mock_exists, rag_service):
@@ -103,9 +114,11 @@ def test_chat(mock_storage, mock_load, rag_service):
     
     from backend.src.models.rag import ChatMessage
     messages = [ChatMessage(role="user", content="Question")]
-    
-    response = rag_service.chat(user_id, messages)
-    
+
+    # chat is now async, so we need to await it
+    import asyncio
+    response = asyncio.get_event_loop().run_until_complete(rag_service.chat(user_id, messages))
+
     assert response.answer == "AI Answer"
     assert len(response.sources) == 1
     assert response.sources[0].path == "note.md"

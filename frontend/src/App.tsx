@@ -6,6 +6,7 @@ import { Settings } from './pages/Settings';
 import { isAuthenticated, getCurrentUser, setAuthTokenFromHash, ensureDemoToken, isDemoSession } from './services/auth';
 import { AuthLoadingSkeleton } from './components/AuthLoadingSkeleton';
 import { Toaster } from './components/ui/toaster';
+import { ProjectProvider } from './contexts/ProjectContext';
 import './App.css';
 
 // Protected route wrapper with auth check
@@ -90,7 +91,9 @@ function App() {
             path="/"
             element={
               <ProtectedRoute>
-                <MainApp />
+                <ProjectProvider>
+                  <MainApp />
+                </ProjectProvider>
               </ProtectedRoute>
             }
           />
@@ -98,7 +101,9 @@ function App() {
             path="/settings"
             element={
               <ProtectedRoute>
-                <Settings />
+                <ProjectProvider>
+                  <Settings />
+                </ProjectProvider>
               </ProtectedRoute>
             }
           />

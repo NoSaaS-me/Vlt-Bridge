@@ -9,6 +9,7 @@ from urllib.parse import unquote
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...models.note import Note, NoteSummary, NoteUpdate, NoteCreate
+from ...models.project import DEFAULT_PROJECT_ID
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
 from ...services.vault import VaultService
@@ -41,22 +42,23 @@ class ConflictError(Exception):
 @router.get("/api/notes", response_model=list[NoteSummary])
 async def list_notes(
     folder: Optional[str] = Query(None, description="Optional folder filter"),
+    project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
     auth: AuthContext = Depends(get_auth_context),
 ):
-    """List all notes in the vault."""
+    """List all notes in the project vault."""
     user_id = auth.user_id
     vault_service = VaultService()
-    
+
     try:
-        notes = vault_service.list_notes(user_id, folder=folder)
-        
+        notes = vault_service.list_notes(user_id, folder=folder, project_id=project_id)
+
         summaries = []
         for note in notes:
             # list_notes returns {path, title, last_modified}
             updated = note.get("last_modified")
             if not isinstance(updated, datetime):
                 updated = datetime.now()
-            
+
             summaries.append(
                 NoteSummary(
                     note_path=note["path"],
@@ -70,20 +72,24 @@ async def list_notes(
 
 
 @router.post("/api/notes", response_model=Note, status_code=201)
-async def create_note(create: NoteCreate, auth: AuthContext = Depends(get_auth_context)):
+async def create_note(
+    create: NoteCreate,
+    project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
+    auth: AuthContext = Depends(get_auth_context),
+):
     """Create a new note."""
     user_id = auth.user_id
     _ensure_write_allowed(user_id)
     vault_service = VaultService()
     indexer_service = IndexerService()
     db_service = DatabaseService()
-    
+
     try:
         note_path = create.note_path
 
         # Check if note already exists
         try:
-            vault_service.read_note(user_id, note_path)
+            vault_service.read_note(user_id, note_path, project_id)
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -95,32 +101,33 @@ async def create_note(create: NoteCreate, auth: AuthContext = Depends(get_auth_c
             pass  # Good, note doesn't exist
         except HTTPException:
             raise  # Re-raise HTTP exceptions
-        
+
         # Prepare metadata
         metadata = create.metadata.model_dump() if create.metadata else {}
         if create.title:
             metadata["title"] = create.title
-        
+
         # Write note to vault
         written_note = vault_service.write_note(
             user_id,
             note_path,
             body=create.body,
             metadata=metadata,
-            title=create.title
+            title=create.title,
+            project_id=project_id,
         )
-        
+
         # Index the note
-        new_version = indexer_service.index_note(user_id, written_note)
-        
+        new_version = indexer_service.index_note(user_id, written_note, project_id)
+
         # Update index health
         conn = db_service.connect()
         try:
             with conn:
-                indexer_service.update_index_health(conn, user_id)
+                indexer_service.update_index_health(conn, user_id, project_id)
         finally:
             conn.close()
-        
+
         # Return created note
         created = written_note["metadata"].get("created")
         updated_ts = written_note["metadata"].get("updated")
@@ -146,7 +153,7 @@ async def create_note(create: NoteCreate, auth: AuthContext = Depends(get_auth_c
                 updated_ts = created
         except (ValueError, TypeError):
             updated_ts = created
-        
+
         return Note(
             user_id=user_id,
             note_path=note_path,
@@ -167,31 +174,35 @@ async def create_note(create: NoteCreate, auth: AuthContext = Depends(get_auth_c
 
 
 @router.get("/api/notes/{path:path}", response_model=Note)
-async def get_note(path: str, auth: AuthContext = Depends(get_auth_context)):
+async def get_note(
+    path: str,
+    project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
+    auth: AuthContext = Depends(get_auth_context),
+):
     """Get a specific note by path."""
     user_id = auth.user_id
     vault_service = VaultService()
     db_service = DatabaseService()
-    
+
     try:
         # URL decode the path
         note_path = unquote(path)
-        
+
         # Read note from vault
-        note_data = vault_service.read_note(user_id, note_path)
-        
+        note_data = vault_service.read_note(user_id, note_path, project_id)
+
         # Get version from index
         conn = db_service.connect()
         try:
             cursor = conn.execute(
-                "SELECT version FROM note_metadata WHERE user_id = ? AND note_path = ?",
-                (user_id, note_path),
+                "SELECT version FROM note_metadata WHERE user_id = ? AND project_id = ? AND note_path = ?",
+                (user_id, project_id, note_path),
             )
             row = cursor.fetchone()
             version = row["version"] if row else 1
         finally:
             conn.close()
-        
+
         # Parse metadata
         metadata = note_data.get("metadata", {})
         created = metadata.get("created")
@@ -218,7 +229,7 @@ async def get_note(path: str, auth: AuthContext = Depends(get_auth_context)):
                 updated = created
         except (ValueError, TypeError):
             updated = created
-        
+
         return Note(
             user_id=user_id,
             note_path=note_path,
@@ -240,6 +251,7 @@ async def get_note(path: str, auth: AuthContext = Depends(get_auth_context)):
 async def update_note(
     path: str,
     update: NoteUpdate,
+    project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
     auth: AuthContext = Depends(get_auth_context),
 ):
     """Update a note with optimistic concurrency control."""
@@ -248,54 +260,55 @@ async def update_note(
     vault_service = VaultService()
     indexer_service = IndexerService()
     db_service = DatabaseService()
-    
+
     try:
         # URL decode the path
         note_path = unquote(path)
-        
+
         # Check version if provided
         if update.if_version is not None:
             conn = db_service.connect()
             try:
                 cursor = conn.execute(
-                    "SELECT version FROM note_metadata WHERE user_id = ? AND note_path = ?",
-                    (user_id, note_path),
+                    "SELECT version FROM note_metadata WHERE user_id = ? AND project_id = ? AND note_path = ?",
+                    (user_id, project_id, note_path),
                 )
                 row = cursor.fetchone()
                 current_version = row["version"] if row else 0
-                
+
                 if current_version != update.if_version:
                     raise ConflictError(
                         f"Version conflict: expected {update.if_version}, got {current_version}"
                     )
             finally:
                 conn.close()
-        
+
         # Prepare metadata
         metadata = update.metadata.model_dump() if update.metadata else {}
         if update.title:
             metadata["title"] = update.title
-        
+
         # Write note to vault
         written_note = vault_service.write_note(
-            user_id, 
-            note_path, 
-            body=update.body, 
+            user_id,
+            note_path,
+            body=update.body,
             metadata=metadata,
-            title=update.title
+            title=update.title,
+            project_id=project_id,
         )
-        
+
         # Index the note
-        new_version = indexer_service.index_note(user_id, written_note)
-        
+        new_version = indexer_service.index_note(user_id, written_note, project_id)
+
         # Update index health
         conn = db_service.connect()
         try:
             with conn:
-                indexer_service.update_index_health(conn, user_id)
+                indexer_service.update_index_health(conn, user_id, project_id)
         finally:
             conn.close()
-        
+
         # Return updated note
         created = written_note["metadata"].get("created")
         updated_ts = written_note["metadata"].get("updated")
@@ -321,7 +334,7 @@ async def update_note(
                 updated_ts = created
         except (ValueError, TypeError):
             updated_ts = created
-        
+
         return Note(
             user_id=user_id,
             note_path=note_path,
@@ -355,9 +368,10 @@ class NoteMoveRequest(BaseModel):
 async def move_note(
     path: str,
     move_request: NoteMoveRequest,
+    project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
     auth: AuthContext = Depends(get_auth_context),
 ):
-    """Move or rename a note to a new path."""
+    """Move or rename a note to a new path within the same project."""
     user_id = auth.user_id
     _ensure_write_allowed(user_id)
     vault_service = VaultService()
@@ -370,27 +384,28 @@ async def move_note(
         new_path = move_request.new_path
 
         # Move the note in the vault
-        moved_note = vault_service.move_note(user_id, old_path, new_path)
+        moved_note = vault_service.move_note(user_id, old_path, new_path, project_id)
 
         # Delete old note index entries
         conn = db_service.connect()
         try:
             with conn:
                 # Delete from all index tables
-                conn.execute("DELETE FROM note_metadata WHERE user_id = ? AND note_path = ?", (user_id, old_path))
-                conn.execute("DELETE FROM note_links WHERE user_id = ? AND source_path = ?", (user_id, old_path))
-                conn.execute("DELETE FROM note_tags WHERE user_id = ? AND note_path = ?", (user_id, old_path))
+                conn.execute("DELETE FROM note_metadata WHERE user_id = ? AND project_id = ? AND note_path = ?", (user_id, project_id, old_path))
+                conn.execute("DELETE FROM note_fts WHERE user_id = ? AND project_id = ? AND note_path = ?", (user_id, project_id, old_path))
+                conn.execute("DELETE FROM note_links WHERE user_id = ? AND project_id = ? AND source_path = ?", (user_id, project_id, old_path))
+                conn.execute("DELETE FROM note_tags WHERE user_id = ? AND project_id = ? AND note_path = ?", (user_id, project_id, old_path))
         finally:
             conn.close()
 
         # Index the note at new location
-        new_version = indexer_service.index_note(user_id, moved_note)
+        new_version = indexer_service.index_note(user_id, moved_note, project_id)
 
         # Update index health
         conn = db_service.connect()
         try:
             with conn:
-                indexer_service.update_index_health(conn, user_id)
+                indexer_service.update_index_health(conn, user_id, project_id)
         finally:
             conn.close()
 

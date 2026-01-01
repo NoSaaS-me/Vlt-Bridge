@@ -108,12 +108,20 @@ export async function apiFetch<T>(
  */
 import type { GraphData } from '@/types/graph';
 
-export async function getGraphData(): Promise<GraphData> {
-  return apiFetch<GraphData>('/api/graph');
+export async function getGraphData(projectId?: string): Promise<GraphData> {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<GraphData>(query ? `/api/graph?${query}` : '/api/graph');
 }
 
-export async function listNotes(folder?: string): Promise<NoteSummary[]> {
+export async function listNotes(projectId?: string, folder?: string): Promise<NoteSummary[]> {
   const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
   if (folder) {
     params.set('folder', folder);
   }
@@ -125,16 +133,24 @@ export async function listNotes(folder?: string): Promise<NoteSummary[]> {
 /**
  * T067: Get a single note by path
  */
-export async function getNote(path: string): Promise<Note> {
+export async function getNote(path: string, projectId?: string): Promise<Note> {
   const encodedPath = encodeURIComponent(path);
-  return apiFetch<Note>(`/api/notes/${encodedPath}`);
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<Note>(`/api/notes/${encodedPath}${query ? `?${query}` : ''}`);
 }
 
 /**
  * T068: Search notes by query string
  */
-export async function searchNotes(query: string): Promise<SearchResult[]> {
+export async function searchNotes(query: string, projectId?: string): Promise<SearchResult[]> {
   const params = new URLSearchParams({ q: query });
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
   return apiFetch<SearchResult[]>(`/api/search?${params.toString()}`);
 }
 
@@ -146,9 +162,14 @@ export interface BacklinkResult {
   title: string;
 }
 
-export async function getBacklinks(path: string): Promise<BacklinkResult[]> {
+export async function getBacklinks(path: string, projectId?: string): Promise<BacklinkResult[]> {
   const encodedPath = encodeURIComponent(path);
-  return apiFetch<BacklinkResult[]>(`/api/backlinks/${encodedPath}`);
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<BacklinkResult[]>(`/api/backlinks/${encodedPath}${query ? `?${query}` : ''}`);
 }
 
 export interface DemoTokenResponse {
@@ -172,8 +193,13 @@ export async function getTags(): Promise<Tag[]> {
 /**
  * T071: Create a note
  */
-export async function createNote(data: NoteCreateRequest): Promise<Note> {
-  return apiFetch<Note>('/api/notes', {
+export async function createNote(data: NoteCreateRequest, projectId?: string): Promise<Note> {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<Note>(`/api/notes${query ? `?${query}` : ''}`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
@@ -181,10 +207,16 @@ export async function createNote(data: NoteCreateRequest): Promise<Note> {
 
 export async function updateNote(
   path: string,
-  data: NoteUpdateRequest
+  data: NoteUpdateRequest,
+  projectId?: string
 ): Promise<Note> {
   const encodedPath = encodeURIComponent(path);
-  return apiFetch<Note>(`/api/notes/${encodedPath}`, {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<Note>(`/api/notes/${encodedPath}${query ? `?${query}` : ''}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   });
@@ -200,8 +232,13 @@ export async function getCurrentUser(): Promise<User> {
 /**
  * Get index health information
  */
-export async function getIndexHealth(): Promise<IndexHealth> {
-  return apiFetch<IndexHealth>('/api/index/health');
+export async function getIndexHealth(projectId?: string): Promise<IndexHealth> {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<IndexHealth>(`/api/index/health${query ? `?${query}` : ''}`);
 }
 
 /**
@@ -213,8 +250,13 @@ export interface RebuildResponse {
   duration_ms: number;
 }
 
-export async function rebuildIndex(): Promise<RebuildResponse> {
-  return apiFetch<RebuildResponse>('/api/index/rebuild', {
+export async function rebuildIndex(projectId?: string): Promise<RebuildResponse> {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<RebuildResponse>(`/api/index/rebuild${query ? `?${query}` : ''}`, {
     method: 'POST',
   });
 }
@@ -236,11 +278,55 @@ export async function getLogs(): Promise<LogEntry[]> {
 /**
  * Move or rename a note to a new path
  */
-export async function moveNote(oldPath: string, newPath: string): Promise<Note> {
+export async function moveNote(oldPath: string, newPath: string, projectId?: string): Promise<Note> {
   const encodedPath = encodeURIComponent(oldPath);
-  return apiFetch<Note>(`/api/notes/${encodedPath}`, {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<Note>(`/api/notes/${encodedPath}${query ? `?${query}` : ''}`, {
     method: 'PATCH',
     body: JSON.stringify({ new_path: newPath }),
   });
+}
+
+/**
+ * Delete a note
+ */
+export async function deleteNote(path: string, projectId?: string): Promise<void> {
+  const encodedPath = encodeURIComponent(path);
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  await apiFetch<void>(`/api/notes/${encodedPath}${query ? `?${query}` : ''}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Thread API functions
+ */
+import type { ThreadListResponse, Thread } from '@/types/thread';
+
+/**
+ * List threads for a project
+ */
+export async function listThreads(projectId?: string): Promise<ThreadListResponse> {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<ThreadListResponse>(`/api/threads${query ? `?${query}` : ''}`);
+}
+
+/**
+ * Get a single thread with entries
+ */
+export async function getThread(threadId: string): Promise<Thread> {
+  return apiFetch<Thread>(`/api/threads/${encodeURIComponent(threadId)}`);
 }
 

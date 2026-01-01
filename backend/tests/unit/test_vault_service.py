@@ -16,7 +16,18 @@ def test_initialize_vault_creates_user_directory(vault_config: AppConfig) -> Non
 
     path = service.initialize_vault("user-123")
 
-    expected = vault_config.vault_base_path / "user-123"
+    # Path now includes project_id (default: 'default')
+    expected = vault_config.vault_base_path / "user-123" / "default"
+    assert path == expected.resolve()
+    assert path.exists() and path.is_dir()
+
+
+def test_initialize_vault_with_project_id(vault_config: AppConfig) -> None:
+    service = VaultService(config=vault_config)
+
+    path = service.initialize_vault("user-123", project_id="my-project")
+
+    expected = vault_config.vault_base_path / "user-123" / "my-project"
     assert path == expected.resolve()
     assert path.exists() and path.is_dir()
 

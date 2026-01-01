@@ -44,7 +44,7 @@ interface ChatPanelProps {
   onNotesChanged?: () => void;
 }
 
-export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) {
+export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged }: ChatPanelProps) {
   const navigate = useNavigate();
   const [messages, setMessages] = useState<OracleMessageWithId[]>([]);
   const [input, setInput] = useState('');
@@ -53,7 +53,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
   const [showThinking, setShowThinking] = useState(true);
   const [showSources, setShowSources] = useState(true);
-  const [activeSources, setActiveSources] = useState<SourceType[]>(['vault', 'code', 'threads']);
+  const [activeSources, _setActiveSources] = useState<SourceType[]>(['vault', 'code', 'threads']);
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [commandFilter, setCommandFilter] = useState('');
   const [showContextTree, setShowContextTree] = useState(false);

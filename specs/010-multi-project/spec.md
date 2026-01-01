@@ -84,7 +84,7 @@ User (user_id)
 ### Current Layout
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ DEMO ONLY - ALL DATA IS TEMPORARY...                        │ ← Remove
+│ DEMO ONLY - ALL DATA IS TEMPORARY...                        │ ← Make conditional
 ├─────────────────────────────────────────────────────────────┤
 │                      VAULT.MCP                    [C][G][S] │
 ├─────────────┬───────────────────────────────────────────────┤
@@ -99,45 +99,57 @@ User (user_id)
 ### Target Layout
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ [Project ▼]              [T] [I] [C] [G] [S]              [Model] [...] │
+│ [Project ▼]    VAULT.MCP    [T][I][C][G][S]               [Model] [...] │
 ├─────────────┬───────────────────────────────────────────────┬───────────┤
-│ Navigation  │ Header: Oracle/Document/Issue/Thread          │ Flyout    │
-│ Controls    │─────────────────────────────────────────────  │ Pane      │
-│             │                                               │           │
-│ Tree of     │ Main Content                                 │ Threads   │
-│ Vlt Docs    │ - Note Viewer / Editor                       │ Issues    │
-│ and Dirs    │ - Graph View                                 │ (dynamic) │
-│             │ - AI Chat (full screen option)               │           │
+│ [+New Note] │ Main Content                                 │ Flyout    │
+│ [+Folder]   │ - Note Viewer / Editor                       │ Pane      │
+│ Search...   │ - Graph View                                 │           │
+│             │ - AI Chat (full screen option)               │ Threads   │
+│ Tree of     │                                               │ Issues    │
+│ Vlt Docs    │                                               │ Chat      │
+│ and Dirs    │                                               │ (dynamic) │
 │             │                                               │           │
 ├─────────────┼───────────────────────────────────────────────┴───────────┤
-│             │ AI CHAT                                        [Send]     │
+│             │ AI CHAT INPUT                                  [Send]     │
 └─────────────┴───────────────────────────────────────────────────────────┘
 
 Icon Legend: T=Threads | I=Issues | C=Chat | G=Graph | S=Settings
+Note: Left sidebar (New Note, Folder, Search, Tree) remains unchanged.
+Note: Vault.MCP banner remains - omitted from diagram for space only.
+Note: DEMO banner made conditional on isDemoMode, not removed.
 ```
 
-### UI Components Needed
+### UI Changes (Minimal Scope)
 
-1. **ProjectDropdown** (top-left)
+**Header changes only:**
+1. **ProjectDropdown** - Add to header left side
    - List user's projects
    - Create new project option
    - Switch triggers data reload
 
-2. **NavigationBar** (top-center)
-   - T: Threads flyout toggle
-   - I: Issue Tracking flyout toggle (future scope)
+2. **Add [T] and [I] buttons** - Add to existing icon row
+   - T: Threads flyout toggle (new)
+   - I: Issues flyout toggle (new, placeholder for now)
    - C: Chat toggle (existing)
    - G: Graph view toggle (existing)
    - S: Settings navigation (existing)
 
-3. **ThreadsFlyout** (right side)
-   - List threads for current project
-   - Click to view thread details
-   - Selecting populates main view
+3. **Flyout pane** - Reuse existing Chat flyout pattern
+   - T button opens ThreadsFlyout in right pane
+   - I button opens IssuesFlyout in right pane (placeholder)
+   - C button opens ChatPanel in right pane (existing)
+   - Only one flyout open at a time (mutually exclusive)
 
-4. **IssuesFlyout** (right side, future scope)
-   - Integration with `bd` (beads) CLI
-   - Out of scope for initial implementation
+**Left sidebar - NO CHANGES:**
+- New Note button - unchanged
+- New Folder button - unchanged
+- Search bar - unchanged
+- Directory tree - unchanged
+
+**New Components:**
+1. **ProjectDropdown.tsx** - Project selector dropdown
+2. **ThreadsFlyout.tsx** - Thread list panel (reuse flyout pattern)
+3. **IssuesFlyout.tsx** - Placeholder for beads integration
 
 ## Technical Requirements
 

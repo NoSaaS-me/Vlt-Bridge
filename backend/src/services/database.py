@@ -2,18 +2,37 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 import sqlite3
 from typing import Iterable
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_DB_PATH = DATA_DIR / "index.db"
 
 DDL_STATEMENTS: tuple[str, ...] = (
+    # Projects table (new for multi-project support)
+    """
+    CREATE TABLE IF NOT EXISTS projects (
+        user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        settings_json TEXT,
+        PRIMARY KEY (user_id, project_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id)",
+    # Note metadata with project_id
     """
     CREATE TABLE IF NOT EXISTS note_metadata (
         user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT 'default',
         note_path TEXT NOT NULL,
         version INTEGER NOT NULL DEFAULT 1,
         title TEXT NOT NULL,
@@ -22,16 +41,19 @@ DDL_STATEMENTS: tuple[str, ...] = (
         size_bytes INTEGER NOT NULL DEFAULT 0,
         normalized_title_slug TEXT,
         normalized_path_slug TEXT,
-        PRIMARY KEY (user_id, note_path)
+        PRIMARY KEY (user_id, project_id, note_path)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_metadata_user ON note_metadata(user_id)",
-    "CREATE INDEX IF NOT EXISTS idx_metadata_updated ON note_metadata(user_id, updated DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_metadata_title_slug ON note_metadata(user_id, normalized_title_slug)",
-    "CREATE INDEX IF NOT EXISTS idx_metadata_path_slug ON note_metadata(user_id, normalized_path_slug)",
+    "CREATE INDEX IF NOT EXISTS idx_metadata_user_project ON note_metadata(user_id, project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_metadata_updated ON note_metadata(user_id, project_id, updated DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_metadata_title_slug ON note_metadata(user_id, project_id, normalized_title_slug)",
+    "CREATE INDEX IF NOT EXISTS idx_metadata_path_slug ON note_metadata(user_id, project_id, normalized_path_slug)",
+    # FTS with project_id
     """
     CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5(
         user_id UNINDEXED,
+        project_id UNINDEXED,
         note_path UNINDEXED,
         title,
         body,
@@ -39,37 +61,47 @@ DDL_STATEMENTS: tuple[str, ...] = (
         prefix='2 3'
     )
     """,
+    # Note tags with project_id
     """
     CREATE TABLE IF NOT EXISTS note_tags (
         user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT 'default',
         note_path TEXT NOT NULL,
         tag TEXT NOT NULL,
-        PRIMARY KEY (user_id, note_path, tag)
+        PRIMARY KEY (user_id, project_id, note_path, tag)
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_tags_user_tag ON note_tags(user_id, tag)",
-    "CREATE INDEX IF NOT EXISTS idx_tags_user_path ON note_tags(user_id, note_path)",
+    "CREATE INDEX IF NOT EXISTS idx_tags_user_project ON note_tags(user_id, project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tags_user_tag ON note_tags(user_id, project_id, tag)",
+    "CREATE INDEX IF NOT EXISTS idx_tags_user_path ON note_tags(user_id, project_id, note_path)",
+    # Note links with project_id
     """
     CREATE TABLE IF NOT EXISTS note_links (
         user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT 'default',
         source_path TEXT NOT NULL,
         target_path TEXT,
         link_text TEXT NOT NULL,
         is_resolved INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (user_id, source_path, link_text)
+        PRIMARY KEY (user_id, project_id, source_path, link_text)
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_links_user_source ON note_links(user_id, source_path)",
-    "CREATE INDEX IF NOT EXISTS idx_links_user_target ON note_links(user_id, target_path)",
-    "CREATE INDEX IF NOT EXISTS idx_links_unresolved ON note_links(user_id, is_resolved)",
+    "CREATE INDEX IF NOT EXISTS idx_links_user_project ON note_links(user_id, project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_links_user_source ON note_links(user_id, project_id, source_path)",
+    "CREATE INDEX IF NOT EXISTS idx_links_user_target ON note_links(user_id, project_id, target_path)",
+    "CREATE INDEX IF NOT EXISTS idx_links_unresolved ON note_links(user_id, project_id, is_resolved)",
+    # Index health with project_id
     """
     CREATE TABLE IF NOT EXISTS index_health (
-        user_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT 'default',
         note_count INTEGER NOT NULL DEFAULT 0,
         last_full_rebuild TEXT,
-        last_incremental_update TEXT
+        last_incremental_update TEXT,
+        PRIMARY KEY (user_id, project_id)
     )
     """,
+    # User settings with default_project_id
     """
     CREATE TABLE IF NOT EXISTS user_settings (
         user_id TEXT PRIMARY KEY,
@@ -82,6 +114,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         librarian_timeout INTEGER NOT NULL DEFAULT 1200,
         max_context_nodes INTEGER NOT NULL DEFAULT 30,
         openrouter_api_key TEXT,
+        default_project_id TEXT DEFAULT 'default',
         created TEXT NOT NULL,
         updated TEXT NOT NULL
     )
@@ -220,7 +253,216 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE user_settings ADD COLUMN max_context_nodes INTEGER NOT NULL DEFAULT 30",
     # Add chat_center_mode column if it doesn't exist (default 0 = flyout panel)
     "ALTER TABLE user_settings ADD COLUMN chat_center_mode INTEGER NOT NULL DEFAULT 0",
+    # Add default_project_id column to user_settings (010-multi-project)
+    "ALTER TABLE user_settings ADD COLUMN default_project_id TEXT DEFAULT 'default'",
 )
+
+
+# Multi-project migration (010-multi-project)
+# These are complex migrations that need table recreation
+MULTI_PROJECT_MIGRATION_VERSION = "010"
+
+
+def _check_has_project_id_column(conn: sqlite3.Connection, table: str) -> bool:
+    """Check if a table has the project_id column."""
+    cursor = conn.execute(f"PRAGMA table_info({table})")
+    columns = [row[1] for row in cursor.fetchall()]
+    return "project_id" in columns
+
+
+def _check_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    """Check if a table exists."""
+    cursor = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table,)
+    )
+    return cursor.fetchone() is not None
+
+
+def run_multi_project_migration(conn: sqlite3.Connection) -> bool:
+    """
+    Run the multi-project migration to add project_id to vault tables.
+
+    This migration:
+    1. Creates the projects table
+    2. Adds project_id column to note_metadata, note_tags, note_links, index_health
+    3. Recreates note_fts with project_id
+    4. Creates default project for existing users
+    5. Migrates existing data to project_id='default'
+
+    Returns True if migration was performed, False if already migrated.
+    """
+    from datetime import datetime, timezone
+
+    # Check if already migrated by looking for project_id in note_metadata
+    if _check_has_project_id_column(conn, "note_metadata"):
+        logger.debug("Multi-project migration already applied (note_metadata has project_id)")
+        return False
+
+    logger.info("Starting multi-project migration (010)...")
+
+    try:
+        # 1. Create projects table if not exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                user_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                settings_json TEXT,
+                PRIMARY KEY (user_id, project_id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id)")
+
+        # 2. Get all existing users from note_metadata
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        cursor = conn.execute("SELECT DISTINCT user_id FROM note_metadata")
+        existing_users = [row[0] for row in cursor.fetchall()]
+
+        # 3. Create default project for each existing user
+        for user_id in existing_users:
+            conn.execute("""
+                INSERT OR IGNORE INTO projects (user_id, project_id, name, description, created_at, updated_at)
+                VALUES (?, 'default', 'Default Project', 'Migrated from single-vault', ?, ?)
+            """, (user_id, now_iso, now_iso))
+
+        # 4. Migrate note_metadata - recreate with project_id
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS note_metadata_new (
+                user_id TEXT NOT NULL,
+                project_id TEXT NOT NULL DEFAULT 'default',
+                note_path TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1,
+                title TEXT NOT NULL,
+                created TEXT NOT NULL,
+                updated TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                normalized_title_slug TEXT,
+                normalized_path_slug TEXT,
+                PRIMARY KEY (user_id, project_id, note_path)
+            )
+        """)
+
+        conn.execute("""
+            INSERT INTO note_metadata_new
+            SELECT user_id, 'default', note_path, version, title,
+                   created, updated, size_bytes, normalized_title_slug, normalized_path_slug
+            FROM note_metadata
+        """)
+
+        conn.execute("DROP TABLE note_metadata")
+        conn.execute("ALTER TABLE note_metadata_new RENAME TO note_metadata")
+
+        # Recreate indexes for note_metadata
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metadata_user ON note_metadata(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metadata_user_project ON note_metadata(user_id, project_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metadata_updated ON note_metadata(user_id, project_id, updated DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metadata_title_slug ON note_metadata(user_id, project_id, normalized_title_slug)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metadata_path_slug ON note_metadata(user_id, project_id, normalized_path_slug)")
+
+        # 5. Migrate note_tags - recreate with project_id
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS note_tags_new (
+                user_id TEXT NOT NULL,
+                project_id TEXT NOT NULL DEFAULT 'default',
+                note_path TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                PRIMARY KEY (user_id, project_id, note_path, tag)
+            )
+        """)
+
+        conn.execute("""
+            INSERT INTO note_tags_new
+            SELECT user_id, 'default', note_path, tag FROM note_tags
+        """)
+
+        conn.execute("DROP TABLE note_tags")
+        conn.execute("ALTER TABLE note_tags_new RENAME TO note_tags")
+
+        # Recreate indexes for note_tags
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_user_project ON note_tags(user_id, project_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_user_tag ON note_tags(user_id, project_id, tag)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_user_path ON note_tags(user_id, project_id, note_path)")
+
+        # 6. Migrate note_links - recreate with project_id
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS note_links_new (
+                user_id TEXT NOT NULL,
+                project_id TEXT NOT NULL DEFAULT 'default',
+                source_path TEXT NOT NULL,
+                target_path TEXT,
+                link_text TEXT NOT NULL,
+                is_resolved INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, project_id, source_path, link_text)
+            )
+        """)
+
+        conn.execute("""
+            INSERT INTO note_links_new
+            SELECT user_id, 'default', source_path, target_path, link_text, is_resolved
+            FROM note_links
+        """)
+
+        conn.execute("DROP TABLE note_links")
+        conn.execute("ALTER TABLE note_links_new RENAME TO note_links")
+
+        # Recreate indexes for note_links
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_links_user_project ON note_links(user_id, project_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_links_user_source ON note_links(user_id, project_id, source_path)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_links_user_target ON note_links(user_id, project_id, target_path)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_links_unresolved ON note_links(user_id, project_id, is_resolved)")
+
+        # 7. Migrate index_health - recreate with project_id
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS index_health_new (
+                user_id TEXT NOT NULL,
+                project_id TEXT NOT NULL DEFAULT 'default',
+                note_count INTEGER NOT NULL DEFAULT 0,
+                last_full_rebuild TEXT,
+                last_incremental_update TEXT,
+                PRIMARY KEY (user_id, project_id)
+            )
+        """)
+
+        conn.execute("""
+            INSERT INTO index_health_new
+            SELECT user_id, 'default', note_count, last_full_rebuild, last_incremental_update
+            FROM index_health
+        """)
+
+        conn.execute("DROP TABLE index_health")
+        conn.execute("ALTER TABLE index_health_new RENAME TO index_health")
+
+        # 8. Rebuild note_fts with project_id
+        conn.execute("DROP TABLE IF EXISTS note_fts")
+        conn.execute("""
+            CREATE VIRTUAL TABLE note_fts USING fts5(
+                user_id UNINDEXED,
+                project_id UNINDEXED,
+                note_path UNINDEXED,
+                title,
+                body,
+                tokenize='porter unicode61',
+                prefix='2 3'
+            )
+        """)
+
+        # Re-populate FTS from note_metadata (body needs separate process via indexer)
+        conn.execute("""
+            INSERT INTO note_fts(user_id, project_id, note_path, title, body)
+            SELECT user_id, project_id, note_path, title, ''
+            FROM note_metadata
+        """)
+
+        logger.info("Multi-project migration (010) completed successfully")
+        return True
+
+    except Exception as e:
+        logger.error(f"Multi-project migration failed: {e}")
+        raise
 
 
 class DatabaseService:
@@ -243,10 +485,21 @@ class DatabaseService:
         """Create all schema artifacts required for indexing."""
         conn = self.connect()
         try:
-            with conn:  # Transactional apply of DDL
-                for statement in statements or DDL_STATEMENTS:
-                    conn.execute(statement)
-            # Run migrations for existing databases (ignore errors for already-applied migrations)
+            # Check if this is an existing database needing migration
+            needs_migration = _check_table_exists(conn, "note_metadata") and not _check_has_project_id_column(conn, "note_metadata")
+
+            if needs_migration:
+                # Run multi-project migration for existing databases
+                with conn:
+                    run_multi_project_migration(conn)
+                conn.commit()
+            else:
+                # Fresh install - apply DDL statements
+                with conn:  # Transactional apply of DDL
+                    for statement in statements or DDL_STATEMENTS:
+                        conn.execute(statement)
+
+            # Run simple column migrations for existing databases (ignore errors for already-applied migrations)
             for migration in MIGRATION_STATEMENTS:
                 try:
                     conn.execute(migration)
@@ -263,4 +516,4 @@ def init_database(db_path: str | Path | None = None) -> Path:
     return DatabaseService(db_path).initialize()
 
 
-__all__ = ["DatabaseService", "init_database", "DEFAULT_DB_PATH"]
+__all__ = ["DatabaseService", "init_database", "DEFAULT_DB_PATH", "run_multi_project_migration"]

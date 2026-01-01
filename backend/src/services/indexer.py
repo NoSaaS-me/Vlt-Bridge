@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Sequence
 
 from .database import DatabaseService
 from .vault import VaultNote
+from ..models.project import DEFAULT_PROJECT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +71,10 @@ class IndexerService:
     def __init__(self, db_service: DatabaseService | None = None) -> None:
         self.db_service = db_service or DatabaseService()
 
-    def index_note(self, user_id: str, note: VaultNote) -> int:
+    def index_note(self, user_id: str, note: VaultNote, project_id: str = DEFAULT_PROJECT_ID) -> int:
         """Insert or update index rows for a note."""
         start_time = time.time()
-        
+
         note_path = note["path"]
         metadata = dict(note.get("metadata") or {})
         title = note.get("title") or metadata.get("title") or Path(note_path).stem
@@ -93,19 +94,20 @@ class IndexerService:
         conn = self.db_service.connect()
         try:
             with conn:
-                version = self.increment_version(conn, user_id, note_path)
-                self._delete_current_entries(conn, user_id, note_path)
+                version = self.increment_version(conn, user_id, note_path, project_id)
+                self._delete_current_entries(conn, user_id, note_path, project_id)
 
                 conn.execute(
                     """
                     INSERT INTO note_metadata (
-                        user_id, note_path, version, title,
+                        user_id, project_id, note_path, version, title,
                         created, updated, size_bytes,
                         normalized_title_slug, normalized_path_slug
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id,
+                        project_id,
                         note_path,
                         version,
                         title,
@@ -119,31 +121,32 @@ class IndexerService:
 
                 conn.execute(
                     """
-                    INSERT INTO note_fts (user_id, note_path, title, body)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO note_fts (user_id, project_id, note_path, title, body)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (user_id, note_path, title, body),
+                    (user_id, project_id, note_path, title, body),
                 )
 
                 if tags:
                     conn.executemany(
                         """
-                        INSERT INTO note_tags (user_id, note_path, tag)
-                        VALUES (?, ?, ?)
+                        INSERT INTO note_tags (user_id, project_id, note_path, tag)
+                        VALUES (?, ?, ?, ?)
                         """,
-                        [(user_id, note_path, tag) for tag in tags],
+                        [(user_id, project_id, note_path, tag) for tag in tags],
                     )
 
                 if wikilinks:
-                    resolved = self.resolve_wikilinks(conn, user_id, note_path, wikilinks)
+                    resolved = self.resolve_wikilinks(conn, user_id, note_path, wikilinks, project_id)
                     conn.executemany(
                         """
-                        INSERT INTO note_links (user_id, source_path, target_path, link_text, is_resolved)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO note_links (user_id, project_id, source_path, target_path, link_text, is_resolved)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         [
                             (
                                 user_id,
+                                project_id,
                                 note_path,
                                 entry["target_path"],
                                 entry["link_text"],
@@ -153,13 +156,14 @@ class IndexerService:
                         ],
                     )
 
-                self.update_index_health(conn, user_id)
+                self.update_index_health(conn, user_id, project_id)
 
             duration_ms = (time.time() - start_time) * 1000
             logger.info(
                 "Note indexed successfully",
                 extra={
                     "user_id": user_id,
+                    "project_id": project_id,
                     "note_path": note_path,
                     "version": version,
                     "tags_count": len(tags),
@@ -172,21 +176,21 @@ class IndexerService:
         finally:
             conn.close()
 
-    def delete_note_index(self, user_id: str, note_path: str) -> None:
+    def delete_note_index(self, user_id: str, note_path: str, project_id: str = DEFAULT_PROJECT_ID) -> None:
         """Remove all index data for a note and update backlinks."""
         conn = self.db_service.connect()
         try:
             with conn:
-                self._delete_current_entries(conn, user_id, note_path)
+                self._delete_current_entries(conn, user_id, note_path, project_id)
                 conn.execute(
                     """
                     UPDATE note_links
                     SET target_path = NULL, is_resolved = 0
-                    WHERE user_id = ? AND target_path = ?
+                    WHERE user_id = ? AND project_id = ? AND target_path = ?
                     """,
-                    (user_id, note_path),
+                    (user_id, project_id, note_path),
                 )
-                self.update_index_health(conn, user_id)
+                self.update_index_health(conn, user_id, project_id)
         finally:
             conn.close()
 
@@ -210,6 +214,7 @@ class IndexerService:
         user_id: str,
         note_path: str,
         link_texts: Sequence[str],
+        project_id: str = DEFAULT_PROJECT_ID,
     ) -> List[Dict[str, Any]]:
         """Resolve wikilinks to target note paths using slug comparison."""
         if not link_texts:
@@ -228,10 +233,10 @@ class IndexerService:
                 """
                 SELECT note_path
                 FROM note_metadata
-                WHERE user_id = ?
+                WHERE user_id = ? AND project_id = ?
                   AND (normalized_title_slug = ? OR normalized_path_slug = ?)
                 """,
-                (user_id, slug, slug),
+                (user_id, project_id, slug, slug),
             ).fetchall()
 
             if not rows:
@@ -249,38 +254,38 @@ class IndexerService:
         return results
 
     def increment_version(
-        self, conn: sqlite3.Connection, user_id: str, note_path: str
+        self, conn: sqlite3.Connection, user_id: str, note_path: str, project_id: str = DEFAULT_PROJECT_ID
     ) -> int:
         """Return the next version number for a note."""
         row = conn.execute(
-            "SELECT version FROM note_metadata WHERE user_id = ? AND note_path = ?",
-            (user_id, note_path),
+            "SELECT version FROM note_metadata WHERE user_id = ? AND project_id = ? AND note_path = ?",
+            (user_id, project_id, note_path),
         ).fetchone()
         if row is None:
             return 1
         current_version = row["version"] if isinstance(row, sqlite3.Row) else row[0]
         return int(current_version) + 1
 
-    def update_index_health(self, conn: sqlite3.Connection, user_id: str) -> None:
-        """Update per-user index health stats."""
+    def update_index_health(self, conn: sqlite3.Connection, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> None:
+        """Update per-project index health stats."""
         row = conn.execute(
-            "SELECT COUNT(*) AS count FROM note_metadata WHERE user_id = ?",
-            (user_id,),
+            "SELECT COUNT(*) AS count FROM note_metadata WHERE user_id = ? AND project_id = ?",
+            (user_id, project_id),
         ).fetchone()
         note_count = int(row["count"] if isinstance(row, sqlite3.Row) else row[0])
         now_iso = _utcnow_iso()
         conn.execute(
             """
-            INSERT INTO index_health (user_id, note_count, last_incremental_update)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
+            INSERT INTO index_health (user_id, project_id, note_count, last_incremental_update)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, project_id) DO UPDATE SET
                 note_count = excluded.note_count,
                 last_incremental_update = excluded.last_incremental_update
             """,
-            (user_id, note_count, now_iso),
+            (user_id, project_id, note_count, now_iso),
         )
 
-    def search_notes(self, user_id: str, query: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+    def search_notes(self, user_id: str, query: str, *, limit: int = 50, project_id: str = DEFAULT_PROJECT_ID) -> List[Dict[str, Any]]:
         """Execute a full-text search with recency bonus scoring."""
         if not query or not query.strip():
             raise ValueError("Search query cannot be empty")
@@ -295,15 +300,15 @@ class IndexerService:
                     m.note_path,
                     m.title,
                     m.updated,
-                    snippet(note_fts, 3, '<mark>', '</mark>', '...', 32) AS snippet,
+                    snippet(note_fts, 4, '<mark>', '</mark>', '...', 32) AS snippet,
                     bm25(note_fts, 3.0, 1.0) AS score
                 FROM note_fts
-                JOIN note_metadata m USING (user_id, note_path)
-                WHERE note_fts.user_id = ? AND note_fts MATCH ?
+                JOIN note_metadata m USING (user_id, project_id, note_path)
+                WHERE note_fts.user_id = ? AND note_fts.project_id = ? AND note_fts MATCH ?
                 ORDER BY score DESC
                 LIMIT ?
                 """,
-                (user_id, sanitized_query, limit),
+                (user_id, project_id, sanitized_query, limit),
             ).fetchall()
         finally:
             conn.close()
@@ -341,7 +346,7 @@ class IndexerService:
 
         return sorted(results, key=lambda item: item["score"], reverse=True)
 
-    def get_backlinks(self, user_id: str, target_path: str) -> List[Dict[str, Any]]:
+    def get_backlinks(self, user_id: str, target_path: str, project_id: str = DEFAULT_PROJECT_ID) -> List[Dict[str, Any]]:
         """Return backlinks for a note."""
         conn = self.db_service.connect()
         try:
@@ -350,11 +355,11 @@ class IndexerService:
                 SELECT DISTINCT l.source_path, m.title
                 FROM note_links l
                 JOIN note_metadata m
-                  ON l.user_id = m.user_id AND l.source_path = m.note_path
-                WHERE l.user_id = ? AND l.target_path = ?
+                  ON l.user_id = m.user_id AND l.project_id = m.project_id AND l.source_path = m.note_path
+                WHERE l.user_id = ? AND l.project_id = ? AND l.target_path = ?
                 ORDER BY m.updated DESC
                 """,
-                (user_id, target_path),
+                (user_id, project_id, target_path),
             ).fetchall()
         finally:
             conn.close()
@@ -367,19 +372,19 @@ class IndexerService:
             for row in rows
         ]
 
-    def get_tags(self, user_id: str) -> List[Dict[str, Any]]:
-        """Return tag counts for a user."""
+    def get_tags(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> List[Dict[str, Any]]:
+        """Return tag counts for a project."""
         conn = self.db_service.connect()
         try:
             rows = conn.execute(
                 """
                 SELECT tag, COUNT(DISTINCT note_path) AS count
                 FROM note_tags
-                WHERE user_id = ?
+                WHERE user_id = ? AND project_id = ?
                 GROUP BY tag
                 ORDER BY count DESC, tag ASC
                 """,
-                (user_id,),
+                (user_id, project_id),
             ).fetchall()
         finally:
             conn.close()
@@ -389,28 +394,28 @@ class IndexerService:
             for row in rows
         ]
 
-    def get_graph_data(self, user_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    def get_graph_data(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> Dict[str, List[Dict[str, Any]]]:
         """Return graph visualization data (nodes and links)."""
         conn = self.db_service.connect()
         try:
-            # Fetch all notes
+            # Fetch all notes in project
             notes_rows = conn.execute(
                 """
                 SELECT note_path, title
                 FROM note_metadata
-                WHERE user_id = ?
+                WHERE user_id = ? AND project_id = ?
                 """,
-                (user_id,),
+                (user_id, project_id),
             ).fetchall()
 
-            # Fetch all resolved links
+            # Fetch all resolved links in project
             links_rows = conn.execute(
                 """
                 SELECT source_path, target_path
                 FROM note_links
-                WHERE user_id = ? AND is_resolved = 1
+                WHERE user_id = ? AND project_id = ? AND is_resolved = 1
                 """,
-                (user_id,),
+                (user_id, project_id),
             ).fetchall()
         finally:
             conn.close()
@@ -421,9 +426,9 @@ class IndexerService:
         for row in links_rows:
             source = row["source_path"] if isinstance(row, sqlite3.Row) else row[0]
             target = row["target_path"] if isinstance(row, sqlite3.Row) else row[1]
-            
+
             links.append({"source": source, "target": target})
-            
+
             link_counts[source] = link_counts.get(source, 0) + 1
             link_counts[target] = link_counts.get(target, 0) + 1
 
@@ -432,14 +437,14 @@ class IndexerService:
         for row in notes_rows:
             path = row["note_path"] if isinstance(row, sqlite3.Row) else row[0]
             title = row["title"] if isinstance(row, sqlite3.Row) else row[1]
-            
+
             # Derive group from top-level folder
             parts = Path(path).parts
             group = parts[0] if len(parts) > 1 else "root"
-            
+
             # Default size is 1, add link count
             val = 1 + link_counts.get(path, 0)
-            
+
             nodes.append({
                 "id": path,
                 "label": title,
@@ -449,23 +454,23 @@ class IndexerService:
 
         return {"nodes": nodes, "links": links}
 
-    def _delete_current_entries(self, conn: sqlite3.Connection, user_id: str, note_path: str) -> None:
+    def _delete_current_entries(self, conn: sqlite3.Connection, user_id: str, note_path: str, project_id: str = DEFAULT_PROJECT_ID) -> None:
         """Delete existing index rows for a note."""
         conn.execute(
-            "DELETE FROM note_metadata WHERE user_id = ? AND note_path = ?",
-            (user_id, note_path),
+            "DELETE FROM note_metadata WHERE user_id = ? AND project_id = ? AND note_path = ?",
+            (user_id, project_id, note_path),
         )
         conn.execute(
-            "DELETE FROM note_fts WHERE user_id = ? AND note_path = ?",
-            (user_id, note_path),
+            "DELETE FROM note_fts WHERE user_id = ? AND project_id = ? AND note_path = ?",
+            (user_id, project_id, note_path),
         )
         conn.execute(
-            "DELETE FROM note_tags WHERE user_id = ? AND note_path = ?",
-            (user_id, note_path),
+            "DELETE FROM note_tags WHERE user_id = ? AND project_id = ? AND note_path = ?",
+            (user_id, project_id, note_path),
         )
         conn.execute(
-            "DELETE FROM note_links WHERE user_id = ? AND source_path = ?",
-            (user_id, note_path),
+            "DELETE FROM note_links WHERE user_id = ? AND project_id = ? AND source_path = ?",
+            (user_id, project_id, note_path),
         )
 
     def _prepare_tags(self, tags: Any) -> List[str]:

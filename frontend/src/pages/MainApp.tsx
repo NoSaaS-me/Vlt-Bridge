@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle } from 'lucide-react';
+import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle, List, AlertCircle } from 'lucide-react';
 import { useFontSize } from '@/hooks/useFontSize';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
@@ -51,10 +51,26 @@ import { synthesizeTts } from '@/services/tts';
 import { markdownToPlainText } from '@/lib/markdownToText';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { getModelSettings } from '@/services/models';
+import { useProjectContext } from '@/contexts/ProjectContext';
+import { ProjectDropdown } from '@/components/ProjectDropdown';
+import { CreateProjectDialog } from '@/components/CreateProjectDialog';
+import { ThreadsFlyout } from '@/components/ThreadsFlyout';
+import { IssuesFlyout } from '@/components/IssuesFlyout';
 
 export function MainApp() {
   const navigate = useNavigate();
   const toast = useToast();
+
+  // Project context
+  const {
+    projects,
+    selectedProject,
+    selectedProjectId,
+    setSelectedProjectId,
+    isLoading: isLoadingProjects,
+    createProject,
+  } = useProjectContext();
+
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [currentNote, setCurrentNote] = useState<Note | null>(null);
@@ -77,6 +93,11 @@ export function MainApp() {
   const [chatCenterMode, setChatCenterMode] = useState(false);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
   const [isSynthesizingTts, setIsSynthesizingTts] = useState(false);
+
+  // Multi-project flyout state
+  const [isThreadsOpen, setIsThreadsOpen] = useState(false);
+  const [isIssuesOpen, setIsIssuesOpen] = useState(false);
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const ttsUrlRef = useRef<string | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
   // T007: Initialize font size state management
@@ -403,6 +424,58 @@ export function MainApp() {
     setIsEditMode(false);
   };
 
+  // Handle project selection change
+  const handleProjectChange = (projectId: string) => {
+    setSelectedProjectId(projectId);
+    // Clear current selection when switching projects
+    setSelectedPath(null);
+    setCurrentNote(null);
+    setBacklinks([]);
+    setIsEditMode(false);
+    setIsChatCenterView(false);
+    setIsGraphView(false);
+  };
+
+  // Handle project creation
+  const handleCreateProject = async (name: string, description?: string) => {
+    try {
+      await createProject({ name, description });
+      toast.success(`Project "${name}" created`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create project';
+      toast.error(message);
+      throw err;
+    }
+  };
+
+  // Open flyouts with mutual exclusion
+  const openThreadsFlyout = () => {
+    setIsThreadsOpen(true);
+    setIsIssuesOpen(false);
+    setIsChatOpen(false);
+  };
+
+  const openIssuesFlyout = () => {
+    setIsIssuesOpen(true);
+    setIsThreadsOpen(false);
+    setIsChatOpen(false);
+  };
+
+  const openChatFlyout = () => {
+    if (chatCenterMode) {
+      const newChatCenterView = !isChatCenterView;
+      setIsChatCenterView(newChatCenterView);
+      if (newChatCenterView) {
+        setIsEditMode(false);
+        setIsGraphView(false);
+      }
+    } else {
+      setIsChatOpen(true);
+      setIsThreadsOpen(false);
+      setIsIssuesOpen(false);
+    }
+  };
+
   // Handle note dialog open change
   const handleDialogOpenChange = (open: boolean) => {
     if (open && isDemoMode) {
@@ -592,16 +665,28 @@ export function MainApp() {
   return (
     <GlowParticleEffect config="vibrant" triggerSelector="button">
       <div className="h-screen flex flex-col">
-      {/* Demo warning banner */}
-      <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
-        <AlertDescription className="text-center">
-          DEMO ONLY - ALL DATA IS TEMPORARY AND MAY BE DELETED AT ANY TIME
-        </AlertDescription>
-      </Alert>
-      
+      {/* Demo warning banner - conditional on isDemoMode */}
+      {isDemoMode && (
+        <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
+          <AlertDescription className="text-center">
+            DEMO ONLY - ALL DATA IS TEMPORARY AND MAY BE DELETED AT ANY TIME
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Top bar */}
       <div className="border-b border-border p-2 animate-fade-in">
         <div className="relative flex items-center justify-center">
+          {/* Project dropdown on the left */}
+          <div className="absolute left-0">
+            <ProjectDropdown
+              projects={projects}
+              selectedProject={selectedProject}
+              onSelectProject={handleProjectChange}
+              onCreateProject={() => setIsCreateProjectOpen(true)}
+              disabled={isLoadingProjects}
+            />
+          </div>
           <h1
             className="text-2xl tracking-[0.15em] uppercase select-none"
             style={{
@@ -637,22 +722,29 @@ export function MainApp() {
                 Sign in
               </Button>
             )}
+            {/* [T] Threads flyout button */}
+            <Button
+              variant={isThreadsOpen ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => isThreadsOpen ? setIsThreadsOpen(false) : openThreadsFlyout()}
+              title={isThreadsOpen ? "Close Threads" : "Open Threads"}
+            >
+              <List className="h-4 w-4" />
+            </Button>
+            {/* [I] Issues flyout button */}
+            <Button
+              variant={isIssuesOpen ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => isIssuesOpen ? setIsIssuesOpen(false) : openIssuesFlyout()}
+              title={isIssuesOpen ? "Close Issues" : "Open Issues"}
+            >
+              <AlertCircle className="h-4 w-4" />
+            </Button>
+            {/* [C] Chat button */}
             <Button
               variant={(chatCenterMode ? isChatCenterView : isChatOpen) ? "secondary" : "ghost"}
               size="sm"
-              onClick={() => {
-                if (chatCenterMode) {
-                  const newChatCenterView = !isChatCenterView;
-                  setIsChatCenterView(newChatCenterView);
-                  // Exit edit and graph modes when entering chat center view
-                  if (newChatCenterView) {
-                    setIsEditMode(false);
-                    setIsGraphView(false);
-                  }
-                } else {
-                  setIsChatOpen(!isChatOpen);
-                }
-              }}
+              onClick={openChatFlyout}
               title={
                 chatCenterMode
                   ? (isChatCenterView ? "Close Chat" : "Open AI Planning Agent")
@@ -661,6 +753,7 @@ export function MainApp() {
             >
               <MessageCircle className="h-4 w-4" />
             </Button>
+            {/* [G] Graph button */}
             <Button
               variant={isGraphView ? "secondary" : "ghost"}
               size="sm"
@@ -677,6 +770,7 @@ export function MainApp() {
             >
               <Network className="h-4 w-4 transition-transform duration-250" />
             </Button>
+            {/* [S] Settings button */}
             <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
               <SettingsIcon className="h-4 w-4" />
             </Button>
@@ -883,6 +977,37 @@ export function MainApp() {
             </div>
           </ResizablePanel>
 
+          {/* Threads flyout panel */}
+          {isThreadsOpen && (
+            <>
+              <ResizableHandle withHandle />
+              <ResizablePanel defaultSize={25} minSize={20} maxSize={40} className="animate-slide-in">
+                <ThreadsFlyout
+                  projectId={selectedProjectId}
+                  onSelectThread={(threadId) => {
+                    console.log('Selected thread:', threadId);
+                    // TODO: Navigate to thread view or show thread details
+                  }}
+                  onClose={() => setIsThreadsOpen(false)}
+                />
+              </ResizablePanel>
+            </>
+          )}
+
+          {/* Issues flyout panel */}
+          {isIssuesOpen && (
+            <>
+              <ResizableHandle withHandle />
+              <ResizablePanel defaultSize={25} minSize={20} maxSize={40} className="animate-slide-in">
+                <IssuesFlyout
+                  projectId={selectedProjectId}
+                  onClose={() => setIsIssuesOpen(false)}
+                />
+              </ResizablePanel>
+            </>
+          )}
+
+          {/* Chat flyout panel */}
           {isChatOpen && !chatCenterMode && (
             <>
               <ResizableHandle withHandle />
@@ -898,6 +1023,13 @@ export function MainApp() {
           )}
         </ResizablePanelGroup>
       </div>
+
+      {/* Create Project Dialog */}
+      <CreateProjectDialog
+        open={isCreateProjectOpen}
+        onOpenChange={setIsCreateProjectOpen}
+        onCreateProject={handleCreateProject}
+      />
 
       {/* Footer with Index Health */}
       <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground animate-fade-in" style={{ animationDelay: '0.2s' }}>

@@ -110,62 +110,54 @@
   - Add `projectId` parameter to `rebuildIndex()`
 - [ ] **T4.6** Update TypeScript types for project_id in note models
 
-## Phase 5: Frontend - UI Components
+## Phase 5: Frontend - UI Components (Minimal Scope)
 
 - [ ] **T5.1** Create `frontend/src/components/ProjectDropdown.tsx`:
   - Select component with project list
   - "New Project" option at bottom
   - Project name display in trigger
-  - Search/filter projects (if many)
 - [ ] **T5.2** Create `frontend/src/components/CreateProjectDialog.tsx`:
   - Dialog with name input
   - Optional description
-  - Slug preview/edit
   - Create button
-- [ ] **T5.3** Create `frontend/src/components/NavigationBar.tsx`:
-  - Icon buttons: T, I, C, G, S
-  - Active state highlighting
-  - Tooltips with labels
-  - Keyboard shortcuts (future)
-- [ ] **T5.4** Create `frontend/src/components/ThreadsFlyout.tsx`:
+- [ ] **T5.3** Create `frontend/src/components/ThreadsFlyout.tsx`:
   - Thread list for current project
   - Thread item with status badge
   - Click to select/view thread
   - Empty state for no threads
   - Close button
-- [ ] **T5.5** Create `frontend/src/components/ThreadItem.tsx`:
-  - Thread name and status
-  - Last updated timestamp
-  - Entry count badge
-  - Hover/selected state
+  - Reuse existing flyout pane pattern from ChatPanel
+- [ ] **T5.4** Create `frontend/src/components/IssuesFlyout.tsx`:
+  - Placeholder component for beads integration
+  - "Coming soon" message
+  - Close button
 
-## Phase 6: MainApp Refactor
+## Phase 6: MainApp Header Changes (Minimal Scope)
 
-- [ ] **T6.1** Remove DEMO banner (lines 595-600 in MainApp.tsx)
-  - Or make conditional on `isDemoMode`
+**NO changes to left sidebar (New Note, Folder, Search, Tree)**
+
+- [ ] **T6.1** Make DEMO banner conditional on `isDemoMode` (do NOT remove)
 - [ ] **T6.2** Wrap App with ProjectProvider in App.tsx
 - [ ] **T6.3** Add project state to MainApp:
   - `const { projects, selectedProject, setSelectedProjectId } = useProjectContext()`
-- [ ] **T6.4** Refactor header layout:
-  - Left: ProjectDropdown
-  - Center: NavigationBar
-  - Right: ModelSelector, UserMenu
-- [ ] **T6.5** Add flyout state:
+- [ ] **T6.4** Add ProjectDropdown to header (left side, before VAULT.MCP title)
+- [ ] **T6.5** Add [T] and [I] icon buttons to existing header icon row:
+  - Add List icon for Threads (T)
+  - Add AlertCircle icon for Issues (I)
+  - Keep existing [C][G][S] buttons unchanged
+- [ ] **T6.6** Add flyout state for new buttons:
   - `const [isThreadsOpen, setIsThreadsOpen] = useState(false)`
-- [ ] **T6.6** Update ResizablePanelGroup for flyouts:
-  - Conditionally render ThreadsFlyout panel
-  - Adjust main panel size when flyout open
-- [ ] **T6.7** Update all API calls to include selectedProjectId:
-  - `fetchNotes(selectedProjectId)`
-  - `searchNotes(selectedProjectId, query)`
-  - etc.
-- [ ] **T6.8** Add project change handler:
+  - `const [isIssuesOpen, setIsIssuesOpen] = useState(false)`
+- [ ] **T6.7** Make flyouts mutually exclusive:
+  - Opening Threads closes Chat and Issues
+  - Opening Issues closes Chat and Threads
+  - Opening Chat closes Threads and Issues
+- [ ] **T6.8** Wire ThreadsFlyout to existing ResizablePanel pattern (same as ChatPanel)
+- [ ] **T6.9** Wire IssuesFlyout to existing ResizablePanel pattern
+- [ ] **T6.10** Update all API calls to include selectedProjectId
+- [ ] **T6.11** Add project change handler:
   - Clear current note selection
   - Reload notes for new project
-  - Reset UI state
-- [ ] **T6.9** Add keyboard shortcuts (optional):
-  - `Cmd+1` through `Cmd+5` for nav icons
-  - `Cmd+P` for project switcher
 
 ## Phase 7: Integration & Testing
 

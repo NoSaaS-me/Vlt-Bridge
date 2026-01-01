@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Tuple
 import frontmatter
 
 from .config import AppConfig, get_config
+from ..models.project import DEFAULT_PROJECT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +44,40 @@ def validate_note_path(note_path: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def sanitize_path(user_id: str, vault_root: Path, note_path: str) -> Path:
+def validate_project_id(project_id: str) -> Tuple[bool, str]:
     """
-    Sanitize and resolve a note path within the vault.
+    Validate a project ID.
+
+    Returns (is_valid, message). Message is empty when valid.
+    """
+    if not project_id:
+        return False, "Project ID cannot be empty"
+    if len(project_id) > 50:
+        return False, "Project ID must be 50 characters or less"
+    if not re.match(r'^[a-z0-9-]+$', project_id):
+        return False, "Project ID must contain only lowercase letters, numbers, and hyphens"
+    return True, ""
+
+
+def sanitize_path(user_id: str, vault_root: Path, note_path: str, project_id: str = DEFAULT_PROJECT_ID) -> Path:
+    """
+    Sanitize and resolve a note path within the project vault.
+
+    Args:
+        user_id: User identifier
+        vault_root: Root vault directory
+        note_path: Relative path to the note
+        project_id: Project identifier (default: 'default')
 
     Raises ValueError if the resolved path escapes the vault root.
     """
-    vault = (vault_root / user_id).resolve()
+    # Validate project_id
+    is_valid, msg = validate_project_id(project_id)
+    if not is_valid:
+        raise ValueError(msg)
+
+    # Project vault is now: vault_root / user_id / project_id
+    vault = (vault_root / user_id / project_id).resolve()
     full_path = (vault / note_path).resolve()
     if not str(full_path).startswith(str(vault)):
         raise ValueError(f"Path escapes vault root: {note_path}")
@@ -100,52 +128,58 @@ class VaultService:
         self.vault_root = self.config.vault_base_path
         self.vault_root.mkdir(parents=True, exist_ok=True)
 
-    def initialize_vault(self, user_id: str) -> Path:
-        """Ensure a user's vault directory exists and return its path."""
-        path = (self.vault_root / user_id).resolve()
+    def initialize_vault(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> Path:
+        """Ensure a user's project vault directory exists and return its path."""
+        path = (self.vault_root / user_id / project_id).resolve()
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def resolve_note_path(self, user_id: str, note_path: str) -> Path:
+    def resolve_note_path(self, user_id: str, note_path: str, project_id: str = DEFAULT_PROJECT_ID) -> Path:
         """
-        Validate and resolve a note path inside a user's vault.
+        Validate and resolve a note path inside a user's project vault.
+
+        Args:
+            user_id: User identifier
+            note_path: Relative path to the note
+            project_id: Project identifier (default: 'default')
 
         Raises ValueError for invalid paths.
         """
         is_valid, message = validate_note_path(note_path)
         if not is_valid:
             raise ValueError(message)
-        return sanitize_path(user_id, self.vault_root, note_path)
+        return sanitize_path(user_id, self.vault_root, note_path, project_id)
 
-    def read_note(self, user_id: str, note_path: str) -> VaultNote:
+    def read_note(self, user_id: str, note_path: str, project_id: str = DEFAULT_PROJECT_ID) -> VaultNote:
         """Read a Markdown note, returning metadata, body, and derived title."""
         start_time = time.time()
-        
-        base = self.initialize_vault(user_id)
-        absolute_path = self.resolve_note_path(user_id, note_path)
+
+        base = self.initialize_vault(user_id, project_id)
+        absolute_path = self.resolve_note_path(user_id, note_path, project_id)
         if not absolute_path.exists():
             logger.warning(
                 "Note not found",
-                extra={"user_id": user_id, "note_path": note_path, "operation": "read"}
+                extra={"user_id": user_id, "project_id": project_id, "note_path": note_path, "operation": "read"}
             )
             raise FileNotFoundError(f"Note not found: {note_path}")
-        
+
         post = frontmatter.load(absolute_path)
         metadata = dict(post.metadata or {})
         body = post.content or ""
-        
+
         duration_ms = (time.time() - start_time) * 1000
         logger.info(
             "Note read successfully",
             extra={
                 "user_id": user_id,
+                "project_id": project_id,
                 "note_path": note_path,
                 "operation": "read",
                 "duration_ms": f"{duration_ms:.2f}",
                 "size_bytes": absolute_path.stat().st_size
             }
         )
-        
+
         return self._build_note_payload(note_path, metadata, body, absolute_path)
 
     def write_note(
@@ -156,11 +190,12 @@ class VaultService:
         title: str | None = None,
         metadata: Dict[str, Any] | None = None,
         body: str,
+        project_id: str = DEFAULT_PROJECT_ID,
     ) -> VaultNote:
         """Create or update a note with validated metadata and content."""
         start_time = time.time()
-        
-        absolute_path = self.resolve_note_path(user_id, note_path)
+
+        absolute_path = self.resolve_note_path(user_id, note_path, project_id)
         body = body or ""
         _validate_note_body(body)
 
@@ -190,26 +225,27 @@ class VaultService:
         absolute_path.parent.mkdir(parents=True, exist_ok=True)
         post = frontmatter.Post(body, **metadata_dict)
         absolute_path.write_text(frontmatter.dumps(post), encoding="utf-8")
-        
+
         duration_ms = (time.time() - start_time) * 1000
         logger.info(
             f"Note {'created' if is_new_note else 'updated'} successfully",
             extra={
                 "user_id": user_id,
+                "project_id": project_id,
                 "note_path": note_path,
                 "operation": "create" if is_new_note else "update",
                 "duration_ms": f"{duration_ms:.2f}",
                 "size_bytes": len(frontmatter.dumps(post).encode("utf-8"))
             }
         )
-        
+
         return self._build_note_payload(note_path, metadata_dict, body, absolute_path)
 
-    def delete_note(self, user_id: str, note_path: str) -> None:
+    def delete_note(self, user_id: str, note_path: str, project_id: str = DEFAULT_PROJECT_ID) -> None:
         """Delete a note from the vault."""
         start_time = time.time()
 
-        absolute_path = self.resolve_note_path(user_id, note_path)
+        absolute_path = self.resolve_note_path(user_id, note_path, project_id)
         try:
             absolute_path.unlink()
 
@@ -218,6 +254,7 @@ class VaultService:
                 "Note deleted successfully",
                 extra={
                     "user_id": user_id,
+                    "project_id": project_id,
                     "note_path": note_path,
                     "operation": "delete",
                     "duration_ms": f"{duration_ms:.2f}"
@@ -226,12 +263,12 @@ class VaultService:
         except FileNotFoundError as exc:
             logger.warning(
                 "Note not found for deletion",
-                extra={"user_id": user_id, "note_path": note_path, "operation": "delete"}
+                extra={"user_id": user_id, "project_id": project_id, "note_path": note_path, "operation": "delete"}
             )
             raise FileNotFoundError(f"Note not found: {note_path}") from exc
 
-    def move_note(self, user_id: str, old_path: str, new_path: str) -> VaultNote:
-        """Move or rename a note to a new path."""
+    def move_note(self, user_id: str, old_path: str, new_path: str, project_id: str = DEFAULT_PROJECT_ID) -> VaultNote:
+        """Move or rename a note to a new path within the same project."""
         start_time = time.time()
 
         # Validate both paths
@@ -244,8 +281,8 @@ class VaultService:
             raise ValueError(f"Invalid destination path: {msg_new}")
 
         # Resolve absolute paths
-        old_absolute = self.resolve_note_path(user_id, old_path)
-        new_absolute = self.resolve_note_path(user_id, new_path)
+        old_absolute = self.resolve_note_path(user_id, old_path, project_id)
+        new_absolute = self.resolve_note_path(user_id, new_path, project_id)
 
         # Check if source exists
         if not old_absolute.exists():
@@ -262,13 +299,14 @@ class VaultService:
         old_absolute.rename(new_absolute)
 
         # Read and return the note from new location
-        note = self.read_note(user_id, new_path)
+        note = self.read_note(user_id, new_path, project_id)
 
         duration_ms = (time.time() - start_time) * 1000
         logger.info(
             "Note moved successfully",
             extra={
                 "user_id": user_id,
+                "project_id": project_id,
                 "old_path": old_path,
                 "new_path": new_path,
                 "operation": "move",
@@ -278,9 +316,9 @@ class VaultService:
 
         return note
 
-    def list_notes(self, user_id: str, folder: str | None = None) -> List[Dict[str, Any]]:
+    def list_notes(self, user_id: str, folder: str | None = None, project_id: str = DEFAULT_PROJECT_ID) -> List[Dict[str, Any]]:
         """List notes (optionally scoped to a folder) with titles and timestamps."""
-        base = self.initialize_vault(user_id).resolve()
+        base = self.initialize_vault(user_id, project_id).resolve()
 
         if folder:
             cleaned = folder.strip().strip("/")
@@ -337,4 +375,4 @@ class VaultService:
         }
 
 
-__all__ = ["VaultService", "validate_note_path", "sanitize_path"]
+__all__ = ["VaultService", "validate_note_path", "validate_project_id", "sanitize_path"]
