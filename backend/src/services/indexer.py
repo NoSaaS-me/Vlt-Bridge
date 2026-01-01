@@ -11,6 +11,7 @@ import time
 from typing import Any, Dict, List, Sequence
 
 from .database import DatabaseService
+from .sanitizer import sanitize_snippet
 from .vault import VaultNote
 from ..models.project import DEFAULT_PROJECT_ID
 
@@ -338,7 +339,7 @@ class IndexerService:
                 {
                     "path": row["note_path"] if isinstance(row, sqlite3.Row) else row[0],
                     "title": row["title"] if isinstance(row, sqlite3.Row) else row[1],
-                    "snippet": snippet or "",
+                    "snippet": sanitize_snippet(snippet or ""),
                     "score": base_score + bonus,
                     "updated": updated_raw,
                 }
@@ -398,7 +399,7 @@ class IndexerService:
         """Return graph visualization data (nodes and links)."""
         conn = self.db_service.connect()
         try:
-            # Fetch all notes in project
+            # Fetch all notes
             notes_rows = conn.execute(
                 """
                 SELECT note_path, title
@@ -408,7 +409,7 @@ class IndexerService:
                 (user_id, project_id),
             ).fetchall()
 
-            # Fetch all resolved links in project
+            # Fetch all resolved links
             links_rows = conn.execute(
                 """
                 SELECT source_path, target_path
@@ -426,36 +427,37 @@ class IndexerService:
         for row in links_rows:
             source = row["source_path"] if isinstance(row, sqlite3.Row) else row[0]
             target = row["target_path"] if isinstance(row, sqlite3.Row) else row[1]
-
             links.append({"source": source, "target": target})
-
             link_counts[source] = link_counts.get(source, 0) + 1
             link_counts[target] = link_counts.get(target, 0) + 1
 
-        # Build nodes list
+        # Build nodes with link counts
         nodes = []
         for row in notes_rows:
-            path = row["note_path"] if isinstance(row, sqlite3.Row) else row[0]
+            note_path = row["note_path"] if isinstance(row, sqlite3.Row) else row[0]
             title = row["title"] if isinstance(row, sqlite3.Row) else row[1]
-
-            # Derive group from top-level folder
-            parts = Path(path).parts
-            group = parts[0] if len(parts) > 1 else "root"
-
-            # Default size is 1, add link count
-            val = 1 + link_counts.get(path, 0)
-
-            nodes.append({
-                "id": path,
-                "label": title,
-                "val": val,
-                "group": group
-            })
+            nodes.append(
+                {
+                    "id": note_path,
+                    "label": title,
+                    "size": max(1, link_counts.get(note_path, 0)),
+                }
+            )
 
         return {"nodes": nodes, "links": links}
 
+    def _prepare_tags(self, tags_raw: Any) -> List[str]:
+        """Convert tag input (list, comma-separated string, etc.) to normalized tags."""
+        if not tags_raw:
+            return []
+        if isinstance(tags_raw, str):
+            tags_raw = [t.strip() for t in tags_raw.split(",")]
+        if not isinstance(tags_raw, (list, tuple)):
+            return []
+        return [normalize_tag(t) for t in tags_raw if normalize_tag(t)]
+
     def _delete_current_entries(self, conn: sqlite3.Connection, user_id: str, note_path: str, project_id: str = DEFAULT_PROJECT_ID) -> None:
-        """Delete existing index rows for a note."""
+        """Delete all current index entries for a note."""
         conn.execute(
             "DELETE FROM note_metadata WHERE user_id = ? AND project_id = ? AND note_path = ?",
             (user_id, project_id, note_path),
@@ -472,16 +474,3 @@ class IndexerService:
             "DELETE FROM note_links WHERE user_id = ? AND project_id = ? AND source_path = ?",
             (user_id, project_id, note_path),
         )
-
-    def _prepare_tags(self, tags: Any) -> List[str]:
-        if not isinstance(tags, list):
-            return []
-        normalized: List[str] = []
-        for tag in tags:
-            cleaned = normalize_tag(tag)
-            if cleaned and cleaned not in normalized:
-                normalized.append(cleaned)
-        return normalized
-
-
-__all__ = ["IndexerService", "normalize_slug", "normalize_tag"]

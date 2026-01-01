@@ -7,6 +7,7 @@ from .error_handlers import (
     register_error_handlers,
     validation_exception_handler,
 )
+from .security_headers import SecurityHeadersMiddleware
 
 __all__ = [
     "AuthContext",
@@ -16,4 +17,5 @@ __all__ = [
     "validation_exception_handler",
     "http_exception_handler",
     "internal_exception_handler",
+    "SecurityHeadersMiddleware",
 ]

@@ -22,6 +22,7 @@ from fastmcp.server.http import StreamableHTTPSessionManager, set_http_request
 from fastapi.responses import FileResponse
 
 from .routes import auth, index, notes, search, graph, demo, system, rag, tts, models, oracle, oracle_context, threads, projects, coderag
+from .middleware import SecurityHeadersMiddleware
 from ..mcp.server import mcp
 from ..services.seed import init_and_seed
 from ..services.config import get_config
@@ -73,6 +74,14 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Security headers middleware (added after CORS so headers appear in response)
+app.add_middleware(
+    SecurityHeadersMiddleware,
+    csp_policy=config.csp_policy,
+    frame_options=config.frame_options,
+    enable_hsts=config.enable_hsts,
 )
 
 

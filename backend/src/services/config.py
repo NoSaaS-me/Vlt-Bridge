@@ -61,6 +61,27 @@ class AppConfig(BaseModel):
         default="http://localhost:5173",
         description="Base URL of the HF Space or local dev server"
     )
+    csp_policy: Optional[str] = Field(
+        default=None,
+        description=(
+            "Content-Security-Policy header value. If None, uses default policy "
+            "suitable for Document-MCP application with React frontend"
+        )
+    )
+    enable_hsts: bool = Field(
+        default=False,
+        description=(
+            "Enable Strict-Transport-Security header (HSTS). "
+            "Should only be enabled in production HTTPS deployments"
+        )
+    )
+    frame_options: str = Field(
+        default="DENY",
+        description=(
+            "X-Frame-Options header value. Options: DENY, SAMEORIGIN, or "
+            "ALLOW-FROM uri. DENY prevents all framing (most secure)"
+        )
+    )
 
     @field_validator("vault_base_path", mode="before")
     @classmethod
@@ -111,6 +132,9 @@ def get_config() -> AppConfig:
     enable_noauth_mcp = _read_env("ENABLE_NOAUTH_MCP", "false").lower() in {"true", "1", "yes"}
     google_api_key = _read_env("GOOGLE_API_KEY")
     llamaindex_persist_dir = _read_env("LLAMAINDEX_PERSIST_DIR", str(PROJECT_ROOT / "data" / "llamaindex"))
+    csp_policy = _read_env("CSP_POLICY")
+    enable_hsts = _read_env("ENABLE_HSTS", "false").lower() in {"true", "1", "yes"}
+    frame_options = _read_env("FRAME_OPTIONS", "DENY")
 
     config = AppConfig(
         jwt_secret_key=jwt_secret,
@@ -125,6 +149,9 @@ def get_config() -> AppConfig:
         hf_oauth_client_id=hf_client_id,
         hf_oauth_client_secret=hf_client_secret,
         hf_space_url=hf_space_url,
+        csp_policy=csp_policy,
+        enable_hsts=enable_hsts,
+        frame_options=frame_options,
     )
     # Ensure vault base directory and index persist directory exist for downstream services.
     config.vault_base_path.mkdir(parents=True, exist_ok=True)
