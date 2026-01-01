@@ -15,7 +15,7 @@ from ...models.index import IndexHealth
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
 from ...services.vault import VaultService
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, get_auth_context, require_auth_context
 
 DEMO_USER_ID = "demo-user"
 
@@ -91,7 +91,7 @@ async def get_index_health(auth: AuthContext = Depends(get_auth_context)):
 
 
 @router.post("/api/index/rebuild", response_model=RebuildResponse)
-async def rebuild_index(auth: AuthContext = Depends(get_auth_context)):
+async def rebuild_index(auth: AuthContext = Depends(require_auth_context)):
     """Rebuild the entire index from scratch."""
     start_time = time.time()
     user_id = auth.user_id
