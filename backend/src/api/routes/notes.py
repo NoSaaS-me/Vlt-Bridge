@@ -12,7 +12,7 @@ from ...models.note import Note, NoteSummary, NoteUpdate, NoteCreate
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
 from ...services.vault import VaultService
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 
 router = APIRouter()
 
@@ -41,7 +41,7 @@ class ConflictError(Exception):
 @router.get("/api/notes", response_model=list[NoteSummary])
 async def list_notes(
     folder: Optional[str] = Query(None, description="Optional folder filter"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """List all notes in the vault."""
     user_id = auth.user_id
@@ -70,7 +70,7 @@ async def list_notes(
 
 
 @router.post("/api/notes", response_model=Note, status_code=201)
-async def create_note(create: NoteCreate, auth: AuthContext = Depends(get_auth_context)):
+async def create_note(create: NoteCreate, auth: AuthContext = Depends(require_auth_context)):
     """Create a new note."""
     user_id = auth.user_id
     _ensure_write_allowed(user_id)
@@ -167,7 +167,7 @@ async def create_note(create: NoteCreate, auth: AuthContext = Depends(get_auth_c
 
 
 @router.get("/api/notes/{path:path}", response_model=Note)
-async def get_note(path: str, auth: AuthContext = Depends(get_auth_context)):
+async def get_note(path: str, auth: AuthContext = Depends(require_auth_context)):
     """Get a specific note by path."""
     user_id = auth.user_id
     vault_service = VaultService()
@@ -240,7 +240,7 @@ async def get_note(path: str, auth: AuthContext = Depends(get_auth_context)):
 async def update_note(
     path: str,
     update: NoteUpdate,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """Update a note with optimistic concurrency control."""
     user_id = auth.user_id
@@ -355,7 +355,7 @@ class NoteMoveRequest(BaseModel):
 async def move_note(
     path: str,
     move_request: NoteMoveRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """Move or rename a note to a new path."""
     user_id = auth.user_id
