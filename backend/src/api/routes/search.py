@@ -28,14 +28,25 @@ class BacklinkResult(BaseModel):
 @router.get("/api/search", response_model=list[SearchResult])
 async def search_notes(
     q: str = Query(..., min_length=1, max_length=256),
+    tags: list[str] | None = Query(
+        default=None,
+        description="Optional tags to filter results. Notes must have ALL specified tags (AND logic). Can be repeated for multiple tags.",
+    ),
     auth: AuthContext = Depends(get_auth_context),
 ):
-    """Full-text search across all notes."""
+    """Full-text search across all notes with optional tag filtering."""
     user_id = auth.user_id
     indexer_service = IndexerService()
-    
+
+    # Normalize tags (strip whitespace, lowercase) - empty strings are filtered out
+    normalized_tags: list[str] | None = None
+    if tags:
+        normalized_tags = [t.strip().lower() for t in tags if t and t.strip()]
+        if not normalized_tags:
+            normalized_tags = None
+
     try:
-        results = indexer_service.search_notes(user_id, q, limit=50)
+        results = indexer_service.search_notes(user_id, q, tags=normalized_tags, limit=50)
         
         search_results = []
         for result in results:
