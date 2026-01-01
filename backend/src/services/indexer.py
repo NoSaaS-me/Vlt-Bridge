@@ -280,31 +280,80 @@ class IndexerService:
             (user_id, note_count, now_iso),
         )
 
-    def search_notes(self, user_id: str, query: str, *, limit: int = 50) -> List[Dict[str, Any]]:
-        """Execute a full-text search with recency bonus scoring."""
+    def search_notes(
+        self, user_id: str, query: str, *, tags: List[str] | None = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Execute a full-text search with recency bonus scoring.
+
+        Args:
+            user_id: The user whose notes to search.
+            query: The search query text.
+            tags: Optional list of tags to filter by (AND logic - notes must have ALL tags).
+            limit: Maximum number of results to return.
+
+        Returns:
+            List of search results with path, title, snippet, score, and updated fields.
+        """
         if not query or not query.strip():
             raise ValueError("Search query cannot be empty")
 
         sanitized_query = _prepare_match_query(query)
 
+        # Normalize and filter tags
+        normalized_tags: List[str] = []
+        if tags:
+            for tag in tags:
+                normalized = normalize_tag(tag)
+                if normalized and normalized not in normalized_tags:
+                    normalized_tags.append(normalized)
+
         conn = self.db_service.connect()
         try:
-            rows = conn.execute(
-                """
-                SELECT
-                    m.note_path,
-                    m.title,
-                    m.updated,
-                    snippet(note_fts, 3, '<mark>', '</mark>', '...', 32) AS snippet,
-                    bm25(note_fts, 3.0, 1.0) AS score
-                FROM note_fts
-                JOIN note_metadata m USING (user_id, note_path)
-                WHERE note_fts.user_id = ? AND note_fts MATCH ?
-                ORDER BY score DESC
-                LIMIT ?
-                """,
-                (user_id, sanitized_query, limit),
-            ).fetchall()
+            if normalized_tags:
+                # Build query with tag filtering using AND logic
+                # Notes must have ALL specified tags to be included
+                tag_placeholders = ", ".join("?" for _ in normalized_tags)
+                tag_count = len(normalized_tags)
+
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        m.note_path,
+                        m.title,
+                        m.updated,
+                        snippet(note_fts, 3, '<mark>', '</mark>', '...', 32) AS snippet,
+                        bm25(note_fts, 3.0, 1.0) AS score
+                    FROM note_fts
+                    JOIN note_metadata m USING (user_id, note_path)
+                    JOIN note_tags t ON m.user_id = t.user_id AND m.note_path = t.note_path
+                    WHERE note_fts.user_id = ?
+                      AND note_fts MATCH ?
+                      AND t.tag IN ({tag_placeholders})
+                    GROUP BY m.note_path, m.title, m.updated
+                    HAVING COUNT(DISTINCT t.tag) = ?
+                    ORDER BY score DESC
+                    LIMIT ?
+                    """,
+                    (user_id, sanitized_query, *normalized_tags, tag_count, limit),
+                ).fetchall()
+            else:
+                # Original query without tag filtering
+                rows = conn.execute(
+                    """
+                    SELECT
+                        m.note_path,
+                        m.title,
+                        m.updated,
+                        snippet(note_fts, 3, '<mark>', '</mark>', '...', 32) AS snippet,
+                        bm25(note_fts, 3.0, 1.0) AS score
+                    FROM note_fts
+                    JOIN note_metadata m USING (user_id, note_path)
+                    WHERE note_fts.user_id = ? AND note_fts MATCH ?
+                    ORDER BY score DESC
+                    LIMIT ?
+                    """,
+                    (user_id, sanitized_query, limit),
+                ).fetchall()
         finally:
             conn.close()
 
