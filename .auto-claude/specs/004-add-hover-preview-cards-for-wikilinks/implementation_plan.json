@@ -3,8 +3,8 @@
   "description": "Enhance HoverCard popups that show a preview of linked notes when hovering over wikilinks in the NoteViewer, similar to Wikipedia's preview feature. The current implementation exists but uses inefficient search-based resolution. This plan adds a dedicated API and improves the preview card UI.",
   "created_at": "2026-01-01T13:24:23.485Z",
   "updated_at": "2026-01-01T14:11:30.000Z",
-  "status": "completed",
-  "planStatus": "completed",
+  "status": "human_review",
+  "planStatus": "review",
   "workflow_type": "development",
   "services_involved": [
     "backend",
@@ -242,5 +242,32 @@
       "backend/src/api/routes/search.py - add resolution endpoint here"
     ]
   },
-  "last_updated": "2026-01-01T14:11:25.328334+00:00"
+  "last_updated": "2026-01-01T14:20:48.196398+00:00",
+  "qa_signoff": {
+    "status": "approved",
+    "qa_session": 0,
+    "issues_found": [
+      {
+        "description": "None - Zero critical or major issues found"
+      }
+    ],
+    "tests_passed": {},
+    "timestamp": "2026-01-01T14:20:48.196388+00:00",
+    "ready_for_qa_revalidation": false
+  },
+  "qa_iteration_history": [
+    {
+      "iteration": 1,
+      "status": "approved",
+      "timestamp": "2026-01-01T14:21:29.508173+00:00",
+      "issues": [],
+      "duration_seconds": 546.2
+    }
+  ],
+  "qa_stats": {
+    "total_iterations": 1,
+    "last_iteration": 1,
+    "last_status": "approved",
+    "issues_by_type": {}
+  }
 }

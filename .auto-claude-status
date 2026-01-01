@@ -1,25 +1,25 @@
 {
   "active": true,
   "spec": "004-add-hover-preview-cards-for-wikilinks",
-  "state": "building",
+  "state": "complete",
   "subtasks": {
-    "completed": 12,
+    "completed": 15,
     "total": 15,
-    "in_progress": 1,
+    "in_progress": 0,
     "failed": 0
   },
   "phase": {
-    "current": "UX Polish & Accessibility",
+    "current": "Testing & Validation",
     "id": null,
-    "total": 4
+    "total": 2
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 14,
+    "number": 16,
     "started_at": "2026-01-01T07:24:59.280697"
   },
-  "last_update": "2026-01-01T08:00:06.373767"
+  "last_update": "2026-01-01T08:12:23.298595"
 }
