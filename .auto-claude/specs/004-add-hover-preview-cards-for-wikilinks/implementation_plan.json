@@ -116,11 +116,12 @@
           "id": "3.2",
           "title": "Improve loading skeleton",
           "description": "Add structured loading skeleton matching the preview card layout (title skeleton, 3 text lines, badge placeholders)",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Enhanced loading skeleton with structured layout matching preview card:\n  - Title skeleton: h-5 (larger) with 75% width to match h4 title element\n  - Snippet skeleton: 3 lines (h-3.5 each) with decreasing widths to match line-clamp-3 snippet\n  - Badge placeholders: 2 rounded-full elements (h-5 w-16/w-20) matching tag badge size and shape\n  - Footer skeleton: pt-2 border-t with narrow element (w-32) matching timestamp footer separator\n  \n\u2713 Uses space-y-3 vertical spacing matching the preview card layout\n\u2713 All elements use bg-muted animate-pulse for consistent loading animation\n\u2713 Follows existing code patterns and Tailwind CSS conventions\n\u2713 Committed: 2f3df12",
           "files": [
             "frontend/src/lib/markdown.tsx"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:47:49.422870+00:00"
         },
         {
           "id": "3.3",
@@ -234,5 +235,5 @@
       "backend/src/api/routes/search.py - add resolution endpoint here"
     ]
   },
-  "last_updated": "2026-01-01T13:45:58.036029+00:00"
+  "last_updated": "2026-01-01T13:47:49.422879+00:00"
 }
