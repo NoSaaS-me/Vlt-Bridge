@@ -99,6 +99,75 @@
 
 ---
 
+### ✅ Subtask 2.1: Add API service functions
+**Commit:** 83398ad
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Added `WikilinkResolution` and `NotePreview` interfaces to `frontend/src/types/note.ts`
+  - WikilinkResolution: link_text, target_path, is_resolved
+  - NotePreview: title, snippet, tags, updated
+  - Types match backend models
+
+- Added `resolveWikilink(linkText, contextPath?)` function to `frontend/src/services/api.ts`
+  - Query parameters: link (required), context (optional)
+  - Returns WikilinkResolution from API
+  - Uses proper URL encoding for parameters
+
+- Added `getNotePreview(path)` function to `frontend/src/services/api.ts`
+  - Path parameter: URL-encoded note path
+  - Returns NotePreview from API
+  - Uses proper URL encoding for path
+
+**Code Pattern Compliance:**
+✓ Follows existing api.ts patterns (apiFetch, URL encoding, JSDoc comments)
+✓ Types match backend models exactly
+✓ Proper TypeScript type definitions
+
+---
+
+### ✅ Subtask 2.2: Refactor WikilinkPreview to use resolution API
+**Commit:** e54a75f
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Updated imports in `frontend/src/lib/markdown.tsx`
+  - Changed from `getNote, searchNotes` to `resolveWikilink, getNotePreview`
+  - Added `NotePreview` type import
+
+- Updated preview cache type from `Map<string, string>` to `Map<string, NotePreview>`
+  - Cache now stores structured preview data instead of plain strings
+
+- Updated WikilinkPreview component state
+  - Changed `preview` state from `string | null` to `NotePreview | null`
+
+- Refactored `fetchPreview` function flow:
+  - First calls `resolveWikilink(linkText)` to get target path
+  - Checks `is_resolved` flag and `target_path` existence
+  - If not resolved, sets `isBroken=true` and returns early
+  - If resolved, calls `getNotePreview(resolution.target_path)`
+  - Caches the `NotePreview` object
+  - Error handling sets `isBroken=true` for API failures
+
+- Updated preview rendering
+  - Changed from displaying plain string to `preview.snippet`
+  - Maintains same UI structure (loading skeleton, broken link message)
+
+**Code Pattern Compliance:**
+✓ Follows existing React patterns (useState, useEffect, async/await)
+✓ Proper TypeScript type annotations
+✓ Maintains existing UI components and styling
+✓ Two-stage resolution: wikilink → path → preview data
+✓ Broken link handling for both resolution failures and API errors
+
+**Benefits:**
+- More accurate wikilink resolution using slug-based matching
+- Eliminates inefficient search-based resolution
+- Structured preview data ready for UI enhancements
+- Proper handling of broken links at resolution stage
+
+---
+
 ## In Progress
 
 None
@@ -111,8 +180,8 @@ None
 ✅ All subtasks completed!
 
 ### Phase 2: Frontend API Integration
-- [ ] 2.1: Add API service functions
-- [ ] 2.2: Refactor WikilinkPreview to use resolution API
+✅ 2.1: Add API service functions
+✅ 2.2: Refactor WikilinkPreview to use resolution API
 - [ ] 2.3: Update preview cache strategy
 
 ### Phase 3: Preview Card UI Enhancement
