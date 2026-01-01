@@ -65,3 +65,22 @@ export interface Wikilink {
   is_resolved: boolean;
 }
 
+/**
+ * Wikilink resolution result from API.
+ */
+export interface WikilinkResolution {
+  link_text: string;
+  target_path: string | null;
+  is_resolved: boolean;
+}
+
+/**
+ * Lightweight note preview for hover cards.
+ */
+export interface NotePreview {
+  title: string;
+  snippet: string;
+  tags: string[];
+  updated: string; // ISO 8601 timestamp
+}
+
