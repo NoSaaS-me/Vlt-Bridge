@@ -66,6 +66,7 @@ export function resetSlugCache(): void {
 /**
  * T021-T026: Wikilink preview component with HoverCard
  * T090: Keyboard accessibility - Tab to focus, Enter to navigate, Escape to dismiss
+ * T043: Touch device support - Long-press to show preview
  */
 function WikilinkPreview({
   linkText,
@@ -81,9 +82,14 @@ function WikilinkPreview({
   const [isBroken, setIsBroken] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
+  const [isLongPressed, setIsLongPressed] = useState(false);
 
-  // T090: Control open state based on hover OR focus
-  const shouldBeOpen = isOpen || isFocused;
+  // T043: Long-press detection state
+  const longPressTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const initialPointerRef = React.useRef<{ x: number; y: number } | null>(null);
+
+  // T090: Control open state based on hover OR focus OR long-press
+  const shouldBeOpen = isOpen || isFocused || isLongPressed;
 
   // T023: Fetch preview when hover card opens (hover or focus)
   React.useEffect(() => {
@@ -142,18 +148,98 @@ function WikilinkPreview({
     fetchPreview();
   }, [shouldBeOpen, linkText]);
 
+  // T043: Cleanup long-press timer on unmount
+  React.useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+      }
+    };
+  }, []);
+
+  // T043: Long-press handlers for touch devices
+  const handlePointerDown = (e: React.PointerEvent) => {
+    // Only handle touch events (not mouse)
+    if (e.pointerType !== 'touch') return;
+
+    // Store initial position to detect movement
+    initialPointerRef.current = { x: e.clientX, y: e.clientY };
+
+    // Start long-press timer (500ms to match openDelay)
+    longPressTimerRef.current = setTimeout(() => {
+      setIsLongPressed(true);
+    }, 500);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    // Only handle touch events
+    if (e.pointerType !== 'touch') return;
+    if (!initialPointerRef.current) return;
+
+    // Cancel long-press if pointer moved too much (> 10px threshold)
+    const dx = e.clientX - initialPointerRef.current.x;
+    const dy = e.clientY - initialPointerRef.current.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance > 10) {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      initialPointerRef.current = null;
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    // Only handle touch events
+    if (e.pointerType !== 'touch') return;
+
+    // Clear timer if touch ended before long-press threshold
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    initialPointerRef.current = null;
+  };
+
+  const handlePointerCancel = (e: React.PointerEvent) => {
+    // Only handle touch events
+    if (e.pointerType !== 'touch') return;
+
+    // Clear timer on cancel (e.g., scroll started)
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    initialPointerRef.current = null;
+    setIsLongPressed(false);
+  };
+
+  // T043: Handle hover card state changes (close long-press when card closes)
+  const handleOpenChange = (open: boolean) => {
+    setIsOpen(open);
+    // Reset long-press state when card closes
+    if (!open) {
+      setIsLongPressed(false);
+    }
+  };
+
   return (
     <HoverCard
       openDelay={500}
       closeDelay={200}
       open={shouldBeOpen}
-      onOpenChange={setIsOpen}
+      onOpenChange={handleOpenChange}
     >
       <HoverCardTrigger asChild>
         <span
           onClick={onClick}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
         >
           {children}
         </span>
