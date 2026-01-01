@@ -685,3 +685,109 @@ class OracleBridge:
         if user_id in self._conversation_history:
             del self._conversation_history[user_id]
             logger.info(f"Cleared conversation history for user: {user_id}")
+
+    # =========================================================================
+    # CodeRAG Index Management Methods
+    # =========================================================================
+
+    def get_coderag_status(self, project_id: str) -> Dict[str, Any]:
+        """
+        Get CodeRAG index status for a project.
+
+        Invokes `vlt coderag status --project <project_id> --json` to retrieve
+        the current status of the code index.
+
+        Args:
+            project_id: Project identifier
+
+        Returns:
+            Dict containing:
+            - project_id: Project identifier
+            - status: Index status (not_initialized, indexing, ready, failed, stale)
+            - file_count: Number of indexed files
+            - chunk_count: Number of code chunks
+            - last_indexed_at: Last successful index timestamp
+            - error_message: Error details if status is failed
+            - active_job: Current indexing job details if any
+        """
+        args = ["coderag", "status", "--project", project_id]
+        return self._run_vlt_command(args, timeout=30)
+
+    def init_coderag(
+        self,
+        project_id: str,
+        target_path: str,
+        force: bool = False,
+        background: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Initialize or re-index CodeRAG for a project.
+
+        Invokes `vlt coderag init --project <project_id> --path <path>` to
+        trigger indexing. By default, indexing runs in the background.
+
+        Args:
+            project_id: Project to associate with index
+            target_path: Directory path to index
+            force: Force re-index even if index exists
+            background: Run indexing in background (via daemon)
+
+        Returns:
+            Dict containing:
+            - job_id: Identifier for tracking the job
+            - status: Whether job is queued or started
+            - message: Human-readable status message
+        """
+        args = ["coderag", "init", "--project", project_id, "--path", target_path]
+
+        if force:
+            args.append("--force")
+
+        if background:
+            args.append("--background")
+
+        return self._run_vlt_command(args, timeout=60)
+
+    def get_job_status(self, job_id: str) -> Dict[str, Any]:
+        """
+        Get detailed status of an indexing job.
+
+        Invokes `vlt coderag job <job_id> --json` to retrieve job status.
+
+        Args:
+            job_id: Job identifier (UUID)
+
+        Returns:
+            Dict containing:
+            - job_id: Job identifier
+            - project_id: Associated project ID
+            - status: Current job status (pending, running, completed, failed, cancelled)
+            - progress_percent: Completion percentage (0-100)
+            - files_total: Total files to process
+            - files_processed: Files completed
+            - chunks_created: Code chunks generated
+            - started_at: Processing start time
+            - completed_at: Processing end time (if finished)
+            - error_message: Error details if failed
+            - duration_seconds: Elapsed time in seconds
+        """
+        args = ["coderag", "job", job_id]
+        return self._run_vlt_command(args, timeout=30)
+
+    def cancel_job(self, job_id: str) -> Dict[str, Any]:
+        """
+        Cancel an indexing job.
+
+        Invokes `vlt coderag cancel <job_id> --json` to cancel a pending
+        or running job.
+
+        Args:
+            job_id: Job identifier (UUID)
+
+        Returns:
+            Dict containing:
+            - status: "cancelled" if successful
+            - message: Confirmation message
+        """
+        args = ["coderag", "cancel", job_id]
+        return self._run_vlt_command(args, timeout=30)

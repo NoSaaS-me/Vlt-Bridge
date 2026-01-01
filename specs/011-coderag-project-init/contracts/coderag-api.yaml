@@ -1,0 +1,305 @@
+openapi: 3.0.3
+info:
+  title: CodeRAG API
+  description: API endpoints for CodeRAG index management and status tracking
+  version: 1.0.0
+
+paths:
+  /api/coderag/status:
+    get:
+      summary: Get CodeRAG index status
+      description: Returns the current status of the CodeRAG index for a project
+      operationId: getCodeRAGStatus
+      tags:
+        - coderag
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Project identifier
+      responses:
+        '200':
+          description: CodeRAG status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodeRAGStatusResponse'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/coderag/init:
+    post:
+      summary: Initialize CodeRAG indexing
+      description: Queue a new CodeRAG indexing job for a project
+      operationId: initCodeRAG
+      tags:
+        - coderag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitCodeRAGRequest'
+      responses:
+        '201':
+          description: Indexing job queued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InitCodeRAGResponse'
+        '400':
+          description: Invalid request (e.g., path doesn't exist)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Index already exists (use force=true to re-index)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/coderag/jobs/{job_id}:
+    get:
+      summary: Get job status
+      description: Returns detailed status of an indexing job
+      operationId: getJobStatus
+      tags:
+        - coderag
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatusResponse'
+        '404':
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/coderag/jobs/{job_id}/cancel:
+    post:
+      summary: Cancel an indexing job
+      description: Cancels an in-progress or pending indexing job
+      operationId: cancelJob
+      tags:
+        - coderag
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: cancelled
+                  message:
+                    type: string
+        '400':
+          description: Job cannot be cancelled (already completed/failed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    CodeRAGStatusResponse:
+      type: object
+      required:
+        - project_id
+        - status
+        - file_count
+        - chunk_count
+      properties:
+        project_id:
+          type: string
+          description: Project identifier
+        status:
+          type: string
+          enum: [not_initialized, indexing, ready, failed, stale]
+          description: Current index status
+        file_count:
+          type: integer
+          minimum: 0
+          description: Number of indexed files
+        chunk_count:
+          type: integer
+          minimum: 0
+          description: Number of code chunks
+        last_indexed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last successful index timestamp
+        error_message:
+          type: string
+          nullable: true
+          description: Error details if status is failed
+        active_job:
+          $ref: '#/components/schemas/JobSummary'
+          nullable: true
+          description: Current indexing job if any
+
+    JobSummary:
+      type: object
+      required:
+        - job_id
+        - progress_percent
+        - files_processed
+        - files_total
+        - started_at
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        progress_percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        files_processed:
+          type: integer
+          minimum: 0
+        files_total:
+          type: integer
+          minimum: 0
+        started_at:
+          type: string
+          format: date-time
+
+    InitCodeRAGRequest:
+      type: object
+      required:
+        - project_id
+        - target_path
+      properties:
+        project_id:
+          type: string
+          description: Project to associate with index
+        target_path:
+          type: string
+          description: Directory path to index
+        force:
+          type: boolean
+          default: false
+          description: Force re-index even if index exists
+        background:
+          type: boolean
+          default: true
+          description: Run indexing in background (via daemon)
+
+    InitCodeRAGResponse:
+      type: object
+      required:
+        - job_id
+        - status
+        - message
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Identifier for tracking the job
+        status:
+          type: string
+          enum: [queued, started]
+          description: Whether job is queued or immediately started
+        message:
+          type: string
+          description: Human-readable status message
+
+    JobStatusResponse:
+      type: object
+      required:
+        - job_id
+        - project_id
+        - status
+        - progress_percent
+        - files_total
+        - files_processed
+        - chunks_created
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        progress_percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        files_total:
+          type: integer
+          minimum: 0
+        files_processed:
+          type: integer
+          minimum: 0
+        chunks_created:
+          type: integer
+          minimum: 0
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        duration_seconds:
+          type: number
+          nullable: true
+          description: Elapsed time in seconds
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+        message:
+          type: string
+          description: Human-readable error message
+        detail:
+          type: string
+          nullable: true
+          description: Additional error details

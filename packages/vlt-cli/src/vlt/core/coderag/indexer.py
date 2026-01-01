@@ -18,7 +18,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable
 from uuid import uuid4
 import json
 
@@ -106,22 +106,40 @@ class CodeRAGIndexer:
         self.stats = IndexerStats()
         self.delta_manager = DeltaQueueManager(project_id)
 
-    def index_full(self, force: bool = False) -> IndexerStats:
+    def index_full(
+        self,
+        force: bool = False,
+        progress_callback: Optional[Callable[[int, int, int], None]] = None
+    ) -> IndexerStats:
         """Perform full index of the codebase.
 
         Args:
             force: If True, re-index all files. If False, use incremental indexing.
+            progress_callback: Optional callback invoked at progress points.
+                Signature: (files_done: int, files_total: int, chunks: int) -> None
+                Called at: file discovery, per-file completion, embedding generation.
 
         Returns:
             IndexerStats with results
         """
         logger.info(f"Starting full index of project {self.project_id} at {self.project_path}")
 
+        def _report_progress(files_done: int, files_total: int, chunks: int):
+            """Safely invoke progress callback if provided."""
+            if progress_callback:
+                try:
+                    progress_callback(files_done, files_total, chunks)
+                except Exception as e:
+                    logger.warning(f"Progress callback error: {e}")
+
         try:
             # Step 1: Discover files
             files = self._discover_files()
             self.stats.files_discovered = len(files)
             logger.info(f"Discovered {len(files)} files")
+
+            # Report file discovery
+            _report_progress(0, len(files), 0)
 
             if not files:
                 logger.warning("No files to index")
@@ -135,13 +153,16 @@ class CodeRAGIndexer:
 
             if not files:
                 logger.info("All files are up-to-date")
+                _report_progress(0, 0, 0)
                 self.stats.finish()
                 return self.stats
+
+            files_total = len(files)
 
             # Step 3: Parse and chunk files
             all_chunks = []
             parsed_files = {}  # For graph building
-            for file_path in files:
+            for idx, file_path in enumerate(files):
                 try:
                     chunks, tree, source, language = self._index_file(file_path)
                     if chunks:
@@ -155,6 +176,9 @@ class CodeRAGIndexer:
                     self.stats.files_failed += 1
                     self.stats.errors.append(f"{file_path}: {str(e)}")
 
+                # Report per-file completion
+                _report_progress(idx + 1, files_total, len(all_chunks))
+
             self.stats.chunks_created = len(all_chunks)
             logger.info(f"Created {len(all_chunks)} chunks from {self.stats.files_indexed} files")
 
@@ -165,6 +189,9 @@ class CodeRAGIndexer:
 
             # Step 4: Generate embeddings (async batch)
             asyncio.run(self._generate_embeddings(all_chunks))
+
+            # Report after embedding generation
+            _report_progress(files_total, files_total, len(all_chunks))
 
             # Step 5: Store chunks in database
             self._store_chunks(all_chunks)

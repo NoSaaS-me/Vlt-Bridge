@@ -18,6 +18,12 @@ summarization. After SUMMARIZE_DELAY_SECONDS (default: 30) of inactivity
 on that thread, the daemon automatically requests summarization from the
 backend and updates the local State table. This provides debouncing so that
 rapid pushes only trigger one summarization after the flurry stops.
+
+CODERAG BACKGROUND INDEXING:
+The daemon also processes CodeRAG indexing jobs queued via `vlt coderag init`.
+Jobs are stored in the coderag_index_jobs table and processed one at a time
+in priority order (DESC priority, ASC created_at). The daemon updates job
+progress in real-time via progress callbacks during indexing.
 """
 
 import asyncio
@@ -396,6 +402,214 @@ async def process_dirty_threads():
 
 
 # =============================================================================
+# CodeRAG Background Indexing (T024-T029)
+# =============================================================================
+
+# How often to check for pending CodeRAG indexing jobs
+CODERAG_JOB_CHECK_INTERVAL_SECONDS = 10
+
+
+def _get_next_pending_job():
+    """Get the next pending CodeRAG indexing job.
+
+    Finds job with status=PENDING, ordered by priority DESC, created_at ASC.
+    This ensures high-priority jobs are processed first, and among same
+    priority, older jobs are processed first (FIFO within priority level).
+
+    Returns:
+        CodeRAGIndexJob or None if no pending jobs
+    """
+    from sqlalchemy.orm import Session
+    from vlt.db import engine
+    from vlt.core.models import CodeRAGIndexJob, JobStatus
+
+    with Session(engine) as session:
+        job = session.scalar(
+            select(CodeRAGIndexJob)
+            .where(CodeRAGIndexJob.status == JobStatus.PENDING)
+            .order_by(
+                CodeRAGIndexJob.priority.desc(),
+                CodeRAGIndexJob.created_at.asc()
+            )
+            .limit(1)
+        )
+        if job:
+            # Detach from session for use outside
+            session.expunge(job)
+        return job
+
+
+def _check_job_cancelled(job_id: str) -> bool:
+    """Check if a job has been cancelled.
+
+    This is called during indexing to support job cancellation (T062).
+    The indexer's progress callback checks this flag between file processing.
+
+    Args:
+        job_id: Job identifier to check
+
+    Returns:
+        True if job status is CANCELLED, False otherwise
+    """
+    from sqlalchemy.orm import Session
+    from vlt.db import engine
+    from vlt.core.models import CodeRAGIndexJob, JobStatus
+
+    with Session(engine) as session:
+        job = session.get(CodeRAGIndexJob, job_id)
+        if job and job.status == JobStatus.CANCELLED:
+            return True
+        return False
+
+
+class JobCancelledException(Exception):
+    """Raised when a job is cancelled during indexing."""
+    pass
+
+
+async def _run_indexing_job(job):
+    """Execute a single CodeRAG indexing job with progress updates.
+
+    This function:
+    - Updates job status to RUNNING when processing starts (T027)
+    - Runs the indexer in a thread pool via asyncio.to_thread()
+    - Updates progress via callback during indexing (T029)
+    - Checks for cancellation flag during indexing (T062)
+    - Updates job status to COMPLETED, FAILED, or CANCELLED when done (T028)
+
+    Args:
+        job: CodeRAGIndexJob instance to process
+    """
+    from pathlib import Path
+    from sqlalchemy.orm import Session
+    from vlt.db import engine
+    from vlt.core.models import CodeRAGIndexJob, JobStatus
+    from vlt.core.coderag.indexer import CodeRAGIndexer
+
+    job_id = job.id
+    logger.info(f"Starting CodeRAG indexing job {job_id} for project {job.project_id}")
+
+    # T027: Update job status to RUNNING
+    with Session(engine) as session:
+        j = session.get(CodeRAGIndexJob, job_id)
+        if j:
+            j.status = JobStatus.RUNNING
+            j.started_at = datetime.now(timezone.utc)
+            session.commit()
+        else:
+            logger.error(f"Job {job_id} not found in database")
+            return
+
+    try:
+        # Create indexer
+        target_path = Path(job.target_path)
+        indexer = CodeRAGIndexer(target_path, job.project_id)
+
+        # T029 + T062: Progress callback with cancellation check
+        def on_progress(files_done: int, files_total: int, chunks: int):
+            """Progress callback invoked by indexer.
+
+            Also checks for cancellation flag (T062) - if job is cancelled,
+            raises JobCancelledException to break out of indexing loop.
+            """
+            # Check cancellation flag (T062)
+            if _check_job_cancelled(job_id):
+                logger.info(f"Job {job_id} cancelled, aborting indexing")
+                raise JobCancelledException(f"Job {job_id} was cancelled by user")
+
+            # Update progress
+            with Session(engine) as session:
+                j = session.get(CodeRAGIndexJob, job_id)
+                if j:
+                    j.files_processed = files_done
+                    j.files_total = files_total
+                    j.chunks_created = chunks
+                    # Calculate progress percent (avoid division by zero)
+                    if files_total > 0:
+                        j.progress_percent = int((files_done / files_total) * 100)
+                    else:
+                        j.progress_percent = 0
+                    session.commit()
+
+        # Run indexer in thread pool (it's synchronous)
+        stats = await asyncio.to_thread(
+            indexer.index_full,
+            force=job.force,
+            progress_callback=on_progress
+        )
+
+        # T028: Update job status to COMPLETED
+        with Session(engine) as session:
+            j = session.get(CodeRAGIndexJob, job_id)
+            if j:
+                j.status = JobStatus.COMPLETED
+                j.completed_at = datetime.now(timezone.utc)
+                j.files_processed = stats.files_indexed
+                j.files_total = stats.files_discovered
+                j.chunks_created = stats.chunks_created
+                j.progress_percent = 100
+                session.commit()
+
+        logger.info(
+            f"CodeRAG indexing job {job_id} completed: "
+            f"{stats.files_indexed} files, {stats.chunks_created} chunks, "
+            f"{stats.duration_seconds:.2f}s"
+        )
+
+    except JobCancelledException:
+        # T062: Job was cancelled - update status and exit cleanly
+        logger.info(f"CodeRAG indexing job {job_id} was cancelled")
+        with Session(engine) as session:
+            j = session.get(CodeRAGIndexJob, job_id)
+            if j:
+                j.status = JobStatus.CANCELLED
+                j.completed_at = datetime.now(timezone.utc)
+                j.error_message = "Cancelled by user"
+                session.commit()
+
+    except Exception as e:
+        # T028: Update job status to FAILED
+        logger.error(f"CodeRAG indexing job {job_id} failed: {e}")
+        with Session(engine) as session:
+            j = session.get(CodeRAGIndexJob, job_id)
+            if j:
+                j.status = JobStatus.FAILED
+                j.completed_at = datetime.now(timezone.utc)
+                j.error_message = str(e)
+                session.commit()
+
+
+async def process_coderag_jobs():
+    """Background task to process pending CodeRAG indexing jobs.
+
+    This task runs continuously in the daemon, checking for pending jobs
+    at regular intervals and processing them one at a time.
+    """
+    logger.info("CodeRAG job processor started")
+
+    while not state._shutdown_event.is_set():
+        try:
+            # Check for pending job
+            job = _get_next_pending_job()
+            if job:
+                await _run_indexing_job(job)
+        except Exception as e:
+            logger.error(f"Error in CodeRAG job processor: {e}")
+
+        # Wait before next check (or until shutdown)
+        try:
+            await asyncio.wait_for(
+                state._shutdown_event.wait(),
+                timeout=CODERAG_JOB_CHECK_INTERVAL_SECONDS
+            )
+            break  # Shutdown requested
+        except asyncio.TimeoutError:
+            continue  # Continue processing
+
+    logger.info("CodeRAG job processor stopped")
+
+
+# =============================================================================
 # Lifespan Management
 # =============================================================================
 
@@ -427,6 +641,9 @@ async def lifespan(app: FastAPI):
     # Start background dirty thread processor (lazy summarization)
     summarize_task = asyncio.create_task(process_dirty_threads())
 
+    # Start background CodeRAG indexing job processor (T026)
+    coderag_task = asyncio.create_task(process_coderag_jobs())
+
     logger.info(f"VLT Daemon started (backend: {state.vault_url}, connected: {state.backend_connected})")
 
     yield
@@ -436,7 +653,7 @@ async def lifespan(app: FastAPI):
     state._shutdown_event.set()
 
     # Wait for background tasks to finish
-    for task in [queue_task, summarize_task]:
+    for task in [queue_task, summarize_task, coderag_task]:
         try:
             await asyncio.wait_for(task, timeout=5.0)
         except asyncio.TimeoutError:

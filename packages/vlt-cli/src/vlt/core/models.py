@@ -137,6 +137,15 @@ class QueueStatus(enum.Enum):
     FAILED = "failed"
 
 
+class JobStatus(enum.Enum):
+    """Status of CodeRAG indexing job."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 # ============================================================================
 # Oracle Feature - Models
 # ============================================================================
@@ -319,3 +328,41 @@ class ThreadSummaryCache(Base):
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     thread: Mapped["Thread"] = relationship()
+
+
+# ============================================================================
+# CodeRAG Project Integration - Index Job Model
+# ============================================================================
+
+class CodeRAGIndexJob(Base):
+    """Background CodeRAG indexing job with progress tracking.
+
+    Tracks the state and progress of background code indexing jobs
+    for CodeRAG project integration. Each project can have multiple
+    jobs over time, but only one running job at a time.
+    """
+    __tablename__ = "coderag_index_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)  # UUID
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    status: Mapped[JobStatus] = mapped_column(SQLAEnum(JobStatus), default=JobStatus.PENDING)
+    target_path: Mapped[str] = mapped_column(String(512))
+    force: Mapped[bool] = mapped_column(Boolean, default=False)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Progress tracking
+    files_total: Mapped[int] = mapped_column(Integer, default=0)
+    files_processed: Mapped[int] = mapped_column(Integer, default=0)
+    chunks_created: Mapped[int] = mapped_column(Integer, default=0)
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Error handling
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Relationship
+    project: Mapped["Project"] = relationship()

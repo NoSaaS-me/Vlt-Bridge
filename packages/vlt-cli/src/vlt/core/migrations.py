@@ -160,6 +160,29 @@ def apply_oracle_migrations():
             ON thread_summary_cache(thread_id)
         """))
 
+        # ============================================================
+        # CodeRAG Index Jobs - T005
+        # ============================================================
+
+        # Index for finding jobs by project and status
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_coderag_job_project_status
+            ON coderag_index_jobs(project_id, status)
+        """))
+
+        # Index for finding pending jobs by priority (for daemon job picker)
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_coderag_job_pending_priority
+            ON coderag_index_jobs(status, priority DESC, created_at ASC)
+        """))
+
+        # Index for finding active job for a project
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_coderag_job_active
+            ON coderag_index_jobs(project_id)
+            WHERE status IN ('pending', 'running')
+        """))
+
         conn.commit()
 
 

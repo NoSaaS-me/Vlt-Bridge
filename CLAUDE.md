@@ -338,10 +338,10 @@ The app can be embedded in ChatGPT as an iFrame:
 - Entry point: `frontend/src/widget.tsx`
 
 ## Recent Changes
+- 011-coderag-project-init: Added Python 3.11+ (CLI, backend), TypeScript 5.x (frontend)
 - 009-oracle-agent: Added Python 3.11+ (backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, httpx, Jinja2, FastMCP (existing)
 - 008-thread-sync: Added Python 3.11+ (vlt-cli & backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, SQLAlchemy (vlt-cli), httpx, SQLite
-- 007-vlt-oracle: Added Python 3.11+ (vlt-cli), TypeScript 5.x (frontend)
 
 ## Active Technologies
-- Python 3.11+ (backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, httpx, Jinja2, FastMCP (existing) (009-oracle-agent)
-- SQLite (data/index.db for backend, ~/.vlt/vault.db for CLI) (009-oracle-agent)
+- Python 3.11+ (CLI, backend), TypeScript 5.x (frontend) (011-coderag-project-init)
+- SQLite (`~/.vlt/vault.db` for CLI, `data/index.db` for backend) (011-coderag-project-init)

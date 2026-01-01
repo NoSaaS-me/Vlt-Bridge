@@ -1,8 +1,9 @@
 /**
  * T109, T120: Settings page with user profile, API token, and index health
  * Extended with AI model selection for Oracle and Subagents
+ * T046-T054: Added CodeRAG index status panel with progress monitoring
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Copy, RefreshCw, Check, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -24,6 +25,8 @@ import type { User } from '@/types/user';
 import type { IndexHealth } from '@/types/search';
 import type { ModelInfo, ModelSettings } from '@/types/models';
 import type { ContextSettings } from '@/types/context';
+import type { CodeRAGStatusResponse } from '@/types/coderag';
+import { getCodeRAGStatus, initCodeRAG } from '@/services/coderag';
 import { SystemLogs } from '@/components/SystemLogs';
 
 export function Settings() {
@@ -48,6 +51,14 @@ export function Settings() {
   const [isSavingContext, setIsSavingContext] = useState(false);
   const [contextSaved, setContextSaved] = useState(false);
 
+  // CodeRAG status state (T046-T054)
+  const [coderagStatus, setCoderagStatus] = useState<CodeRAGStatusResponse | null>(null);
+  const [isReindexing, setIsReindexing] = useState(false);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Default project ID for CodeRAG (can be made configurable later)
+  const DEFAULT_PROJECT_ID = 'default';
+
   useEffect(() => {
     loadData();
   }, []);
@@ -57,6 +68,41 @@ export function Settings() {
     window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, handler);
     return () => window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, handler);
   }, []);
+
+  // T046: Load CodeRAG status
+  const loadCodeRAGStatus = useCallback(async () => {
+    try {
+      const status = await getCodeRAGStatus(DEFAULT_PROJECT_ID);
+      setCoderagStatus(status);
+    } catch (err) {
+      console.debug('CodeRAG status not available:', err);
+      // Not critical - CodeRAG may not be initialized
+    }
+  }, []);
+
+  // T053: Polling for CodeRAG status during active indexing
+  useEffect(() => {
+    // Clear any existing interval
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+
+    // Only poll when status is 'indexing'
+    if (coderagStatus?.status === 'indexing') {
+      pollingIntervalRef.current = setInterval(() => {
+        loadCodeRAGStatus();
+      }, 5000); // Poll every 5 seconds
+    }
+
+    // Cleanup on unmount or when status changes
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, [coderagStatus?.status, loadCodeRAGStatus]);
 
   const loadData = async () => {
     try {
@@ -118,6 +164,9 @@ export function Settings() {
           max_context_nodes: 30,
         });
       }
+
+      // T046: Load CodeRAG status
+      await loadCodeRAGStatus();
     } catch (err) {
       console.error('Error loading settings:', err);
     }
@@ -223,6 +272,47 @@ export function Settings() {
       console.error('Error saving context settings:', err);
     } finally {
       setIsSavingContext(false);
+    }
+  };
+
+  // T052: Handle CodeRAG re-indexing
+  const handleReindex = async () => {
+    if (isDemoMode) {
+      setError('Demo mode is read-only. Sign in to re-index code.');
+      return;
+    }
+
+    setIsReindexing(true);
+    setError(null);
+
+    try {
+      // Use current working directory as default target path
+      // In a real scenario, this would come from project settings
+      await initCodeRAG(DEFAULT_PROJECT_ID, '.', true, true);
+      // Reload status to show indexing in progress
+      await loadCodeRAGStatus();
+    } catch (err) {
+      setError('Failed to start code re-indexing');
+      console.error('Error starting re-index:', err);
+    } finally {
+      setIsReindexing(false);
+    }
+  };
+
+  // T048: Get appropriate badge variant for CodeRAG status
+  const getCoderagStatusVariant = (status: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
+    switch (status) {
+      case 'ready':
+        return 'default';
+      case 'indexing':
+        return 'secondary';
+      case 'failed':
+        return 'destructive';
+      case 'stale':
+        return 'outline';
+      case 'not_initialized':
+      default:
+        return 'outline';
     }
   };
 
@@ -455,6 +545,85 @@ export function Settings() {
           <SettingsSectionSkeleton
             title="Index Health"
             description="Full-text search index status and maintenance"
+          />
+        )}
+
+        {/* T047-T054: Code Index Section */}
+        {coderagStatus ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Code Index</CardTitle>
+              <CardDescription>
+                CodeRAG indexing status for code search
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* T048: Chunk count and status display */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="text-sm text-muted-foreground">Chunks Indexed</div>
+                  <div className="text-2xl font-bold">{coderagStatus.chunk_count}</div>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Status</div>
+                  <Badge variant={getCoderagStatusVariant(coderagStatus.status)}>
+                    {coderagStatus.status}
+                  </Badge>
+                </div>
+              </div>
+
+              {/* T049-T050: Progress bar during active indexing */}
+              {coderagStatus.status === 'indexing' && coderagStatus.active_job && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span>Progress</span>
+                    <span>
+                      {coderagStatus.active_job.files_processed} / {coderagStatus.active_job.files_total} files
+                    </span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2">
+                    <div
+                      className="bg-primary h-2 rounded-full transition-all"
+                      style={{ width: `${coderagStatus.active_job.progress_percent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* T054: Last indexed timestamp */}
+              {coderagStatus.last_indexed_at && (
+                <div className="text-sm text-muted-foreground">
+                  Last indexed: {new Date(coderagStatus.last_indexed_at).toLocaleString()}
+                </div>
+              )}
+
+              {/* Show error message if failed */}
+              {coderagStatus.status === 'failed' && coderagStatus.error_message && (
+                <Alert variant="destructive">
+                  <AlertDescription>{coderagStatus.error_message}</AlertDescription>
+                </Alert>
+              )}
+
+              {/* T051: Re-index Code button */}
+              <Button
+                variant="outline"
+                disabled={isDemoMode || coderagStatus.status === 'indexing' || isReindexing}
+                onClick={handleReindex}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${coderagStatus.status === 'indexing' || isReindexing ? 'animate-spin' : ''}`} />
+                {coderagStatus.status === 'indexing' ? 'Indexing...' : isReindexing ? 'Starting...' : 'Re-index Code'}
+              </Button>
+
+              <div className="text-xs text-muted-foreground">
+                Re-indexing will scan your codebase and update the code search index.
+                This runs in the background and may take several minutes for large projects.
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <SettingsSectionSkeleton
+            title="Code Index"
+            description="CodeRAG indexing status for code search"
           />
         )}
 

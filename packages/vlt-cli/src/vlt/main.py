@@ -5,6 +5,8 @@ from rich import print
 from rich.table import Table
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.console import Console
+from rich.prompt import Prompt, Confirm
 import json
 import os
 import time
@@ -14,6 +16,8 @@ from vlt.core.service import SqliteVaultService
 from vlt.core.librarian import Librarian
 from vlt.lib.llm import OpenRouterLLMProvider
 from vlt.config import Settings
+from uuid import uuid4
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -817,70 +821,192 @@ def link(source_node_id: str, target_thread: str, note: str = "Relates to"):
 # CodeRAG Commands (T027-T030)
 # ============================================================================
 
-@coderag_app.command("init")
-def coderag_init(
-    project: str = typer.Option(None, "--project", "-p", help="Project ID (auto-detected from vlt.toml if not specified)"),
-    path: Path = typer.Option(None, "--path", help="Directory to index (defaults to current directory)"),
-    force: bool = typer.Option(False, "--force", help="Force full re-index (ignore incremental)"),
-):
+
+# ============================================================================
+# CodeRAG Interactive Helpers (T011-T014)
+# ============================================================================
+
+
+def _interactive_project_selection(console: Console, svc: SqliteVaultService) -> str | None:
+    """Interactive project selection with create option (T011-T014).
+
+    Displays a numbered list of existing projects (marking those with existing
+    CodeRAG indexes with a checkmark), plus an option to create a new project.
+
+    Args:
+        console: Rich Console for styled output
+        svc: SqliteVaultService for project operations
+
+    Returns:
+        Selected project ID or None if user cancels
     """
-    Initialize all indexes for a project.
+    projects = svc.list_projects()
 
-    This command performs a full codebase index:
-    - Parses files using tree-sitter
-    - Generates context-enriched semantic chunks
-    - Creates vector embeddings (qwen/qwen3-embedding-8b)
-    - Builds BM25 keyword index
-    - Constructs import/call graph
-    - Generates repository map
-    - Runs ctags for symbol index
+    # T012: Numbered project list display
+    if not projects:
+        # No projects exist - offer to create one
+        console.print("[yellow]No projects found.[/yellow]")
+        if Confirm.ask("Create a new project?"):
+            name = Prompt.ask("Project name")
+            if not name.strip():
+                console.print("[red]Project name cannot be empty.[/red]")
+                return None
+            try:
+                project = svc.create_project(name, "Created via coderag init")
+                console.print(f"[green]Created project '{project.name}' (id: {project.id})[/green]")
+                return project.id
+            except Exception as e:
+                console.print(f"[red]Error creating project: {e}[/red]")
+                return None
+        return None
 
-    By default, uses incremental indexing (only indexes changed files).
-    Use --force to re-index everything.
-    """
-    from vlt.core.identity import load_project_identity
-    from vlt.core.coderag.indexer import CodeRAGIndexer
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
-    from rich.console import Console
-
-    console = Console()
-
-    # Resolve project
-    if not project:
-        identity = load_project_identity()
-        if identity:
-            project = identity.id
-        else:
-            console.print("[red]Error: No project specified and no vlt.toml found.[/red]")
-            console.print("Usage: vlt coderag init --project <project>")
-            console.print("Or run: vlt init --project <name> to create vlt.toml")
-            raise typer.Exit(code=1)
-
-    # Resolve path
-    if not path:
-        path = Path(".")
-
-    console.print(f"[bold blue]Initializing CodeRAG index for project '{project}'[/bold blue]")
-    console.print(f"Path: {path.resolve()}")
-    console.print(f"Mode: {'Full re-index' if force else 'Incremental'}")
+    # Display project list with index status
+    console.print()
+    console.print("[bold]Available Projects:[/bold]")
     console.print()
 
+    for i, proj in enumerate(projects, 1):
+        has_index = svc.has_coderag_index(proj.id)
+        # T012: Mark projects with existing indexes
+        index_marker = "[green]\u2713[/green]" if has_index else "[ ]"
+        console.print(f"  {i}. [{index_marker}] {proj.name} [dim]({proj.id})[/dim]")
+
+    # T013: Add "Create new project" option
+    create_option = len(projects) + 1
+    console.print(f"  {create_option}. [cyan]+ Create new project[/cyan]")
+    console.print()
+
+    # Get user selection
+    valid_choices = [str(i) for i in range(1, create_option + 1)]
+    try:
+        choice = Prompt.ask(
+            "Select project number",
+            choices=valid_choices,
+            default="1"
+        )
+    except KeyboardInterrupt:
+        console.print("\n[dim]Cancelled.[/dim]")
+        return None
+
+    idx = int(choice)
+
+    if idx <= len(projects):
+        # User selected an existing project
+        selected = projects[idx - 1]
+        return selected.id
+    else:
+        # T014: User chose to create a new project
+        try:
+            name = Prompt.ask("New project name")
+            if not name.strip():
+                console.print("[red]Project name cannot be empty.[/red]")
+                return None
+            project = svc.create_project(name, "Created via coderag init")
+            console.print(f"[green]Created project '{project.name}' (id: {project.id})[/green]")
+            return project.id
+        except KeyboardInterrupt:
+            console.print("\n[dim]Cancelled.[/dim]")
+            return None
+        except Exception as e:
+            console.print(f"[red]Error creating project: {e}[/red]")
+            return None
+
+
+def _queue_background_indexing(
+    project_id: str,
+    target_path: Path,
+    force: bool = False,
+    priority: int = 0,
+) -> str:
+    """Queue a background indexing job for daemon processing.
+
+    Creates a CodeRAGIndexJob record in the database and returns the job ID.
+    The daemon will pick up this job and execute the indexing asynchronously.
+
+    Args:
+        project_id: Project to index
+        target_path: Directory to index
+        force: If True, ignore incremental caching
+        priority: Job priority (higher = processed first)
+
+    Returns:
+        Job ID (UUID string)
+    """
+    from sqlalchemy.orm import Session
+    from vlt.db import engine
+    from vlt.core.models import CodeRAGIndexJob, JobStatus
+
+    job_id = str(uuid4())
+
+    with Session(engine) as session:
+        job = CodeRAGIndexJob(
+            id=job_id,
+            project_id=project_id,
+            status=JobStatus.PENDING,
+            target_path=str(target_path.resolve()),
+            force=force,
+            priority=priority,
+            files_total=0,
+            files_processed=0,
+            chunks_created=0,
+            progress_percent=0,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(job)
+        session.commit()
+
+    return job_id
+
+
+def _run_foreground_indexing(
+    project_id: str,
+    target_path: Path,
+    force: bool,
+    console: Console,
+):
+    """Run indexing in foreground with rich progress display.
+
+    Args:
+        project_id: Project to index
+        target_path: Directory to index
+        force: If True, ignore incremental caching
+        console: Rich console for output
+    """
+    from vlt.core.coderag.indexer import CodeRAGIndexer
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TaskProgressColumn
+
     # Create indexer
-    indexer = CodeRAGIndexer(path, project)
+    indexer = CodeRAGIndexer(target_path, project_id)
 
     # Run indexing with progress display
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
+        TaskProgressColumn(),
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Parsing files...", total=None)
+        task = progress.add_task("Discovering files...", total=None)
+
+        def on_progress(files_done: int, files_total: int, chunks: int):
+            """Progress callback for indexer."""
+            if files_total > 0:
+                progress.update(
+                    task,
+                    description=f"Indexing files ({chunks} chunks)...",
+                    total=files_total,
+                    completed=files_done
+                )
+            else:
+                progress.update(
+                    task,
+                    description=f"Discovering files... ({files_done} found)"
+                )
 
         try:
-            # Run index
-            stats = indexer.index_full(force=force)
+            # Run index with progress callback
+            stats = indexer.index_full(force=force, progress_callback=on_progress)
 
             progress.update(task, description="Indexing complete!", total=1, completed=1)
 
@@ -912,9 +1038,13 @@ def coderag_init(
                 console.print()
                 console.print("[bold red]Errors:[/bold red]")
                 for error in stats.errors[:10]:  # Show first 10 errors
-                    console.print(f"  • {error}")
+                    console.print(f"  - {error}")
                 if len(stats.errors) > 10:
                     console.print(f"  ... and {len(stats.errors) - 10} more errors")
+
+            # T019: Confirmation message with status check instructions
+            console.print()
+            console.print(f"[bold]Check status:[/bold] vlt coderag status --project {project_id}")
 
         except Exception as e:
             progress.update(task, description="[red]Indexing failed![/red]")
@@ -922,26 +1052,184 @@ def coderag_init(
             raise typer.Exit(code=1)
 
 
+@coderag_app.command("init")
+def coderag_init(
+    project: str = typer.Option(None, "--project", "-p", help="Project ID (auto-detected from vlt.toml if not specified)"),
+    path: Path = typer.Option(None, "--path", help="Directory to index (defaults to current directory)"),
+    force: bool = typer.Option(False, "--force", help="Force re-index (overwrite existing index without confirmation)"),
+    background: bool = typer.Option(True, "--background/--foreground", help="Run indexing in background via daemon (default) or foreground"),
+):
+    """
+    Initialize CodeRAG index for a project.
+
+    This command performs a full codebase index:
+    - Parses files using tree-sitter
+    - Generates context-enriched semantic chunks
+    - Creates vector embeddings (qwen/qwen3-embedding-8b)
+    - Builds BM25 keyword index
+    - Constructs import/call graph
+    - Generates repository map
+    - Runs ctags for symbol index
+
+    If --project is not specified and no vlt.toml is found, shows an interactive
+    project selection menu. Projects with existing indexes are marked with a
+    checkmark.
+
+    By default, indexing runs in the background via the daemon so you can
+    continue working. Use --foreground to run in the current terminal with
+    progress display.
+
+    Use --force to overwrite an existing index without confirmation prompt.
+
+    Examples:
+        vlt coderag init                        # Interactive project selection
+        vlt coderag init --project myproj       # Specify project directly
+        vlt coderag init --foreground           # Foreground with progress
+        vlt coderag init --force                # Overwrite without confirmation
+    """
+    from vlt.core.identity import load_project_identity
+
+    console = Console()
+
+    # T018: Interactive project selection when --project not provided
+    if not project:
+        # First try vlt.toml
+        identity = load_project_identity()
+        if identity:
+            project = identity.id
+            console.print(f"[dim]Using project from vlt.toml: {project}[/dim]")
+        else:
+            # No vlt.toml - show interactive selection (T011-T014)
+            project = _interactive_project_selection(console, service)
+            if not project:
+                raise typer.Exit(code=1)
+
+    # T015-T017: Overwrite detection and protection
+    if service.has_coderag_index(project) and not force:
+        console.print()
+        console.print(f"[yellow]Warning: Project '{project}' already has a code index.[/yellow]")
+        console.print("[dim]Re-indexing will replace the existing index.[/dim]")
+        console.print()
+
+        if not Confirm.ask("Overwrite existing index?", default=False):
+            console.print("[dim]Cancelled. Use --force to skip this prompt.[/dim]")
+            raise typer.Exit(code=0)
+
+        # User confirmed overwrite
+        console.print()
+
+    # Resolve path
+    if not path:
+        path = Path(".")
+
+    console.print(f"[bold blue]Initializing CodeRAG index for project '{project}'[/bold blue]")
+    console.print(f"Path: {path.resolve()}")
+    console.print(f"Mode: {'Full re-index' if force else 'Incremental'}")
+    console.print(f"Execution: {'Background (daemon)' if background else 'Foreground'}")
+    console.print()
+
+    # Run indexing
+    if background:
+        # Queue job for background processing
+        job_id = _queue_background_indexing(project, path, force)
+        console.print(f"[green]Indexing job queued.[/green] Job ID: {job_id[:8]}...")
+        console.print()
+        console.print("[dim]The daemon will process this job in the background.[/dim]")
+        console.print(f"[dim]Check status: [bold]vlt coderag status --project {project}[/bold][/dim]")
+        console.print()
+        console.print("[yellow]Note:[/yellow] Ensure the daemon is running with [bold]vlt daemon start[/bold]")
+    else:
+        # Run in foreground with progress display
+        _run_foreground_indexing(project, path, force, console)
+
+
+def _format_duration(seconds: float) -> str:
+    """Format duration in seconds to human-readable string (e.g., '2m 34s')."""
+    if seconds < 0:
+        return "0s"
+    total_seconds = int(seconds)
+    if total_seconds < 60:
+        return f"{total_seconds}s"
+    minutes = total_seconds // 60
+    secs = total_seconds % 60
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h {mins}m"
+
+
+def _build_job_status_json(job, index_status: dict) -> dict:
+    """Build JSON-compatible job status response matching JobStatusResponse schema."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+
+    # Calculate duration
+    duration_seconds = None
+    if job.started_at:
+        end_time = job.completed_at or now
+        duration_seconds = (end_time - job.started_at).total_seconds()
+
+    # Calculate ETA
+    eta_seconds = None
+    if job.started_at and job.progress_percent > 0 and job.status.value == "running":
+        elapsed = (now - job.started_at).total_seconds()
+        eta_seconds = (elapsed / job.progress_percent) * (100 - job.progress_percent)
+
+    return {
+        "job_id": job.id,
+        "project_id": job.project_id,
+        "status": job.status.value,
+        "progress_percent": job.progress_percent,
+        "files_total": job.files_total,
+        "files_processed": job.files_processed,
+        "chunks_created": job.chunks_created,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "error_message": job.error_message,
+        "duration_seconds": duration_seconds,
+        "eta_seconds": eta_seconds,
+        # Include index stats for full context
+        "index_stats": {
+            "files_count": index_status.get("files_count", 0),
+            "chunks_count": index_status.get("chunks_count", 0),
+            "symbols_count": index_status.get("symbols_count", 0),
+            "graph_nodes": index_status.get("graph_nodes", 0),
+            "graph_edges": index_status.get("graph_edges", 0),
+        }
+    }
+
+
 @coderag_app.command("status")
 def coderag_status(
     project: str = typer.Option(None, "--project", "-p", help="Project ID (auto-detected from vlt.toml if not specified)"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON (T036: machine-readable format)"),
 ):
     """
-    Display index health and statistics.
+    Display index health, statistics, and job progress.
 
     Shows:
-    - Files count
-    - Chunks count
-    - Symbols count
+    - Active job progress with files processed, time elapsed, and ETA
+    - Completion summary for finished jobs
+    - Files count, chunks count, symbols count
     - Graph nodes/edges count
     - Last indexed time
     - Repository map statistics
     - Delta queue count (pending changes)
+
+    Examples:
+        vlt coderag status
+        vlt coderag status --project my-project
+        vlt coderag status --json
     """
     from vlt.core.identity import load_project_identity
     from vlt.core.coderag.indexer import CodeRAGIndexer
+    from vlt.core.service import SqliteVaultService
+    from vlt.core.models import JobStatus
     from rich.console import Console
+    from rich.panel import Panel
+    from datetime import datetime, timezone
     import json as json_lib
 
     console = Console()
@@ -955,19 +1243,131 @@ def coderag_status(
             console.print("[red]Error: No project specified and no vlt.toml found.[/red]")
             raise typer.Exit(code=1)
 
-    # Get status
+    # Get index status
     indexer = CodeRAGIndexer(Path("."), project)
     status = indexer.get_index_status()
 
+    # T030-T031: Get job status from service
+    service = SqliteVaultService()
+    active_job = service.get_active_job_for_project(project)
+    recent_job = service.get_most_recent_job_for_project(project) if not active_job else None
+
+    # T036: JSON output mode
     if json_output:
-        console.print(json_lib.dumps(status, indent=2))
+        if active_job:
+            output = _build_job_status_json(active_job, status)
+        elif recent_job:
+            output = _build_job_status_json(recent_job, status)
+        else:
+            # No job history, just return index stats
+            output = {
+                "job_id": None,
+                "project_id": project,
+                "status": "not_initialized" if status.get("chunks_count", 0) == 0 else "ready",
+                "progress_percent": 100 if status.get("chunks_count", 0) > 0 else 0,
+                "files_total": status.get("files_count", 0),
+                "files_processed": status.get("files_count", 0),
+                "chunks_created": status.get("chunks_count", 0),
+                "started_at": None,
+                "completed_at": status.get("last_indexed"),
+                "error_message": None,
+                "duration_seconds": None,
+                "eta_seconds": None,
+                "index_stats": {
+                    "files_count": status.get("files_count", 0),
+                    "chunks_count": status.get("chunks_count", 0),
+                    "symbols_count": status.get("symbols_count", 0),
+                    "graph_nodes": status.get("graph_nodes", 0),
+                    "graph_edges": status.get("graph_edges", 0),
+                }
+            }
+        console.print(json_lib.dumps(output, indent=2))
         return
 
-    # Display as table
-    console.print(f"[bold blue]CodeRAG Index Status[/bold blue]")
-    console.print(f"Project: {status['project_id']}")
-    console.print()
+    # T032-T035: Display job progress if there's an active or recent job
+    now = datetime.now(timezone.utc)
 
+    if active_job:
+        # Show active job progress panel
+        job = active_job
+        status_emoji = "[yellow]running[/yellow]" if job.status == JobStatus.RUNNING else "[dim]pending[/dim]"
+
+        # T033: Files processed / total with percentage
+        progress_line = f"Progress: {job.files_processed}/{job.files_total} files ({job.progress_percent}%)"
+
+        # T034: Time elapsed since started_at
+        elapsed_line = ""
+        if job.started_at:
+            elapsed_seconds = (now - job.started_at).total_seconds()
+            elapsed_line = f"Elapsed: {_format_duration(elapsed_seconds)}"
+
+        # T035: Estimated time remaining based on progress rate
+        eta_line = ""
+        if job.started_at and job.progress_percent > 0 and job.status == JobStatus.RUNNING:
+            elapsed_seconds = (now - job.started_at).total_seconds()
+            eta_seconds = (elapsed_seconds / job.progress_percent) * (100 - job.progress_percent)
+            eta_line = f"ETA: ~{_format_duration(eta_seconds)}"
+
+        # Build progress panel content
+        panel_lines = [
+            f"Status: {status_emoji}",
+            progress_line,
+            f"Chunks: {job.chunks_created}",
+        ]
+        if elapsed_line:
+            panel_lines.append(elapsed_line)
+        if eta_line:
+            panel_lines.append(eta_line)
+
+        # Create visual progress bar
+        bar_width = 34
+        filled = int((job.progress_percent / 100) * bar_width)
+        progress_bar = "[green]" + ("=" * filled) + "[/green]" + ("-" * (bar_width - filled))
+
+        console.print(f"[bold blue]CodeRAG Index Status: {project}[/bold blue]")
+        console.print("[dim]" + "=" * 36 + "[/dim]")
+        for line in panel_lines:
+            console.print(line)
+        console.print(f"[{progress_bar}]")
+        console.print()
+
+    elif recent_job and recent_job.status in [JobStatus.COMPLETED, JobStatus.FAILED]:
+        # T037: Display completion summary when job status is COMPLETED
+        job = recent_job
+
+        if job.status == JobStatus.COMPLETED:
+            console.print(f"[bold blue]CodeRAG Index Status: {project}[/bold blue]")
+            console.print("[dim]" + "=" * 36 + "[/dim]")
+            console.print(f"Status: [green]completed[/green]")
+
+            # Show completion stats
+            if job.completed_at and job.started_at:
+                duration = (job.completed_at - job.started_at).total_seconds()
+                console.print(f"Duration: {_format_duration(duration)}")
+
+            console.print(f"Files indexed: {job.files_processed}/{job.files_total}")
+            console.print(f"Chunks created: {job.chunks_created}")
+
+            if job.completed_at:
+                completed_str = job.completed_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                console.print(f"Completed at: {completed_str}")
+            console.print()
+
+        elif job.status == JobStatus.FAILED:
+            console.print(f"[bold blue]CodeRAG Index Status: {project}[/bold blue]")
+            console.print("[dim]" + "=" * 36 + "[/dim]")
+            console.print(f"Status: [red]failed[/red]")
+            if job.error_message:
+                console.print(f"[red]Error: {job.error_message}[/red]")
+            console.print()
+
+    else:
+        # No active or recent job, just show header
+        console.print(f"[bold blue]CodeRAG Index Status[/bold blue]")
+        console.print(f"Project: {status['project_id']}")
+        console.print()
+
+    # Always show the index statistics table
     table = Table()
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="magenta")
@@ -997,7 +1397,7 @@ def coderag_status(
         table.add_row("Delta queue", delta_status)
 
         # Show individual queued files if any
-        if queued_files > 0 and not json_output:
+        if queued_files > 0:
             console.print()
             console.print("[bold]Queued Files:[/bold]")
             for entry in delta_queue.get('queued_entries', [])[:5]:  # Show first 5
@@ -1005,7 +1405,7 @@ def coderag_status(
                 change_type = entry['change_type']
                 lines = entry['lines_changed']
                 age_min = entry['age_seconds'] // 60
-                console.print(f"  • {file_path} ({change_type}, +{lines} lines, {age_min}m ago)")
+                console.print(f"  [bullet] {file_path} ({change_type}, +{lines} lines, {age_min}m ago)")
 
             if queued_files > 5:
                 console.print(f"  ... and {queued_files - 5} more files")
@@ -1401,6 +1801,95 @@ def coderag_sync(
             progress.update(task, description="[red]Commit failed![/red]")
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(code=1)
+
+
+@coderag_app.command("delete")
+def coderag_delete(
+    project: str = typer.Option(..., "--project", "-p", help="Project ID to delete CodeRAG index for"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """
+    Delete CodeRAG index for a project (Phase 7: T055-T059).
+
+    This command performs cascade deletion of all CodeRAG data:
+    - Code chunks (semantic units)
+    - Code nodes (graph nodes)
+    - Code edges (graph edges)
+    - Symbol definitions (ctags)
+    - Indexing jobs (job history)
+    - Repository maps (cached maps)
+    - Delta queue (pending changes)
+
+    Use --yes to skip the confirmation prompt for scripted/automated use.
+
+    Examples:
+        vlt coderag delete --project myproj      # Interactive confirmation
+        vlt coderag delete --project myproj -y   # Skip confirmation
+        vlt coderag delete -p myproj --json      # JSON output
+    """
+    from rich.console import Console
+    from vlt.core.service import SqliteVaultService
+    import json as json_lib
+
+    console = Console()
+    service = SqliteVaultService()
+
+    # T059: Confirmation prompt unless --yes is passed
+    if not yes:
+        console.print(f"[yellow]Warning: This will delete all CodeRAG data for project '{project}'.[/yellow]")
+        console.print("[dim]This action cannot be undone.[/dim]")
+        console.print()
+
+        if not typer.confirm(f"Delete CodeRAG index for project '{project}'?"):
+            console.print("[dim]Cancelled.[/dim]")
+            raise typer.Exit(code=0)
+
+    # Check if project has any data
+    if not service.has_coderag_index(project):
+        if json_output:
+            console.print(json_lib.dumps({
+                "status": "no_data",
+                "project_id": project,
+                "message": "No CodeRAG index found for project"
+            }))
+        else:
+            console.print(f"[yellow]No CodeRAG index found for project '{project}'.[/yellow]")
+        raise typer.Exit(code=0)
+
+    try:
+        # Perform cascade delete
+        deleted = service.delete_coderag_index(project)
+
+        if json_output:
+            console.print(json_lib.dumps({
+                "status": "deleted",
+                "project_id": project,
+                "deleted": deleted
+            }))
+        else:
+            console.print()
+            console.print(f"[green]Deleted CodeRAG index for project '{project}':[/green]")
+            console.print(f"  - {deleted['chunks']} chunks")
+            console.print(f"  - {deleted['nodes']} nodes")
+            console.print(f"  - {deleted['edges']} edges")
+            console.print(f"  - {deleted['symbols']} symbols")
+            console.print(f"  - {deleted['jobs']} jobs")
+            if deleted.get('repo_maps', 0) > 0:
+                console.print(f"  - {deleted['repo_maps']} repo maps")
+            if deleted.get('delta_queue', 0) > 0:
+                console.print(f"  - {deleted['delta_queue']} delta queue items")
+
+    except Exception as e:
+        if json_output:
+            console.print(json_lib.dumps({
+                "status": "error",
+                "project_id": project,
+                "error": str(e)
+            }))
+        else:
+            console.print(f"[red]Error deleting CodeRAG index: {e}[/red]")
+        raise typer.Exit(code=1)
 
 
 # ============================================================================

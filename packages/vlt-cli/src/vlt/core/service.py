@@ -5,8 +5,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 from sqlalchemy.exc import SQLAlchemyError
 
+from sqlalchemy import func
+
 from vlt.core.interfaces import IVaultService, ThreadStateView, ProjectOverviewView, SearchResult, NodeView
-from vlt.core.models import Project, Thread, Node, State, Tag, Reference
+from vlt.core.models import Project, Thread, Node, State, Tag, Reference, CodeChunk
 from vlt.db import get_db
 from vlt.core.vector import VectorService
 from vlt.lib.llm import OpenRouterLLMProvider
@@ -452,3 +454,216 @@ class SqliteVaultService(IVaultService):
                 logger.warning(f"Failed to generate summaries for matched threads: {e}")
 
         return results
+
+    # =========================================================================
+    # CodeRAG Project Integration - Phase 1 Setup Methods
+    # =========================================================================
+
+    def list_projects(self) -> List[Project]:
+        """List all projects in the database.
+
+        Returns:
+            List of Project objects ordered by name.
+        """
+        try:
+            projects = self.db.scalars(
+                select(Project).order_by(Project.name)
+            ).all()
+            return list(projects)
+        except SQLAlchemyError as e:
+            raise VaultError(f"Database error listing projects: {str(e)}")
+
+    def has_coderag_index(self, project_id: str) -> bool:
+        """Check if project has an existing CodeRAG index.
+
+        A project is considered to have a CodeRAG index if it has at least
+        one CodeChunk in the database.
+
+        Args:
+            project_id: The project identifier to check.
+
+        Returns:
+            True if the project has indexed code chunks, False otherwise.
+        """
+        try:
+            count = self.db.scalar(
+                select(func.count())
+                .select_from(CodeChunk)
+                .where(CodeChunk.project_id == project_id)
+            )
+            return count > 0
+        except SQLAlchemyError as e:
+            raise VaultError(f"Database error checking CodeRAG index: {str(e)}")
+
+    # =========================================================================
+    # CodeRAG Project Integration - Phase 5: Job Status Methods
+    # =========================================================================
+
+    def get_job_status(self, job_id: str) -> Optional["CodeRAGIndexJob"]:
+        """Get the status of a specific CodeRAG indexing job.
+
+        Args:
+            job_id: The UUID of the job to retrieve.
+
+        Returns:
+            The CodeRAGIndexJob if found, None otherwise.
+        """
+        from vlt.core.models import CodeRAGIndexJob
+        try:
+            job = self.db.get(CodeRAGIndexJob, job_id)
+            return job
+        except SQLAlchemyError as e:
+            raise VaultError(f"Database error getting job status: {str(e)}")
+
+    def get_active_job_for_project(self, project_id: str) -> Optional["CodeRAGIndexJob"]:
+        """Get the active (pending or running) job for a project.
+
+        A project can have at most one active job at a time.
+
+        Args:
+            project_id: The project identifier.
+
+        Returns:
+            The active CodeRAGIndexJob if one exists, None otherwise.
+        """
+        from vlt.core.models import CodeRAGIndexJob, JobStatus
+        try:
+            job = self.db.scalars(
+                select(CodeRAGIndexJob)
+                .where(CodeRAGIndexJob.project_id == project_id)
+                .where(CodeRAGIndexJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING]))
+                .order_by(desc(CodeRAGIndexJob.created_at))
+                .limit(1)
+            ).first()
+            return job
+        except SQLAlchemyError as e:
+            raise VaultError(f"Database error getting active job: {str(e)}")
+
+    def get_most_recent_job_for_project(self, project_id: str) -> Optional["CodeRAGIndexJob"]:
+        """Get the most recent job for a project (any status).
+
+        Useful for showing completion summaries or last job status.
+
+        Args:
+            project_id: The project identifier.
+
+        Returns:
+            The most recent CodeRAGIndexJob if any exists, None otherwise.
+        """
+        from vlt.core.models import CodeRAGIndexJob
+        try:
+            job = self.db.scalars(
+                select(CodeRAGIndexJob)
+                .where(CodeRAGIndexJob.project_id == project_id)
+                .order_by(desc(CodeRAGIndexJob.created_at))
+                .limit(1)
+            ).first()
+            return job
+        except SQLAlchemyError as e:
+            raise VaultError(f"Database error getting recent job: {str(e)}")
+
+    # =========================================================================
+    # CodeRAG Project Integration - Phase 7: Cascade Delete
+    # =========================================================================
+
+    def delete_coderag_index(self, project_id: str) -> dict:
+        """Delete all CodeRAG index data for a project.
+
+        Performs cascade delete in the correct order to respect foreign key
+        constraints:
+        1. code_chunks
+        2. code_nodes (after edges to avoid FK violations)
+        3. code_edges
+        4. symbol_definitions
+        5. coderag_index_jobs
+
+        Args:
+            project_id: The project identifier to delete data for.
+
+        Returns:
+            Dictionary with counts of deleted items:
+            {
+                "chunks": int,
+                "nodes": int,
+                "edges": int,
+                "symbols": int,
+                "jobs": int
+            }
+        """
+        from vlt.core.models import (
+            CodeChunk, CodeNode, CodeEdge, SymbolDefinition,
+            CodeRAGIndexJob, RepoMap, IndexDeltaQueue
+        )
+
+        deleted = {
+            "chunks": 0,
+            "nodes": 0,
+            "edges": 0,
+            "symbols": 0,
+            "jobs": 0,
+            "repo_maps": 0,
+            "delta_queue": 0,
+        }
+
+        try:
+            # T057: Delete code_chunks
+            result = self.db.execute(
+                CodeChunk.__table__.delete().where(
+                    CodeChunk.project_id == project_id
+                )
+            )
+            deleted["chunks"] = result.rowcount
+
+            # T057: Delete code_edges (before nodes due to FK)
+            result = self.db.execute(
+                CodeEdge.__table__.delete().where(
+                    CodeEdge.project_id == project_id
+                )
+            )
+            deleted["edges"] = result.rowcount
+
+            # T057: Delete code_nodes
+            result = self.db.execute(
+                CodeNode.__table__.delete().where(
+                    CodeNode.project_id == project_id
+                )
+            )
+            deleted["nodes"] = result.rowcount
+
+            # T057: Delete symbol_definitions
+            result = self.db.execute(
+                SymbolDefinition.__table__.delete().where(
+                    SymbolDefinition.project_id == project_id
+                )
+            )
+            deleted["symbols"] = result.rowcount
+
+            # T058: Delete coderag_index_jobs
+            result = self.db.execute(
+                CodeRAGIndexJob.__table__.delete().where(
+                    CodeRAGIndexJob.project_id == project_id
+                )
+            )
+            deleted["jobs"] = result.rowcount
+
+            # Also clean up related tables
+            result = self.db.execute(
+                RepoMap.__table__.delete().where(
+                    RepoMap.project_id == project_id
+                )
+            )
+            deleted["repo_maps"] = result.rowcount
+
+            result = self.db.execute(
+                IndexDeltaQueue.__table__.delete().where(
+                    IndexDeltaQueue.project_id == project_id
+                )
+            )
+            deleted["delta_queue"] = result.rowcount
+
+            self.db.commit()
+            return deleted
+
+        except SQLAlchemyError as e:
+            self.db.rollback()
+            raise VaultError(f"Database error deleting CodeRAG index: {str(e)}")
