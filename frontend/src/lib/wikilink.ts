@@ -18,13 +18,13 @@ export function extractWikilinks(text: string): string[] {
  * T073: Normalize text to a URL-safe slug
  * - Lowercase
  * - Replace spaces and underscores with dashes
- * - Strip non-alphanumeric except dashes
+ * - Strip non-alphanumeric except dashes and forward slashes (to preserve paths)
  */
 export function normalizeSlug(text: string): string {
   return text
     .toLowerCase()
     .replace(/[\s_]+/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
+    .replace(/[^a-z0-9-\/]/g, '')  // Preserve forward slashes for path matching
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
 }

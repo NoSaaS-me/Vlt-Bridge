@@ -188,7 +188,7 @@ export function exportConversationAsMarkdown(messages: OracleMessage[]): string 
       lines.push('### Sources');
       lines.push('');
       for (const source of message.sources) {
-        lines.push(`- **${source.source_type}**: ${source.source_path} (score: ${source.score.toFixed(3)})`);
+        lines.push(`- **${source.source_type}**: ${source.source_path}${source.score != null ? ` (score: ${source.score.toFixed(3)})` : ''}`);
         if (source.content) {
           lines.push(`  > ${source.content.substring(0, 150)}...`);
         }

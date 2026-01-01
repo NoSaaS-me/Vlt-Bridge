@@ -415,12 +415,23 @@ class OracleAgent:
         tool_executor = _get_tool_executor()
         prompt_loader = _get_prompt_loader()
 
+        # Fetch vault file list to include in system prompt
+        vault_files: List[str] = []
+        try:
+            notes = tool_executor.vault.list_notes(user_id)
+            # Extract paths and limit to 100 files to avoid overwhelming the prompt
+            vault_files = [note.get("path", "") for note in notes[:100]]
+            logger.debug(f"Loaded {len(vault_files)} vault files for system prompt")
+        except Exception as e:
+            logger.warning(f"Failed to load vault files for system prompt: {e}")
+
         # Build initial messages
         system_prompt = prompt_loader.load(
             "oracle/system.md",
             {
                 "project_id": effective_project_id,
                 "user_id": user_id,
+                "vault_files": vault_files,
             },
         )
 
@@ -709,21 +720,27 @@ class OracleAgent:
             logger.info(f"[RAW SSE #{chunk_count}] finish_reason={finish_reason} delta_keys={list(delta.keys())} delta={json.dumps(delta)[:1000]}")
 
             # Handle reasoning/thinking traces (from models like DeepSeek)
+            # Track what we've yielded to avoid duplication
+            yielded_reasoning_text = None
             if "reasoning" in delta and delta["reasoning"]:
-                reasoning_text = delta["reasoning"]
+                yielded_reasoning_text = delta["reasoning"]
                 yield OracleStreamChunk(
                     type="thinking",
-                    content=reasoning_text,
+                    content=yielded_reasoning_text,
                 )
 
             # Handle reasoning_details (alternative format)
+            # Only yield if different from what we already yielded from "reasoning"
             if "reasoning_details" in delta and delta["reasoning_details"]:
                 for detail in delta["reasoning_details"]:
                     if isinstance(detail, dict) and detail.get("text"):
-                        yield OracleStreamChunk(
-                            type="thinking",
-                            content=detail["text"],
-                        )
+                        detail_text = detail["text"]
+                        # Skip if this is the same as what we already yielded
+                        if detail_text != yielded_reasoning_text:
+                            yield OracleStreamChunk(
+                                type="thinking",
+                                content=detail_text,
+                            )
 
             # Handle content
             if "content" in delta and delta["content"]:

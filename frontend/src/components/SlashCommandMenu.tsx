@@ -18,7 +18,7 @@ interface SlashCommandMenuProps {
   onSelect: (command: SlashCommand) => void;
   onClose: () => void;
   filterText: string;
-  position?: { top: number; left: number };
+  position?: { bottom?: number; top?: number; left: number };
 }
 
 export function SlashCommandMenu({
@@ -92,12 +92,20 @@ export function SlashCommandMenu({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [onClose]);
 
+  // Compute positioning style
+  const positionStyle = position
+    ? {
+        left: position.left,
+        ...(position.bottom !== undefined ? { bottom: position.bottom } : { top: position.top }),
+      }
+    : undefined;
+
   if (filteredCommands.length === 0) {
     return (
       <div
         ref={menuRef}
         className="absolute z-50 w-80 rounded-lg border border-border bg-popover shadow-lg"
-        style={position ? { top: position.top, left: position.left } : undefined}
+        style={positionStyle}
       >
         <div className="p-3 text-sm text-muted-foreground text-center">
           No matching commands
@@ -110,7 +118,7 @@ export function SlashCommandMenu({
     <div
       ref={menuRef}
       className="absolute z-50 w-96 rounded-lg border border-border bg-popover shadow-lg overflow-hidden"
-      style={position ? { top: position.top, left: position.left } : undefined}
+      style={positionStyle}
     >
       <div className="max-h-80 overflow-y-auto">
         {filteredCommands.map((cmd, index) => (

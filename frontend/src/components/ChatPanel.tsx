@@ -25,11 +25,19 @@ import {
   pruneTree,
   setActiveTree,
 } from '@/services/context';
-import type { OracleMessage, SlashCommand, OracleStreamChunk, SourceType } from '@/types/oracle';
+import type { OracleMessage, SlashCommand, OracleStreamChunk, SourceType, ToolCallInfo } from '@/types/oracle';
 import type { ModelSettings } from '@/types/models';
 import type { ContextTreeData, ContextNode } from '@/types/context';
 import { useToast } from '@/hooks/useToast';
 import { Badge } from '@/components/ui/badge';
+
+/**
+ * Extended OracleMessage with a stable unique ID for React keys.
+ * This prevents remounting issues that can cause blank screens.
+ */
+interface OracleMessageWithId extends OracleMessage {
+  _id: string;
+}
 
 interface ChatPanelProps {
   onNavigateToNote: (path: string) => void;
@@ -38,7 +46,7 @@ interface ChatPanelProps {
 
 export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) {
   const navigate = useNavigate();
-  const [messages, setMessages] = useState<OracleMessage[]>([]);
+  const [messages, setMessages] = useState<OracleMessageWithId[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -53,9 +61,12 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
   const [activeTreeId, setActiveTreeId] = useState<string | null>(null);
   const [currentContextId, setCurrentContextId] = useState<string | null>(null);
   const [isLoadingTrees, setIsLoadingTrees] = useState(false);
+  const [userHasScrolled, setUserHasScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Ref to track message counter for generating unique IDs
+  const messageCounterRef = useRef(0);
   const toast = useToast();
 
   /**
@@ -66,7 +77,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
   const loadMessagesFromTree = useCallback((
     nodes: ContextNode[],
     targetNodeId: string | null
-  ): OracleMessage[] => {
+  ): OracleMessageWithId[] => {
     if (!nodes.length || !targetNodeId) {
       return [];
     }
@@ -84,7 +95,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
     }
 
     // Convert nodes to messages (skip root node if it's just a placeholder)
-    const messages: OracleMessage[] = [];
+    const messages: OracleMessageWithId[] = [];
     for (const node of pathToTarget) {
       // Skip root nodes that have empty question/answer (placeholder roots)
       if (node.is_root && !node.question && !node.answer) {
@@ -93,20 +104,24 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
 
       // Add user message
       if (node.question) {
-        messages.push({
+        const userMsg: OracleMessageWithId = {
+          _id: `tree-${node.id}-user`,
           role: 'user',
           content: node.question,
           timestamp: node.created_at,
-        });
+        };
+        messages.push(userMsg);
       }
 
       // Add assistant message
       if (node.answer) {
-        messages.push({
+        const assistantMsg: OracleMessageWithId = {
+          _id: `tree-${node.id}-assistant`,
           role: 'assistant',
           content: node.answer,
           timestamp: node.created_at,
-        });
+        };
+        messages.push(assistantMsg);
       }
     }
 
@@ -301,12 +316,34 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
     }
   }, [contextTrees, loadMessagesFromTree, toast]);
 
-  // Auto-scroll to bottom
+  // Smart auto-scroll: only scroll to bottom if user is near bottom or just started loading
+  // This prevents interrupting users who scrolled up to read earlier content
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 150;
+
+      // Auto-scroll if:
+      // 1. User is near the bottom already
+      // 2. User hasn't manually scrolled during streaming
+      // 3. We just started loading (to show the user's message)
+      if (isNearBottom || !userHasScrolled) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
     }
-  }, [messages]);
+  }, [messages, userHasScrolled]);
+
+  // Track user scroll to detect manual scrolling during streaming
+  const handleScroll = useCallback(() => {
+    if (scrollRef.current && isLoading) {
+      const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 150;
+      // Only mark as user-scrolled if they scrolled UP (away from bottom)
+      if (!isNearBottom) {
+        setUserHasScrolled(true);
+      }
+    }
+  }, [isLoading]);
 
   /**
    * Stop the current Oracle query.
@@ -352,7 +389,12 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
         description: 'Summarize and compress conversation',
         handler: async () => {
           const compressed = await compactHistory(messages);
-          setMessages(compressed);
+          // Add _id to compacted messages to maintain our type invariant
+          const compressedWithIds: OracleMessageWithId[] = compressed.map((msg, idx) => ({
+            ...msg,
+            _id: `compacted-${idx}-${Date.now()}`,
+          }));
+          setMessages(compressedWithIds);
           toast.success('Conversation compacted');
         },
       },
@@ -455,7 +497,12 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
       }
     }
 
-    const userMsg: OracleMessage = {
+    // Generate unique IDs for new messages
+    const userMsgId = `msg-${++messageCounterRef.current}-${Date.now()}`;
+    const assistantMsgId = `msg-${++messageCounterRef.current}-${Date.now()}`;
+
+    const userMsg: OracleMessageWithId = {
+      _id: userMsgId,
       role: 'user',
       content: trimmedInput,
       timestamp: new Date().toISOString(),
@@ -465,15 +512,18 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setIsLoading(true);
+    setUserHasScrolled(false); // Reset scroll tracking for new message
     setStatusMessage('Searching...');
 
     // Create assistant message placeholder
-    const assistantMsg: OracleMessage = {
+    const assistantMsg: OracleMessageWithId = {
+      _id: assistantMsgId,
       role: 'assistant',
       content: '',
       timestamp: new Date().toISOString(),
       thinking: '',
       sources: [],
+      tool_calls: [],
     };
 
     setMessages((prev) => [...prev, assistantMsg]);
@@ -501,111 +551,151 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
             `[ChatPanel #${chunkProcessedCount}] Processing chunk type=${chunk.type}`
           );
 
+          // CRITICAL FIX: Use a fully immutable update pattern
+          // React StrictMode runs updater functions twice with the same initial state.
+          // We MUST NOT mutate ANY objects - always create new ones.
           setMessages((prev) => {
-            // Create a deep copy to avoid mutation issues with React StrictMode
-            // StrictMode runs updater functions twice with the same initial state,
-            // so in-place mutation causes content to be appended twice.
-            const updated = prev.map((msg, idx) =>
-              idx === prev.length - 1 ? { ...msg } : msg
-            );
-            const lastMsg = updated[updated.length - 1];
+            const lastIndex = prev.length - 1;
+            const lastMsg = prev[lastIndex];
 
-            if (lastMsg.role === 'assistant') {
-              if (chunk.type === 'status') {
-                setStatusMessage(chunk.message || '');
-              } else if (chunk.type === 'thinking') {
-                lastMsg.thinking = (lastMsg.thinking || '') + (chunk.content || '');
-              } else if (chunk.type === 'content') {
-                lastMsg.content += chunk.content || '';
-              } else if (chunk.type === 'source' && chunk.source) {
-                // Deep copy sources array to avoid mutation
-                lastMsg.sources = [...(lastMsg.sources || []), chunk.source];
-              } else if (chunk.type === 'tool_call' && chunk.tool_call) {
-                // Add or update tool call in the list
-                const existingCalls = lastMsg.tool_calls || [];
-                const existingIndex = existingCalls.findIndex(tc => tc.id === chunk.tool_call!.id);
-                if (existingIndex >= 0) {
-                  // Update existing tool call
-                  existingCalls[existingIndex] = {
-                    ...existingCalls[existingIndex],
-                    ...chunk.tool_call,
-                    status: chunk.tool_call.status as 'pending' | 'running' | 'completed' | 'error' || 'running',
-                  };
-                  lastMsg.tool_calls = [...existingCalls];
-                } else {
-                  // Add new tool call
-                  lastMsg.tool_calls = [...existingCalls, {
+            // Only update assistant messages
+            if (lastMsg?.role !== 'assistant') {
+              return prev;
+            }
+
+            // Handle status updates outside of state (doesn't need immutability)
+            if (chunk.type === 'status') {
+              setStatusMessage(chunk.message || '');
+              return prev; // No state change needed
+            }
+
+            // Build a completely new message object with updated fields
+            let updatedMsg: OracleMessageWithId;
+
+            if (chunk.type === 'thinking') {
+              updatedMsg = {
+                ...lastMsg,
+                thinking: (lastMsg.thinking || '') + (chunk.content || ''),
+              };
+            } else if (chunk.type === 'content') {
+              updatedMsg = {
+                ...lastMsg,
+                content: lastMsg.content + (chunk.content || ''),
+              };
+            } else if (chunk.type === 'source' && chunk.source) {
+              // Create new sources array (never mutate existing)
+              updatedMsg = {
+                ...lastMsg,
+                sources: [...(lastMsg.sources || []), chunk.source],
+              };
+            } else if (chunk.type === 'tool_call' && chunk.tool_call) {
+              // Handle tool call updates with FULLY immutable pattern
+              const existingCalls = lastMsg.tool_calls || [];
+              const existingIndex = existingCalls.findIndex(tc => tc.id === chunk.tool_call!.id);
+
+              let newToolCalls: ToolCallInfo[];
+              if (existingIndex >= 0) {
+                // Create a new array with the updated tool call at the same position
+                newToolCalls = existingCalls.map((tc, idx) =>
+                  idx === existingIndex
+                    ? {
+                        ...tc,
+                        ...chunk.tool_call,
+                        status: (chunk.tool_call!.status as 'pending' | 'running' | 'completed' | 'error') || 'running',
+                      }
+                    : tc
+                );
+              } else {
+                // Add new tool call
+                newToolCalls = [
+                  ...existingCalls,
+                  {
                     id: chunk.tool_call.id,
                     name: chunk.tool_call.name,
                     arguments: chunk.tool_call.arguments,
-                    status: 'running',
-                  }];
-                }
-                setStatusMessage(`Running ${chunk.tool_call.name}...`);
-              } else if (chunk.type === 'tool_result') {
-                // Match result to tool call by ID
-                const existingCalls = lastMsg.tool_calls || [];
-                let matchIndex = -1;
-
-                // First try exact ID match
-                if (chunk.tool_call_id) {
-                  matchIndex = existingCalls.findIndex(tc => tc.id === chunk.tool_call_id);
-                }
-
-                // Fallback: find first running tool without result
-                if (matchIndex < 0) {
-                  matchIndex = existingCalls.findIndex(tc => !tc.result && tc.status === 'running');
-                  if (matchIndex >= 0 && chunk.tool_call_id) {
-                    console.warn(
-                      `[ChatPanel] Tool result ID mismatch: expected '${chunk.tool_call_id}', ` +
-                      `using fallback to running tool '${existingCalls[matchIndex].name}'`
-                    );
-                  }
-                }
-
-                if (matchIndex >= 0) {
-                  existingCalls[matchIndex] = {
-                    ...existingCalls[matchIndex],
-                    result: chunk.tool_result || chunk.content || '',
-                    status: 'completed',
-                  };
-                  lastMsg.tool_calls = [...existingCalls];
-                } else {
-                  // No matching tool call found - log warning
-                  console.warn(
-                    `[ChatPanel] Tool result with ID '${chunk.tool_call_id}' has no matching tool call. ` +
-                    `Result dropped: ${(chunk.tool_result || '').substring(0, 100)}...`
-                  );
-                  // Mark message as having a potential issue if tools failed silently
-                  if (existingCalls.length > 0) {
-                    const hasRunningTools = existingCalls.some(tc => tc.status === 'running');
-                    if (!hasRunningTools) {
-                      // All tools done but we got an orphan result - might indicate a problem
-                      console.warn('[ChatPanel] Orphan tool result received after all tools completed');
-                    }
-                  }
-                }
-              } else if (chunk.type === 'done') {
-                lastMsg.model = chunk.model_used;
-                setStatusMessage('');
-                // Mark any remaining running tool calls as completed
-                if (lastMsg.tool_calls) {
-                  lastMsg.tool_calls = lastMsg.tool_calls.map(tc =>
-                    tc.status === 'running' ? { ...tc, status: 'completed' as const } : tc
-                  );
-                }
-                // Save context_id from response for next request
-                if (chunk.context_id) {
-                  setCurrentContextId(chunk.context_id);
-                  console.debug(`Updated context_id to ${chunk.context_id}`);
-                }
-              } else if (chunk.type === 'error') {
-                lastMsg.is_error = true;
-                lastMsg.content = chunk.error || 'Unknown error occurred';
+                    status: 'running' as const,
+                  },
+                ];
               }
+              updatedMsg = {
+                ...lastMsg,
+                tool_calls: newToolCalls,
+              };
+              setStatusMessage(`Running ${chunk.tool_call.name}...`);
+            } else if (chunk.type === 'tool_result') {
+              // Match result to tool call by ID with FULLY immutable updates
+              const existingCalls = lastMsg.tool_calls || [];
+              let matchIndex = -1;
+
+              // First try exact ID match
+              if (chunk.tool_call_id) {
+                matchIndex = existingCalls.findIndex(tc => tc.id === chunk.tool_call_id);
+              }
+
+              // Fallback: find first running tool without result
+              if (matchIndex < 0) {
+                matchIndex = existingCalls.findIndex(tc => !tc.result && tc.status === 'running');
+                if (matchIndex >= 0 && chunk.tool_call_id) {
+                  console.warn(
+                    `[ChatPanel] Tool result ID mismatch: expected '${chunk.tool_call_id}', ` +
+                    `using fallback to running tool '${existingCalls[matchIndex].name}'`
+                  );
+                }
+              }
+
+              if (matchIndex >= 0) {
+                // Create new array with updated tool at matched index
+                const newToolCalls = existingCalls.map((tc, idx) =>
+                  idx === matchIndex
+                    ? {
+                        ...tc,
+                        result: chunk.tool_result || chunk.content || '',
+                        status: 'completed' as const,
+                      }
+                    : tc
+                );
+                updatedMsg = {
+                  ...lastMsg,
+                  tool_calls: newToolCalls,
+                };
+              } else {
+                // No matching tool call found - log warning but don't mutate
+                console.warn(
+                  `[ChatPanel] Tool result with ID '${chunk.tool_call_id}' has no matching tool call. ` +
+                  `Result dropped: ${(chunk.tool_result || '').substring(0, 100)}...`
+                );
+                return prev; // No state change
+              }
+            } else if (chunk.type === 'done') {
+              // Mark all running tools as completed
+              const newToolCalls = lastMsg.tool_calls?.map(tc =>
+                tc.status === 'running' ? { ...tc, status: 'completed' as const } : tc
+              );
+              updatedMsg = {
+                ...lastMsg,
+                model: chunk.model_used,
+                tool_calls: newToolCalls,
+              };
+              setStatusMessage('');
+              // Save context_id from response for next request
+              if (chunk.context_id) {
+                setCurrentContextId(chunk.context_id);
+                console.debug(`Updated context_id to ${chunk.context_id}`);
+              }
+            } else if (chunk.type === 'error') {
+              updatedMsg = {
+                ...lastMsg,
+                is_error: true,
+                content: chunk.error || 'Unknown error occurred',
+              };
+            } else {
+              // Unknown chunk type - no update
+              return prev;
             }
 
-            return updated;
+            // Create new messages array with updated last message
+            // This is the ONLY place we create a new array
+            return [...prev.slice(0, lastIndex), updatedMsg];
           });
         },
         abortControllerRef.current.signal
@@ -613,17 +703,19 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
     } catch (err) {
       // Check if this was a user-initiated abort (stop button)
       if (err instanceof Error && err.name === 'AbortError') {
-        // User cancelled - update the message to show it was stopped
+        // User cancelled - update the message using immutable pattern
         setMessages((prev) => {
-          // Deep copy last message to avoid StrictMode mutation issues
-          const updated = prev.map((msg, idx) =>
-            idx === prev.length - 1 ? { ...msg } : msg
-          );
-          const lastMsg = updated[updated.length - 1];
-          if (lastMsg.role === 'assistant' && !lastMsg.content) {
-            lastMsg.content = 'Query stopped by user.';
+          const lastIndex = prev.length - 1;
+          const lastMsg = prev[lastIndex];
+          if (lastMsg?.role === 'assistant' && !lastMsg.content) {
+            // Create new message with cancelled content
+            const updatedMsg: OracleMessageWithId = {
+              ...lastMsg,
+              content: 'Query stopped by user.',
+            };
+            return [...prev.slice(0, lastIndex), updatedMsg];
           }
-          return updated;
+          return prev;
         });
         return; // Don't show error toast for user-initiated stop
       }
@@ -631,23 +723,26 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
       console.error('Oracle error:', err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to get response';
 
+      // Update message with error using immutable pattern
       setMessages((prev) => {
-        // Deep copy last message to avoid StrictMode mutation issues
-        const updated = prev.map((msg, idx) =>
-          idx === prev.length - 1 ? { ...msg } : msg
-        );
-        const lastMsg = updated[updated.length - 1];
-        if (lastMsg.role === 'assistant') {
-          lastMsg.is_error = true;
-          lastMsg.content = errorMessage;
+        const lastIndex = prev.length - 1;
+        const lastMsg = prev[lastIndex];
+        if (lastMsg?.role === 'assistant') {
+          const updatedMsg: OracleMessageWithId = {
+            ...lastMsg,
+            is_error: true,
+            content: errorMessage,
+          };
+          return [...prev.slice(0, lastIndex), updatedMsg];
         }
-        return updated;
+        return prev;
       });
 
       toast.error(errorMessage);
     } finally {
       setIsLoading(false);
       setStatusMessage('');
+      setUserHasScrolled(false); // Reset scroll tracking
       abortControllerRef.current = null;
     }
   };
@@ -769,7 +864,11 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden">
         {/* Message List */}
-        <div className="flex-1 overflow-y-auto relative" ref={scrollRef}>
+        <div
+          className="flex-1 overflow-y-auto relative"
+          ref={scrollRef}
+          onScroll={handleScroll}
+        >
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8 text-center">
             <p className="text-base">Ask Oracle anything about your project</p>
@@ -780,8 +879,9 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
         ) : (
           <div className="divide-y divide-border/50">
             {messages.map((msg, i) => (
+              /* Use stable unique ID instead of index to prevent remounting */
               <ChatMessage
-                key={i}
+                key={msg._id}
                 message={msg}
                 onSourceClick={onNavigateToNote}
                 showThinking={showThinking}
@@ -808,7 +908,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
             onSelect={handleCommandSelect}
             onClose={() => setShowCommandMenu(false)}
             filterText={commandFilter}
-            position={{ top: -20, left: 0 }}
+            position={{ bottom: 60, left: 16 }}
           />
         )}
         <div className="flex gap-2">

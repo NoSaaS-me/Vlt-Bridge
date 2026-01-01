@@ -249,6 +249,20 @@ Consider updating [older source] to maintain consistency.
 - **Project**: {{ project_id or 'Not specified' }}
 - **User**: {{ user_id or 'Unknown' }}
 
+{% if vault_files %}
+---
+
+## Available Vault Files
+
+When referencing vault documents with [[wikilinks]], use these actual file paths:
+
+{% for file in vault_files %}
+- {{ file }}
+{% endfor %}
+
+**Important**: Only use paths from this list when creating wikilinks. Do not hallucinate or guess file paths.
+{% endif %}
+
 ---
 
 Remember: You don't know what you don't know. Use your tools to verify before answering. When uncertain, ask clarifying questions rather than guessing.

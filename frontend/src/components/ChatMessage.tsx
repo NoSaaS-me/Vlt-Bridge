@@ -48,10 +48,30 @@ export function ChatMessage({
   // Create markdown components for rendering with wikilink support
   const markdownComponents = useMemo(() => createWikilinkComponent(onSourceClick), [onSourceClick]);
 
+  // Pre-process markdown to convert wikilinks to standard links
+  // [[Link]] -> [Link](wikilink:Link)
+  // [[Link|Alias]] -> [Alias](wikilink:Link)
+  const processWikilinks = (text: string | undefined): string => {
+    if (!text) return '';
+    return text.replace(/\[\[([^\]]+)\]\]/g, (_match, content) => {
+      const [link, alias] = content.split('|');
+      const displayText = alias || link;
+      const href = `wikilink:${encodeURIComponent(link)}`;
+      return `[${displayText}](${href})`;
+    });
+  };
+
+  const processedContent = useMemo(() => processWikilinks(message.content), [message.content]);
+
   // Type guard to check if message is OracleMessage
   const isOracleMessage = (msg: ChatMessageType | OracleMessage): msg is OracleMessage => {
     return 'thinking' in msg || 'model' in msg;
   };
+
+  const processedThinking = useMemo(() => {
+    const oMsg = isOracleMessage(message) ? message : null;
+    return processWikilinks(oMsg?.thinking);
+  }, [message]);
 
   const oracleMsg = isOracleMessage(message) ? message : null;
   const hasError = Boolean(message.is_error);
@@ -243,8 +263,9 @@ export function ChatMessage({
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={markdownComponents}
+                    urlTransform={(url) => url} // Allow wikilink: protocol
                   >
-                    {oracleMsg.thinking}
+                    {processedThinking}
                   </ReactMarkdown>
                   {/* Streaming cursor */}
                   {isThinkingActive && (
@@ -392,13 +413,14 @@ export function ChatMessage({
           "prose-math:text-foreground",
           message.is_error && "text-destructive"
         )}>
-          {message.content ? (
+          {processedContent ? (
             <ReactMarkdown
               remarkPlugins={[remarkGfm, remarkMath]}
               rehypePlugins={[rehypeKatex]}
               components={markdownComponents}
+              urlTransform={(url) => url} // Allow all protocols including wikilink:
             >
-              {message.content}
+              {processedContent}
             </ReactMarkdown>
           ) : (
             isUser ? null : (
@@ -460,16 +482,18 @@ export function ChatMessage({
                   key={i}
                   onClick={() => onSourceClick(source.source_path)}
                   className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 text-xs transition-colors group"
-                  title={`${source.source_type}: ${source.source_path} (score: ${source.score.toFixed(3)})`}
+                  title={`${source.source_type}: ${source.source_path}${source.score != null ? ` (score: ${source.score.toFixed(3)})` : ''}`}
                 >
                   {getSourceIcon(source.source_type)}
                   <span className="font-medium">{source.source_type}</span>
                   <span className="text-muted-foreground group-hover:text-blue-600 dark:group-hover:text-blue-400">
                     {source.source_path.split('/').pop()}
                   </span>
-                  <Badge variant="secondary" className="text-xs px-1 py-0">
-                    {source.score.toFixed(2)}
-                  </Badge>
+                  {source.score != null && (
+                    <Badge variant="secondary" className="text-xs px-1 py-0">
+                      {source.score.toFixed(2)}
+                    </Badge>
+                  )}
                 </button>
               ))}
             </div>
