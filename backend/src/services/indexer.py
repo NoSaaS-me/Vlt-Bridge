@@ -389,6 +389,25 @@ class IndexerService:
             for row in rows
         ]
 
+    def resolve_single_wikilink(self, user_id: str, link_text: str, context_path: str = "") -> Dict[str, Any]:
+        """
+        Resolve a single wikilink to its target note path.
+
+        Args:
+            user_id: User ID
+            link_text: The wikilink text to resolve (without [[ ]])
+            context_path: Optional context note path for same-folder preference
+
+        Returns:
+            Dictionary with link_text, target_path (or None), and is_resolved (bool)
+        """
+        conn = self.db_service.connect()
+        try:
+            results = self.resolve_wikilinks(conn, user_id, context_path, [link_text])
+            return results[0] if results else {"link_text": link_text, "target_path": None, "is_resolved": False}
+        finally:
+            conn.close()
+
     def get_graph_data(self, user_id: str) -> Dict[str, List[Dict[str, Any]]]:
         """Return graph visualization data (nodes and links)."""
         conn = self.db_service.connect()

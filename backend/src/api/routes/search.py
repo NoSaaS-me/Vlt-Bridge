@@ -25,6 +25,14 @@ class BacklinkResult(BaseModel):
     title: str
 
 
+class WikilinkResolution(BaseModel):
+    """Result from wikilink resolution."""
+
+    link_text: str
+    target_path: Optional[str] = None
+    is_resolved: bool
+
+
 @router.get("/api/search", response_model=list[SearchResult])
 async def search_notes(
     q: str = Query(..., min_length=1, max_length=256),
@@ -91,10 +99,10 @@ async def get_tags(auth: AuthContext = Depends(get_auth_context)):
     """Get all tags with usage counts."""
     user_id = auth.user_id
     indexer_service = IndexerService()
-    
+
     try:
         tags = indexer_service.get_tags(user_id)
-        
+
         return [
             Tag(tag_name=tag["tag"], count=tag["count"])
             for tag in tags
@@ -103,5 +111,31 @@ async def get_tags(auth: AuthContext = Depends(get_auth_context)):
         raise HTTPException(status_code=500, detail=f"Failed to get tags: {str(e)}")
 
 
-__all__ = ["router", "BacklinkResult"]
+@router.get("/api/wikilinks/resolve", response_model=WikilinkResolution)
+async def resolve_wikilink(
+    link: str = Query(..., min_length=1, max_length=256, description="Wikilink text to resolve"),
+    context: Optional[str] = Query(None, description="Optional context note path for same-folder preference"),
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """Resolve a wikilink to its target note path using slug-based matching."""
+    user_id = auth.user_id
+    indexer_service = IndexerService()
+
+    try:
+        # Decode the link text if needed
+        link_text = unquote(link)
+        context_path = unquote(context) if context else ""
+
+        result = indexer_service.resolve_single_wikilink(user_id, link_text, context_path)
+
+        return WikilinkResolution(
+            link_text=result["link_text"],
+            target_path=result["target_path"],
+            is_resolved=result["is_resolved"],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to resolve wikilink: {str(e)}")
+
+
+__all__ = ["router", "BacklinkResult", "WikilinkResolution"]
 
