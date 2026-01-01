@@ -68,6 +68,36 @@ def get_auth_context(
     return AuthContext(user_id=payload.sub, token=token, payload=payload)
 
 
+def require_auth_context(
+    authorization: Annotated[Optional[str], Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """
+    Extract and validate the user_id from a Bearer token.
+
+    This dependency NEVER falls back to demo-user, regardless of ENABLE_NOAUTH_MCP.
+    Use this for routes that must enforce strict authentication (sensitive data,
+    paid APIs, administrative functions).
+
+    Raises HTTPException(401) if the header is missing/invalid.
+    """
+    if not authorization:
+        raise _unauthorized("Authorization header required")
+
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise _unauthorized("Authorization header must be in format: Bearer <token>")
+
+    try:
+        payload = auth_service.validate_jwt(token)
+    except AuthError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"error": exc.error, "message": exc.message, "detail": exc.detail},
+        ) from exc
+
+    return AuthContext(user_id=payload.sub, token=token, payload=payload)
+
+
 def extract_user_id_from_jwt(
     authorization: Annotated[Optional[str], Header(alias="Authorization")] = None,
 ) -> str:
@@ -75,4 +105,4 @@ def extract_user_id_from_jwt(
     return get_auth_context(authorization).user_id
 
 
-__all__ = ["AuthContext", "extract_user_id_from_jwt", "get_auth_context"]
+__all__ = ["AuthContext", "extract_user_id_from_jwt", "get_auth_context", "require_auth_context"]
