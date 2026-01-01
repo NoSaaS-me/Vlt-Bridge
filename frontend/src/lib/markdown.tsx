@@ -6,7 +6,8 @@
 import React, { useState } from 'react';
 import type { Components } from 'react-markdown';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
-import { getNote, searchNotes } from '@/services/api';
+import { resolveWikilink, getNotePreview } from '@/services/api';
+import type { NotePreview } from '@/types/note';
 
 export interface WikilinkComponentProps {
   linkText: string;
@@ -17,7 +18,7 @@ export interface WikilinkComponentProps {
 /**
  * T019: Preview cache for wikilink tooltips
  */
-const previewCache = new Map<string, string>();
+const previewCache = new Map<string, NotePreview>();
 
 /**
  * T039-T040: Track slugs to handle duplicates
@@ -65,7 +66,7 @@ function WikilinkPreview({
   children: React.ReactNode;
   onClick?: () => void;
 }) {
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<NotePreview | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isBroken, setIsBroken] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
@@ -87,34 +88,23 @@ function WikilinkPreview({
 
     const fetchPreview = async () => {
       try {
-        // First search for the note by title/content to find its actual path
-        const searchResults = await searchNotes(linkText);
+        // First resolve the wikilink to get its target path
+        const resolution = await resolveWikilink(linkText);
 
-        if (searchResults.length === 0) {
-          // No results found - broken link
+        if (!resolution.is_resolved || !resolution.target_path) {
+          // Resolution failed - broken link
           setIsBroken(true);
           setPreview(null);
           setIsLoading(false);
           return;
         }
 
-        // Get the first matching note
-        const notePath = searchResults[0].note_path;
-        const note = await getNote(notePath);
-
-        // T024: Extract first 150 characters from note body
-        const previewText = note.body
-          .replace(/\[\[([^\]]+)\]\]/g, '$1') // Remove wikilinks
-          .replace(/[#*_~`]/g, '') // Remove markdown formatting
-          .trim()
-          .slice(0, 150);
-        const finalPreview = previewText.length < note.body.length
-          ? `${previewText}...`
-          : previewText;
+        // Fetch the preview data for the resolved note
+        const previewData = await getNotePreview(resolution.target_path);
 
         // T019: Cache the preview
-        previewCache.set(linkText, finalPreview);
-        setPreview(finalPreview);
+        previewCache.set(linkText, previewData);
+        setPreview(previewData);
         setIsBroken(false);
       } catch (error) {
         // T026: Handle broken wikilinks
@@ -150,7 +140,7 @@ function WikilinkPreview({
           </div>
         ) : preview ? (
           <div className="text-sm text-muted-foreground">
-            {preview}
+            {preview.snippet}
           </div>
         ) : null}
       </HoverCardContent>
