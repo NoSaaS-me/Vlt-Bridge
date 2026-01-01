@@ -1791,10 +1791,24 @@ def _build_job_status_json(job, index_status: dict) -> dict:
         elapsed = (now - job.started_at).total_seconds()
         eta_seconds = (elapsed / job.progress_percent) * (100 - job.progress_percent)
 
+    # Map job status to index status
+    # The status field should reflect the INDEX state, not the job state
+    job_status_value = job.status.value
+    if job_status_value in ("completed", "cancelled"):
+        # Completed or cancelled job - check if index has data
+        index_status_value = "ready" if index_status.get("chunks_count", 0) > 0 else "not_initialized"
+    elif job_status_value in ("running", "pending"):
+        index_status_value = "indexing"
+    elif job_status_value == "failed":
+        index_status_value = "failed"
+    else:
+        # Unknown status, default based on chunks
+        index_status_value = "ready" if index_status.get("chunks_count", 0) > 0 else "not_initialized"
+
     return {
         "job_id": job.id,
         "project_id": job.project_id,
-        "status": job.status.value,
+        "status": index_status_value,  # Index status, not job status
         "progress_percent": job.progress_percent,
         "files_total": job.files_total,
         "files_processed": job.files_processed,
@@ -2078,7 +2092,12 @@ def coderag_search(
     results = search_bm25(query, project_id=project, limit=limit)
 
     if not results:
-        console.print("[yellow]No results found.[/yellow]")
+        if json_output:
+            # Write directly to stdout, bypassing Rich
+            import sys
+            sys.stdout.write("[]\n")
+        else:
+            console.print("[yellow]No results found.[/yellow]")
         return
 
     if json_output:
@@ -2093,7 +2112,9 @@ def coderag_search(
                 "retrieval_method": "bm25",
                 "snippet": result['body'][:200] + "..." if len(result['body']) > 200 else result['body']
             })
-        console.print(json_lib.dumps(json_results, indent=2))
+        # Write directly to stdout, bypassing Rich completely
+        import sys
+        sys.stdout.write(json_lib.dumps(json_results, indent=2) + "\n")
         return
 
     # Display results

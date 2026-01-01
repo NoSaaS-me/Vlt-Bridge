@@ -233,11 +233,11 @@ class BM25Indexer:
             return ""
 
         # Remove/escape FTS5 special characters that can cause errors
-        # FTS5 special chars: " ( ) : * AND OR NOT NEAR
+        # FTS5 special chars: " ( ) : * ? AND OR NOT NEAR
         # Strategy: Remove quotes and parens, keep alphanumeric and basic punctuation
 
         # Replace special chars with spaces
-        special_chars = ['"', '(', ')', ':', '^', '{', '}', '[', ']']
+        special_chars = ['"', '(', ')', ':', '^', '{', '}', '[', ']', '?']
         sanitized = query
         for char in special_chars:
             sanitized = sanitized.replace(char, ' ')

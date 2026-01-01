@@ -765,9 +765,9 @@ class OracleAgent:
                         tool_calls_buffer[idx]["id"] = tc["id"]
 
                     if "function" in tc:
-                        if "name" in tc["function"]:
+                        if "name" in tc["function"] and tc["function"]["name"]:
                             tool_calls_buffer[idx]["function"]["name"] = tc["function"]["name"]
-                        if "arguments" in tc["function"]:
+                        if "arguments" in tc["function"] and tc["function"]["arguments"]:
                             tool_calls_buffer[idx]["function"]["arguments"] += tc["function"]["arguments"]
 
         # Log final state
@@ -969,8 +969,9 @@ class OracleAgent:
         for call in tool_calls:
             call_id = call.get("id", str(uuid.uuid4()))
             function = call.get("function", {})
-            name = function.get("name", "unknown")
-            arguments_str = function.get("arguments", "{}")
+            # Handle case where name is None or empty (defensive parsing)
+            name = function.get("name") or "unknown"
+            arguments_str = function.get("arguments") or "{}"
 
             # Parse arguments
             try:

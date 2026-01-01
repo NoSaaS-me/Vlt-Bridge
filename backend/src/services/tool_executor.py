@@ -421,13 +421,41 @@ class ToolExecutor:
         language: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Search the codebase using hybrid retrieval."""
+        """Search the codebase using hybrid retrieval (vector + BM25).
+
+        Gets user's OpenRouter API key for vector search component.
+        Falls back to BM25-only if no API key is configured.
+        """
+        # Get API key from user settings for vector search
+        import os
+        api_key = self.user_settings.get_openrouter_api_key(user_id) or os.environ.get("OPENROUTER_API_KEY")
+
         result = await self.oracle_bridge.search_code(
             query=query,
             limit=limit,
             language=language,
+            openrouter_api_key=api_key,  # Pass API key for vector search
         )
-        return result
+
+        # Normalize response format to match other tools
+        # vlt CLI returns a list of results directly, or a dict with error
+        if isinstance(result, list):
+            # Success - list of search results
+            return {
+                "query": query,
+                "results": result,
+                "count": len(result),
+            }
+        elif isinstance(result, dict) and result.get("error"):
+            # Error from vlt CLI
+            return result
+        else:
+            # Unexpected format
+            return {
+                "error": True,
+                "message": f"Unexpected response format from code search: {type(result)}",
+                "results": [],
+            }
 
     async def _find_definition(
         self,

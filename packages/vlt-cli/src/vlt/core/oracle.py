@@ -14,12 +14,13 @@ import time
 import httpx
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
+from dataclasses import asdict
 
 from vlt.core.query_analyzer import analyze_query, QueryType, get_primary_symbol
 from vlt.core.retrievers.hybrid import hybrid_retrieve, _create_default_retrievers
 from vlt.core.retrievers.vault import VaultRetriever
 from vlt.core.retrievers.threads import ThreadRetriever
-from vlt.core.retrievers.base import RetrievalResult
+from vlt.core.retrievers.base import RetrievalResult as DataclassRetrievalResult
 from vlt.core.context_assembler import assemble_context, estimate_tokens
 from vlt.core.prompts import (
     build_synthesis_prompt,
@@ -27,7 +28,7 @@ from vlt.core.prompts import (
     build_explain_trace_section,
     extract_citations_from_response
 )
-from vlt.core.schemas import OracleQuery, OracleResponse
+from vlt.core.schemas import OracleQuery, OracleResponse, RetrievalResult as PydanticRetrievalResult
 from vlt.core.conversation import ConversationManager
 from vlt.config import Settings
 from vlt.db import SessionLocal
@@ -343,9 +344,15 @@ class OracleOrchestrator:
                 f"{synthesis_tokens} tokens"
             )
 
+            # Convert dataclass RetrievalResult to Pydantic RetrievalResult
+            pydantic_sources = [
+                PydanticRetrievalResult(**asdict(r))
+                for r in results[:10]  # Top 10 sources for response
+            ]
+
             return OracleResponse(
                 answer=answer,
-                sources=results[:10],  # Top 10 sources for response
+                sources=pydantic_sources,
                 repo_map_slice=repo_map_text,
                 traces=traces,
                 query_type=query_analysis.query_type.value,

@@ -168,11 +168,19 @@ class OracleBridge:
             try:
                 status = json.loads(result.stdout)
                 # Check if index exists based on status response
-                self._coderag_initialized = status.get("indexed", False) or status.get("chunks", 0) > 0
+                # Status can be "ready", "indexing", etc.
+                # Chunks can be in chunks_created or index_stats.chunks_count
+                is_ready = status.get("status") == "ready"
+                has_chunks = (
+                    status.get("chunks_created", 0) > 0 or
+                    status.get("index_stats", {}).get("chunks_count", 0) > 0
+                )
+                self._coderag_initialized = is_ready or has_chunks
+                logger.info(f"CodeRAG initialized check: status={status.get('status')}, chunks={has_chunks}, result={self._coderag_initialized}")
                 return self._coderag_initialized
             except json.JSONDecodeError:
                 # If output isn't JSON, check for success indicators in text
-                self._coderag_initialized = "indexed" in result.stdout.lower()
+                self._coderag_initialized = "ready" in result.stdout.lower()
                 return self._coderag_initialized
 
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
@@ -184,6 +192,7 @@ class OracleBridge:
         self,
         args: List[str],
         timeout: int = 60,
+        env_vars: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Run a vlt CLI command and parse JSON output.
@@ -191,6 +200,7 @@ class OracleBridge:
         Args:
             args: Command arguments (after 'vlt')
             timeout: Command timeout in seconds
+            env_vars: Optional environment variables to pass to the subprocess
 
         Returns:
             Parsed JSON response from vlt
@@ -208,6 +218,12 @@ class OracleBridge:
 
         cmd = [self.vlt_command] + args + ["--json"]
 
+        # Build environment with optional additional vars
+        env = os.environ.copy()
+        if env_vars:
+            env.update(env_vars)
+            logger.debug(f"Passing environment variables: {list(env_vars.keys())}")
+
         try:
             logger.info(f"Running vlt command: {' '.join(cmd)}")
             result = subprocess.run(
@@ -216,6 +232,7 @@ class OracleBridge:
                 text=True,
                 timeout=timeout,
                 check=True,
+                env=env,
             )
 
             # Validate output before parsing
@@ -498,6 +515,7 @@ class OracleBridge:
         language: Optional[str] = None,
         file_pattern: Optional[str] = None,
         project: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Search code using hybrid retrieval (vector + BM25).
@@ -508,6 +526,7 @@ class OracleBridge:
             language: Filter by programming language
             file_pattern: File pattern filter (not directly supported - would need implementation)
             project: Project ID (auto-detected if None)
+            openrouter_api_key: User's OpenRouter API key for vector search (passed as env var)
 
         Returns:
             Search results with code chunks
@@ -535,7 +554,13 @@ class OracleBridge:
         if file_pattern:
             logger.warning(f"file_pattern filtering not yet supported: {file_pattern}")
 
-        return self._run_vlt_command(args, timeout=60)
+        # Pass API key as environment variable for vector search
+        env_vars = {}
+        if openrouter_api_key:
+            env_vars["VLT_OPENROUTER_API_KEY"] = openrouter_api_key
+            logger.debug("Passing OpenRouter API key for vector search")
+
+        return self._run_vlt_command(args, timeout=60, env_vars=env_vars if env_vars else None)
 
     async def find_definition(
         self,
