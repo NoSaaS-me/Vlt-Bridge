@@ -146,11 +146,28 @@ function WikilinkPreview({
       </HoverCardTrigger>
       <HoverCardContent className="w-80">
         {isLoading ? (
-          // T025: Loading skeleton
-          <div className="space-y-2">
-            <div className="h-4 bg-muted animate-pulse rounded" />
-            <div className="h-4 bg-muted animate-pulse rounded w-5/6" />
-            <div className="h-4 bg-muted animate-pulse rounded w-4/6" />
+          // T025: Loading skeleton matching preview card layout
+          <div className="space-y-3">
+            {/* Title skeleton (h4 height, slightly larger) */}
+            <div className="h-5 bg-muted animate-pulse rounded w-3/4" />
+
+            {/* Snippet skeleton (3 text lines) */}
+            <div className="space-y-2">
+              <div className="h-3.5 bg-muted animate-pulse rounded" />
+              <div className="h-3.5 bg-muted animate-pulse rounded w-5/6" />
+              <div className="h-3.5 bg-muted animate-pulse rounded w-4/6" />
+            </div>
+
+            {/* Badge placeholders (2 badge-sized skeletons) */}
+            <div className="flex gap-1.5">
+              <div className="h-5 w-16 bg-muted animate-pulse rounded-full" />
+              <div className="h-5 w-20 bg-muted animate-pulse rounded-full" />
+            </div>
+
+            {/* Footer skeleton (with border-top separator) */}
+            <div className="pt-2 border-t">
+              <div className="h-3 bg-muted animate-pulse rounded w-32" />
+            </div>
           </div>
         ) : isBroken ? (
           // T026: Broken link message
