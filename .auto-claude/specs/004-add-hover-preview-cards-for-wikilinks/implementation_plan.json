@@ -63,32 +63,35 @@
           "id": "2.1",
           "title": "Add API service functions",
           "description": "Add resolveWikilink(linkText) and getNotePreview(path) functions to frontend/src/services/api.ts with proper TypeScript types",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Added WikilinkResolution and NotePreview interfaces to frontend/src/types/note.ts\n\u2713 Added resolveWikilink(linkText, contextPath?) function to frontend/src/services/api.ts\n\u2713 Added getNotePreview(path) function to frontend/src/services/api.ts\n\u2713 Both functions follow existing code patterns (apiFetch, URL encoding, JSDoc comments)\n\u2713 Types match backend models (WikilinkResolution from search.py, NotePreview from note.py)\n\u2713 Committed: 83398ad",
           "files": [
             "frontend/src/services/api.ts",
             "frontend/src/types/note.ts"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:38:20.875161+00:00"
         },
         {
           "id": "2.2",
           "title": "Refactor WikilinkPreview to use resolution API",
           "description": "Update WikilinkPreview component in markdown.tsx to first resolve wikilink text to path using new API, then fetch preview. Handle broken links (resolution returns null)",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Updated WikilinkPreview component to use new resolution API\n\u2713 Changed imports to use resolveWikilink and getNotePreview\n\u2713 Updated preview state and cache to use NotePreview type\n\u2713 Refactored fetchPreview function to:\n  - First call resolveWikilink() to get target path\n  - Handle broken links (is_resolved=false or null target_path)\n  - Then call getNotePreview() with resolved path\n  - Cache NotePreview object instead of plain string\n\u2713 Updated rendering to use preview.snippet\n\u2713 Follows existing code patterns and TypeScript conventions\n\u2713 Committed: e54a75f",
           "files": [
             "frontend/src/lib/markdown.tsx"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:40:37.075224+00:00"
         },
         {
           "id": "2.3",
           "title": "Update preview cache strategy",
           "description": "Separate caches for resolution (linkText -> path) and previews (path -> previewData). Resolution cache can be longer-lived since paths rarely change",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Separated caches into two distinct stores with different purposes:\n  - resolutionCache: Map<string, string | null> - maps linkText to resolved path (longer-lived)\n  - previewCache: Map<string, NotePreview> - maps path to preview data (can be invalidated more frequently)\n\n\u2713 Updated fetchPreview logic to use two-stage caching:\n  1. Check resolutionCache for linkText \u2192 path, fetch and cache if missing\n  2. If resolved, check previewCache for path \u2192 preview, fetch and cache if missing\n  3. Multiple wikilinks pointing to same note now share same preview data\n\n\u2713 Benefits:\n  - More efficient memory usage (deduplicated preview data)\n  - Separation of concerns (resolution vs content)\n  - Resolution cache can be longer-lived since paths rarely change\n  - Preview cache can be invalidated independently when content changes\n\n\u2713 Committed: ebd8213",
           "files": [
             "frontend/src/lib/markdown.tsx"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:43:05.934033+00:00"
         }
       ]
     },
@@ -102,11 +105,12 @@
           "id": "3.1",
           "title": "Design enhanced preview card layout",
           "description": "Create rich preview card showing: note title (h4), snippet text (max 3 lines), tags as badges (max 3), and 'Updated X ago' footer. Use existing shadcn components",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Added formatDistanceToNow() utility function in frontend/src/lib/utils.ts\n\u2713 Enhanced WikilinkPreview component with rich preview card layout:\n  - Note title displayed as h4 with semibold font and tight leading\n  - Snippet text limited to max 3 lines using Tailwind's line-clamp-3 utility\n  - Tags displayed as secondary Badge components (max 3, using slice(0, 3))\n  - Updated timestamp footer with border separator using formatDistanceToNow()\n\u2713 Imported Badge component from shadcn/ui\n\u2713 All content uses existing NotePreview data structure (title, snippet, tags, updated)\n\u2713 Follows existing code patterns and Tailwind CSS conventions\n\u2713 Committed: 28d3098",
           "files": [
             "frontend/src/lib/markdown.tsx"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:45:58.036020+00:00"
         },
         {
           "id": "3.2",
@@ -230,5 +234,5 @@
       "backend/src/api/routes/search.py - add resolution endpoint here"
     ]
   },
-  "last_updated": "2026-01-01T13:35:48.838286+00:00"
+  "last_updated": "2026-01-01T13:45:58.036029+00:00"
 }

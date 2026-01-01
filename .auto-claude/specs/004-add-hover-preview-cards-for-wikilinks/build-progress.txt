@@ -200,6 +200,43 @@
 
 ---
 
+### ✅ Subtask 3.1: Design enhanced preview card layout
+**Commit:** 28d3098
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Added `formatDistanceToNow()` utility function to `frontend/src/lib/utils.ts`
+  - Converts ISO 8601 timestamps to relative time (e.g., "2 hours ago", "3 days ago")
+  - Handles seconds, minutes, hours, days, months, and years
+  - Returns "just now" for very recent updates
+
+- Enhanced `WikilinkPreview` component in `frontend/src/lib/markdown.tsx`
+  - Imported `Badge` component from shadcn/ui
+  - Imported `formatDistanceToNow` utility function
+  - Replaced simple snippet text with rich preview card layout
+
+- Rich preview card structure (T031 marker):
+  - **Title**: h4 element with semibold font and tight leading
+  - **Snippet**: p element with line-clamp-3 (max 3 lines), muted foreground color, relaxed leading
+  - **Tags**: Badge components with secondary variant, displayed as flex row (max 3 tags using .slice(0, 3))
+  - **Footer**: Timestamp with border-top separator, smaller text, shows "Updated X ago"
+
+**Code Pattern Compliance:**
+✓ Uses existing shadcn Badge component
+✓ Follows Tailwind CSS utility class patterns
+✓ Maintains spacing with space-y-3 for vertical rhythm
+✓ Conditional rendering for tags (only shows if tags exist and array is not empty)
+✓ TypeScript type safety with NotePreview interface
+
+**UI Design:**
+- Clean, hierarchical information display
+- Title is most prominent (larger, semibold)
+- Snippet text is readable but secondary (muted color, smaller)
+- Tags provide visual metadata without overwhelming
+- Timestamp anchors the card with context
+
+---
+
 ## In Progress
 
 None
@@ -217,7 +254,7 @@ None
 ✅ 2.3: Update preview cache strategy
 
 ### Phase 3: Preview Card UI Enhancement
-- [ ] 3.1: Design enhanced preview card layout
+✅ 3.1: Design enhanced preview card layout
 - [ ] 3.2: Improve loading skeleton
 - [ ] 3.3: Style broken link indicator
 
