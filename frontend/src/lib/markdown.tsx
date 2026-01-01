@@ -144,7 +144,7 @@ function WikilinkPreview({
           {children}
         </span>
       </HoverCardTrigger>
-      <HoverCardContent className="w-80">
+      <HoverCardContent className={`w-80 ${isBroken ? 'border-destructive/50 bg-destructive/5' : ''}`}>
         {isLoading ? (
           // T025: Loading skeleton matching preview card layout
           <div className="space-y-3">
@@ -170,9 +170,35 @@ function WikilinkPreview({
             </div>
           </div>
         ) : isBroken ? (
-          // T026: Broken link message
-          <div className="text-sm text-destructive">
-            Note not found
+          // T033: Broken link card with red-tinted styling
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-5 w-5 text-destructive"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <h4 className="font-semibold text-base text-destructive">
+                Note not found
+              </h4>
+            </div>
+
+            <p className="text-sm text-muted-foreground">
+              The note "{linkText}" does not exist in your vault.
+            </p>
+
+            <div className="text-xs text-muted-foreground pt-2 border-t border-destructive/20">
+              Click the wikilink to create this note
+            </div>
           </div>
         ) : preview ? (
           // T031: Rich preview card
