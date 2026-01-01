@@ -1,0 +1,10 @@
+{
+  "sourceType": "ideation",
+  "ideationType": "security_hardening",
+  "ideaId": "sec-004",
+  "rationale": "Broken access control is #1 on OWASP Top 10 (2021). Unauthenticated access to user data and administrative functions allows data theft, data corruption, and denial of service.",
+  "category": "security",
+  "securitySeverity": "high",
+  "impact": "high",
+  "priority": "high"
+}

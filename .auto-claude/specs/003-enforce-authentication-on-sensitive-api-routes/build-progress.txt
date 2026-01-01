@@ -128,3 +128,66 @@ ADMIN_USER_IDS="user-123,admin-user,john@example.com"
 **Commit:** 23edc9c
 
 **Status:** Ready for use in P2.9 (Protect system routes with admin auth)
+
+---
+
+### ✅ P1.3 - Add authentication mode enum and helper (COMPLETED)
+
+**Implementation Details:**
+- Created `AuthMode` enum in `backend/src/api/middleware/auth_middleware.py`
+  - Three authentication levels: `OPTIONAL`, `STRICT`, `ADMIN`
+  - Each mode has clear semantics documented in docstring
+  - OPTIONAL: Falls back to demo-user when ENABLE_NOAUTH_MCP=true
+  - STRICT: Always requires valid Authorization header
+  - ADMIN: Requires valid Authorization header + admin privileges
+- Created `get_auth_dependency()` factory function
+  - Takes `AuthMode` as parameter
+  - Returns the appropriate dependency function based on mode
+  - OPTIONAL → `get_auth_context`
+  - STRICT → `require_auth_context`
+  - ADMIN → `require_admin_context`
+  - Raises `ValueError` for unknown auth modes
+- Added comprehensive docstring with usage examples for all three modes
+- Updated imports to include `Enum` and `Callable` types
+- Updated `__all__` exports to include `AuthMode` and `get_auth_dependency`
+
+**Key Benefits:**
+- More explicit and type-safe authentication requirement declaration
+- Routes can use: `auth: AuthContext = Depends(get_auth_dependency(AuthMode.STRICT))`
+- Easier to understand authentication requirements at a glance
+- Provides a centralized, consistent pattern for authentication
+- Alternative to importing different dependency functions
+
+**Usage Example:**
+```python
+from fastapi import Depends
+from ..middleware import AuthContext, AuthMode, get_auth_dependency
+
+@router.get("/api/notes")
+async def list_notes(
+    auth: AuthContext = Depends(get_auth_dependency(AuthMode.STRICT))
+):
+    # This route requires strict authentication
+    ...
+
+@router.get("/api/system/logs")
+async def get_logs(
+    auth: AuthContext = Depends(get_auth_dependency(AuthMode.ADMIN))
+):
+    # This route requires admin privileges
+    ...
+```
+
+**Verification:**
+- Python syntax check passed (py_compile)
+- Code follows existing patterns in auth_middleware.py
+- Proper type hints with Callable return type
+- Clear documentation with examples
+- All three enum values map to correct dependency functions
+
+**Files Modified:**
+- backend/src/api/middleware/auth_middleware.py
+
+**Commit:** e5c8fd2
+
+**Status:** Phase 1 (Foundational Security Improvements) complete! Ready to begin Phase 2 (Protect Sensitive Routes)

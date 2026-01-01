@@ -1,0 +1,34 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/003-enforce-authentication-on-sensitive-api-routes/**)",
+      "Write(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/003-enforce-authentication-on-sensitive-api-routes/**)",
+      "Edit(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/003-enforce-authentication-on-sensitive-api-routes/**)",
+      "Glob(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/003-enforce-authentication-on-sensitive-api-routes/**)",
+      "Grep(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/003-enforce-authentication-on-sensitive-api-routes/**)",
+      "Read(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/003-enforce-authentication-on-sensitive-api-routes/.auto-claude/specs/003-enforce-authentication-on-sensitive-api-routes/**)",
+      "Write(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/003-enforce-authentication-on-sensitive-api-routes/.auto-claude/specs/003-enforce-authentication-on-sensitive-api-routes/**)",
+      "Edit(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/003-enforce-authentication-on-sensitive-api-routes/.auto-claude/specs/003-enforce-authentication-on-sensitive-api-routes/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__get-library-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}

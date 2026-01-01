@@ -1,0 +1,93 @@
+{
+  "subtasks": {
+    "P1.1": {
+      "attempts": [
+        {
+          "session": 2,
+          "timestamp": "2026-01-01T07:31:49.555912",
+          "approach": "Implemented: Create a new `require_auth_context` dependency that NEVER falls back to demo-user, regardless of ENA",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P1.2": {
+      "attempts": [
+        {
+          "session": 3,
+          "timestamp": "2026-01-01T07:34:31.288876",
+          "approach": "Implemented: Create `require_admin_context` that validates the user has admin privileges. Initially, this can che",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P1.3": {
+      "attempts": [
+        {
+          "session": 4,
+          "timestamp": "2026-01-01T07:37:40.563239",
+          "approach": "Implemented: Create an AuthMode enum (STRICT, OPTIONAL, ADMIN) and a factory function to get the appropriate depe",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P2.1": {
+      "attempts": [
+        {
+          "session": 5,
+          "timestamp": "2026-01-01T07:39:41.459248",
+          "approach": "Implemented: Update /api/notes endpoints to use require_auth_context. All operations (list, create, read, update,",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P2.2": {
+      "attempts": [
+        {
+          "session": 6,
+          "timestamp": "2026-01-01T07:40:52.129776",
+          "approach": "Implemented: Update /api/index/rebuild to use require_auth_context. The rebuild endpoint is administrative and sh",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P2.3": {
+      "attempts": [
+        {
+          "session": 7,
+          "timestamp": "2026-01-01T07:42:37.452600",
+          "approach": "Implemented: Update /api/search, /api/backlinks, /api/tags, and /api/graph to use require_auth_context. These exp",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    },
+    "P2.4": {
+      "attempts": [
+        {
+          "session": 8,
+          "timestamp": "2026-01-01T07:44:04.210822",
+          "approach": "Implemented: Update ALL /api/oracle/* endpoints to use require_auth_context. These consume OpenRouter API credits",
+          "success": true,
+          "error": null
+        }
+      ],
+      "status": "completed"
+    }
+  },
+  "stuck_subtasks": [],
+  "metadata": {
+    "created_at": "2026-01-01T07:25:00.058703",
+    "last_updated": "2026-01-01T07:44:04.210825"
+  }
+}

@@ -17,7 +17,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 from ...models.oracle_context import ContextNode, ContextTree
 from ...services.context_tree_service import (
     ContextTreeService,
@@ -141,7 +141,7 @@ def tree_to_response(tree: ContextTree) -> ContextTreeResponse:
 
 @router.get("/trees", response_model=ContextTreesListResponse)
 async def get_context_trees(
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -192,7 +192,7 @@ async def get_context_trees(
 @router.get("/trees/{root_id}", response_model=ContextTreeDataResponse)
 async def get_context_tree(
     root_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -241,7 +241,7 @@ async def get_context_tree(
 @router.post("/trees", response_model=ContextTreeResponse)
 async def create_context_tree(
     request: CreateTreeRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
@@ -288,7 +288,7 @@ async def create_context_tree(
 @router.delete("/trees/{root_id}")
 async def delete_context_tree(
     root_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -332,7 +332,7 @@ async def delete_context_tree(
 @router.post("/trees/{root_id}/activate")
 async def activate_context_tree(
     root_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -376,7 +376,7 @@ async def activate_context_tree(
 @router.post("/trees/{root_id}/prune", response_model=PruneResponse)
 async def prune_context_tree(
     root_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -429,7 +429,7 @@ async def prune_context_tree(
 @router.post("/nodes/{node_id}/checkout", response_model=ContextTreeResponse)
 async def checkout_node(
     node_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -475,7 +475,7 @@ async def checkout_node(
 async def label_node(
     node_id: str,
     request: LabelNodeRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -527,7 +527,7 @@ async def label_node(
 async def set_checkpoint(
     node_id: str,
     request: SetCheckpointRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -582,7 +582,7 @@ async def set_checkpoint(
 
 @router.get("/settings", response_model=ContextSettingsResponse)
 async def get_context_settings(
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """
@@ -606,7 +606,7 @@ async def get_context_settings(
 @router.put("/settings", response_model=ContextSettingsResponse)
 async def update_context_settings(
     request: UpdateContextSettingsRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """

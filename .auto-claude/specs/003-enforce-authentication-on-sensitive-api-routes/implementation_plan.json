@@ -40,11 +40,12 @@
           "id": "P1.3",
           "title": "Add authentication mode enum and helper",
           "description": "Create an AuthMode enum (STRICT, OPTIONAL, ADMIN) and a factory function to get the appropriate dependency. This makes it explicit which routes require what level of authentication.",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "backend/src/api/middleware/auth_middleware.py"
           ],
-          "notes": ""
+          "notes": "Created AuthMode enum with three values (OPTIONAL, STRICT, ADMIN) and get_auth_dependency() factory function. The enum provides explicit authentication levels: OPTIONAL falls back to demo-user when ENABLE_NOAUTH_MCP=true, STRICT always requires auth, and ADMIN requires auth + admin privileges. The factory function returns the appropriate dependency (get_auth_context, require_auth_context, or require_admin_context) based on the mode. Added comprehensive docstring with usage examples showing how routes can use Depends(get_auth_dependency(AuthMode.STRICT)). Updated __all__ exports to include both new symbols. This provides a more explicit and type-safe way to declare auth requirements.",
+          "updated_at": "2026-01-01T13:37:01.919781+00:00"
         }
       ]
     },
@@ -57,42 +58,46 @@
           "id": "P2.1",
           "title": "Protect notes CRUD routes",
           "description": "Update /api/notes endpoints to use require_auth_context. All operations (list, create, read, update, move) should require strict authentication. Remove the ENABLE_NOAUTH_MCP bypass path for these endpoints.",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "backend/src/api/routes/notes.py"
           ],
-          "notes": ""
+          "notes": "Successfully updated all /api/notes endpoints to use require_auth_context instead of get_auth_context. All note operations (list, create, read, update, move) now require strict authentication without ENABLE_NOAUTH_MCP bypass. Changed import statement and updated 5 endpoint functions: list_notes, create_note, get_note, update_note, and move_note. Verified no remaining usage of get_auth_context in the file.",
+          "updated_at": "2026-01-01T13:39:10.484221+00:00"
         },
         {
           "id": "P2.2",
           "title": "Protect index routes",
           "description": "Update /api/index/rebuild to use require_auth_context. The rebuild endpoint is administrative and should never be accessible without authentication. Index health can remain optional auth.",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "backend/src/api/routes/index.py"
           ],
-          "notes": ""
+          "notes": "Successfully updated /api/index/rebuild endpoint to use require_auth_context for strict authentication. The rebuild endpoint is administrative and now requires valid JWT authentication without ENABLE_NOAUTH_MCP bypass. Kept /api/index/health using get_auth_context for optional authentication as specified. Changed import statement and updated the rebuild_index function dependency.",
+          "updated_at": "2026-01-01T13:40:42.647842+00:00"
         },
         {
           "id": "P2.3",
           "title": "Protect search and graph routes",
           "description": "Update /api/search, /api/backlinks, /api/tags, and /api/graph to use require_auth_context. These expose user vault data.",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "backend/src/api/routes/search.py",
             "backend/src/api/routes/graph.py"
           ],
-          "notes": ""
+          "notes": "Successfully updated all search and graph routes to use require_auth_context instead of get_auth_context. All routes now require strict authentication without ENABLE_NOAUTH_MCP bypass. Updated routes: /api/search, /api/backlinks/{path:path}, /api/tags, and /api/graph. Changed import statements and updated 4 endpoint functions in search.py (3 endpoints) and graph.py (1 endpoint). Verified no remaining usage of get_auth_context in these files.",
+          "updated_at": "2026-01-01T13:42:25.387318+00:00"
         },
         {
           "id": "P2.4",
           "title": "Protect Oracle routes (resource-consuming)",
           "description": "Update ALL /api/oracle/* endpoints to use require_auth_context. These consume OpenRouter API credits and must be protected. Includes: query, stream, cancel, history endpoints.",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "backend/src/api/routes/oracle.py"
           ],
-          "notes": ""
+          "notes": "Successfully updated all /api/oracle/* endpoints to use require_auth_context instead of get_auth_context. All oracle operations now require strict authentication without ENABLE_NOAUTH_MCP bypass. Protected endpoints: POST /api/oracle (query_oracle), POST /api/oracle/stream (query_oracle_stream), POST /api/oracle/cancel (cancel_oracle_session), GET /api/oracle/history (get_conversation_history), DELETE /api/oracle/history (clear_conversation_history). These endpoints consume OpenRouter API credits and are now properly protected. Changed import statement and updated 5 endpoint functions. Verified no remaining usage of get_auth_context in the file.",
+          "updated_at": "2026-01-01T13:43:53.880390+00:00"
         },
         {
           "id": "P2.5",
@@ -299,5 +304,5 @@
     "All existing functionality works for authenticated users",
     "Unit and integration tests pass"
   ],
-  "last_updated": "2026-01-01T13:33:55.488354+00:00"
+  "last_updated": "2026-01-01T13:43:53.880403+00:00"
 }
