@@ -462,22 +462,44 @@ class ToolExecutor:
         user_id: str,
         symbol: str,
         scope: Optional[str] = None,
+        kind: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Find where a symbol is defined."""
-        # Not yet fully implemented in OracleBridge
-        return {"error": f"Tool not yet implemented: find_definition"}
+        """Find where a symbol is defined using direct code search."""
+        # Get API key from user settings for vector search
+        import os
+        api_key = self.user_settings.get_openrouter_api_key(user_id) or os.environ.get("OPENROUTER_API_KEY")
+
+        result = await self.oracle_bridge.find_definition(
+            symbol=symbol,
+            scope=scope,
+            kind=kind,
+            openrouter_api_key=api_key,
+        )
+        return result
 
     async def _find_references(
         self,
         user_id: str,
         symbol: str,
         limit: int = 20,
+        include_definition: bool = False,
+        reference_type: str = "all",
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Find all usages of a symbol."""
-        # Not yet fully implemented in OracleBridge
-        return {"error": f"Tool not yet implemented: find_references"}
+        """Find all usages of a symbol using direct code search."""
+        # Get API key from user settings for vector search
+        import os
+        api_key = self.user_settings.get_openrouter_api_key(user_id) or os.environ.get("OPENROUTER_API_KEY")
+
+        result = await self.oracle_bridge.find_references(
+            symbol=symbol,
+            limit=limit,
+            include_definition=include_definition,
+            reference_type=reference_type,
+            openrouter_api_key=api_key,
+        )
+        return result
 
     async def _get_repo_map(
         self,

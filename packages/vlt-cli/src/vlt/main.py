@@ -2599,26 +2599,31 @@ def oracle_query(
     # Load settings
     settings = Settings()
 
-    # Display query header
-    console.print()
-    console.print(Panel(
-        f"[bold cyan]Question:[/bold cyan] {question}",
-        title="Oracle Query",
-        border_style="blue"
-    ))
-    console.print()
+    # Display query header (skip in JSON mode)
+    if not json_output:
+        console.print()
+        console.print(Panel(
+            f"[bold cyan]Question:[/bold cyan] {question}",
+            title="Oracle Query",
+            border_style="blue"
+        ))
+        console.print()
 
     # Try thin client mode (backend API) first unless --local is specified
     client = OracleClient()
     use_backend = False
 
     if not local and settings.sync_token:
-        with console.status("[bold blue]Checking backend availability...[/bold blue]"):
+        if not json_output:
+            with console.status("[bold blue]Checking backend availability...[/bold blue]"):
+                use_backend = client.is_available()
+        else:
+            # Silent check for JSON mode
             use_backend = client.is_available()
 
-        if use_backend:
+        if use_backend and not json_output:
             console.print("[dim]Using backend server (thin client mode)[/dim]")
-        else:
+        elif not use_backend and not json_output:
             console.print("[dim yellow]Backend unavailable, using local mode[/dim yellow]")
 
     if use_backend:
@@ -2629,7 +2634,7 @@ def oracle_query(
         context_id = None
         try:
             context_id = asyncio.run(client.get_context_id())
-            if context_id:
+            if context_id and not json_output:
                 console.print(f"[dim]Continuing context: {context_id[:8]}...[/dim]")
         except Exception as e:
             logger.debug(f"Failed to get context_id (non-fatal): {e}")
@@ -2822,7 +2827,9 @@ def _oracle_via_backend(
             "model_used": result["model_used"],
             "mode": "backend",
         }
-        console.print(json_lib.dumps(output_data, indent=2))
+        # Write directly to stdout, bypassing Rich
+        import sys
+        sys.stdout.write(json_lib.dumps(output_data, indent=2) + "\n")
         return
 
     # If not streaming, display answer now
@@ -2936,7 +2943,9 @@ def _oracle_local(
         if response.traces:
             output_data["traces"] = response.traces
 
-        console.print(json_lib.dumps(output_data, indent=2))
+        # Write directly to stdout, bypassing Rich
+        import sys
+        sys.stdout.write(json_lib.dumps(output_data, indent=2) + "\n")
         return
 
     # Rich formatted output

@@ -34,6 +34,7 @@ from ..models.oracle_context import (
 )
 from .oracle_context_service import OracleContextService, get_context_service
 from .context_tree_service import ContextTreeService, get_context_tree_service
+from .tool_parsers import ToolCallParserChain
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +79,9 @@ def _parse_xml_tool_calls(content: str) -> Tuple[List[Dict[str, Any]], str]:
     Some models (like DeepSeek) don't properly support OpenAI function calling
     and instead output XML-style tool invocations in their text response.
 
-    This function extracts those pseudo-tool-calls and returns them in the
-    standard OpenAI tool_calls format so the agent loop can process them.
-
-    Supported formats:
-        <function_calls>
-        <invoke name="tool_name">
-        <parameter name="param_name">value</parameter>
-        </invoke>
-        </function_calls>
-
-        Also handles: <function_calls>, <invoke>, <parameter>
+    This function uses the ToolCallParserChain to try multiple parsers in
+    priority order, extracting tool calls and returning them in the standard
+    OpenAI tool_calls format.
 
     Args:
         content: The text content that may contain XML function calls
@@ -97,124 +90,13 @@ def _parse_xml_tool_calls(content: str) -> Tuple[List[Dict[str, Any]], str]:
         Tuple of (tool_calls_list, cleaned_content) where:
         - tool_calls_list: List of tool calls in OpenAI format
         - cleaned_content: Content with XML blocks removed
+
+    Note:
+        This function is now a thin wrapper around ToolCallParserChain.
+        See tool_parsers/ package for parser implementations.
     """
-    tool_calls: List[Dict[str, Any]] = []
-
-    # Match various XML function call formats
-    # Pattern for <function_calls> or <function_calls> blocks
-    function_calls_pattern = re.compile(
-        r'<(?:antml:)?function_calls>\s*(.*?)\s*</(?:antml:)?function_calls>',
-        re.DOTALL | re.IGNORECASE
-    )
-
-    # Pattern for individual <invoke> or <invoke> elements
-    invoke_pattern = re.compile(
-        r'<(?:antml:)?invoke\s+name=["\']([^"\']+)["\']\s*>\s*(.*?)\s*</(?:antml:)?invoke>',
-        re.DOTALL | re.IGNORECASE
-    )
-
-    # Pattern for <parameter> or <parameter> elements
-    param_pattern = re.compile(
-        r'<(?:antml:)?parameter\s+name=["\']([^"\']+)["\'](?:\s+[^>]*)?>([^<]*)</(?:antml:)?parameter>',
-        re.DOTALL | re.IGNORECASE
-    )
-
-    cleaned_content = content
-
-    # Find all function_calls blocks
-    for fc_match in function_calls_pattern.finditer(content):
-        block_content = fc_match.group(1)
-        cleaned_content = cleaned_content.replace(fc_match.group(0), '')
-
-        # Find all invoke elements within this block
-        for invoke_match in invoke_pattern.finditer(block_content):
-            tool_name = invoke_match.group(1)
-            params_content = invoke_match.group(2)
-
-            # Extract parameters
-            arguments: Dict[str, Any] = {}
-            for param_match in param_pattern.finditer(params_content):
-                param_name = param_match.group(1)
-                param_value = param_match.group(2).strip()
-
-                # Try to parse as JSON, otherwise keep as string
-                try:
-                    # Handle boolean and numeric values
-                    if param_value.lower() in ('true', 'false'):
-                        arguments[param_name] = param_value.lower() == 'true'
-                    elif param_value.isdigit():
-                        arguments[param_name] = int(param_value)
-                    else:
-                        try:
-                            arguments[param_name] = json.loads(param_value)
-                        except json.JSONDecodeError:
-                            arguments[param_name] = param_value
-                except Exception:
-                    arguments[param_name] = param_value
-
-            # Create tool call in OpenAI format
-            tool_call = {
-                "id": f"xml_call_{uuid.uuid4().hex[:8]}",
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "arguments": json.dumps(arguments),
-                },
-            }
-            tool_calls.append(tool_call)
-
-    # Also check for standalone invoke elements (not wrapped in function_calls)
-    if not tool_calls:
-        for invoke_match in invoke_pattern.finditer(content):
-            tool_name = invoke_match.group(1)
-            params_content = invoke_match.group(2)
-            cleaned_content = cleaned_content.replace(invoke_match.group(0), '')
-
-            arguments: Dict[str, Any] = {}
-            for param_match in param_pattern.finditer(params_content):
-                param_name = param_match.group(1)
-                param_value = param_match.group(2).strip()
-
-                try:
-                    if param_value.lower() in ('true', 'false'):
-                        arguments[param_name] = param_value.lower() == 'true'
-                    elif param_value.isdigit():
-                        arguments[param_name] = int(param_value)
-                    else:
-                        try:
-                            arguments[param_name] = json.loads(param_value)
-                        except json.JSONDecodeError:
-                            arguments[param_name] = param_value
-                except Exception:
-                    arguments[param_name] = param_value
-
-            tool_call = {
-                "id": f"xml_call_{uuid.uuid4().hex[:8]}",
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "arguments": json.dumps(arguments),
-                },
-            }
-            tool_calls.append(tool_call)
-
-    # Clean up extra whitespace in the cleaned content
-    cleaned_content = re.sub(r'\n{3,}', '\n\n', cleaned_content.strip())
-
-    if tool_calls:
-        logger.info(
-            f"[XML PARSE] Parsed {len(tool_calls)} XML-style tool call(s) from content",
-            extra={"tool_names": [tc["function"]["name"] for tc in tool_calls]},
-        )
-        for i, tc in enumerate(tool_calls):
-            logger.info(f"[XML PARSE #{i+1}] name={tc['function']['name']} args={tc['function']['arguments'][:500]}")
-    else:
-        # Log when we DON'T find XML tool calls - to help debug
-        if "<function" in content.lower() or "<invoke" in content.lower() or "tool_call" in content.lower():
-            logger.warning(f"[XML PARSE] Content looks like it might have tool calls but none were parsed!")
-            logger.warning(f"[XML PARSE] Content sample: {content[:1000]}")
-
-    return tool_calls, cleaned_content
+    parser_chain = ToolCallParserChain()
+    return parser_chain.parse(content)
 
 
 class OracleAgentError(Exception):
@@ -976,8 +858,17 @@ class OracleAgent:
             # Parse arguments
             try:
                 arguments = json.loads(arguments_str)
-            except json.JSONDecodeError:
-                arguments = {}
+            except json.JSONDecodeError as e:
+                logger.error(
+                    f"Malformed JSON in tool call arguments for {name}: {arguments_str[:200]}",
+                    exc_info=True
+                )
+                # Set arguments to empty dict but mark as malformed
+                # The tool will fail with a clear error about missing required arguments
+                arguments = {
+                    "_json_parse_error": f"Malformed JSON arguments: {str(e)}",
+                    "_raw_arguments": arguments_str[:500],
+                }
 
             parsed_calls.append((call_id, name, arguments, arguments_str))
 
@@ -1035,15 +926,45 @@ class OracleAgent:
                 )
 
         # Create tasks for parallel execution
-        tasks = [
-            execute_single_tool(call_id, name, arguments)
-            for call_id, name, arguments, _ in parsed_calls
-        ]
+        # Skip tools with JSON parse errors - they'll be handled as immediate failures
+        tasks = []
+        failed_parse_results = []
+
+        for call_id, name, arguments, _ in parsed_calls:
+            # Check if this tool call had a JSON parsing error
+            if "_json_parse_error" in arguments:
+                # Create immediate failure result for JSON parse errors
+                failed_parse_results.append(ToolExecutionResult(
+                    call_id=call_id,
+                    name=name,
+                    arguments={},
+                    error=arguments["_json_parse_error"],
+                    success=False,
+                ))
+            else:
+                # Normal tool call - add to execution queue
+                tasks.append(execute_single_tool(call_id, name, arguments))
 
         # Execute all tools concurrently, continue even if some fail
-        results: List[ToolExecutionResult] = await asyncio.gather(
+        executed_results: List[ToolExecutionResult] = await asyncio.gather(
             *tasks, return_exceptions=True
-        )
+        ) if tasks else []
+
+        # Merge failed parse results with executed results (preserving order)
+        # This ensures JSON parse errors are reported in the correct position
+        results: List[ToolExecutionResult] = []
+        exec_idx = 0
+        for call_id, name, arguments, _ in parsed_calls:
+            if "_json_parse_error" in arguments:
+                # Find the corresponding failed parse result
+                for fail_result in failed_parse_results:
+                    if fail_result.call_id == call_id:
+                        results.append(fail_result)
+                        break
+            else:
+                # Use the next executed result
+                results.append(executed_results[exec_idx])
+                exec_idx += 1
 
         # Process results in order (preserves message ordering)
         for i, result in enumerate(results):

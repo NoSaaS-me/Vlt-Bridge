@@ -568,41 +568,43 @@ class OracleBridge:
         scope: Optional[str] = None,
         kind: Optional[str] = None,
         project: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Find where a symbol is defined.
+        Find where a symbol is defined using direct code search.
 
-        Note: This requires vlt-cli to expose a `coderag definition` command,
-        which may need to be implemented. For now, we use oracle with a
-        structured query.
+        Uses search_code to find definitions without invoking oracle
+        (avoiding circular agent calls).
 
         Args:
             symbol: Symbol name to find
             scope: Optional file path to narrow search
             kind: Symbol kind filter (function, class, method, variable, constant)
             project: Project ID (auto-detected if None)
+            openrouter_api_key: API key for vector search
 
         Returns:
-            Definition locations
+            Search results for the symbol definition
         """
-        # Build a structured query for the oracle
-        query_parts = [f"Where is {symbol} defined?"]
+        # Build a targeted search query for definitions
+        # Include keywords that commonly appear near definitions
+        query_parts = [symbol]
 
         if kind:
-            query_parts.append(f"Looking for a {kind}.")
+            query_parts.append(kind)
 
-        if scope:
-            query_parts.append(f"In scope: {scope}")
+        # Add definition-specific keywords
+        query_parts.extend(["def", "class", "function", "const", "let", "var"])
 
-        question = " ".join(query_parts)
+        query = " ".join(query_parts)
 
-        args = ["oracle", question, "--source", "code"]
-
-        if project:
-            args.extend(["--project", project])
-
-        # This is a workaround - ideally vlt-cli would have `coderag definition`
-        return self._run_vlt_command(args, timeout=60)
+        # Use direct code search instead of oracle
+        return await self.search_code(
+            query=query,
+            limit=10,
+            language=None,
+            openrouter_api_key=openrouter_api_key,
+        )
 
     async def find_references(
         self,
@@ -611,12 +613,13 @@ class OracleBridge:
         include_definition: bool = False,
         reference_type: str = "all",
         project: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Find all references to a symbol.
+        Find all references to a symbol using direct code search.
 
-        Note: This requires vlt-cli to expose a `coderag references` command.
-        For now, we use oracle with a structured query.
+        Uses search_code to find usage without invoking oracle
+        (avoiding circular agent calls).
 
         Args:
             symbol: Symbol name to find references for
@@ -624,27 +627,29 @@ class OracleBridge:
             include_definition: Include the definition in results
             reference_type: Type of references (calls, imports, inherits, all)
             project: Project ID (auto-detected if None)
+            openrouter_api_key: API key for vector search
 
         Returns:
-            Reference locations
+            Search results for the symbol usage
         """
-        # Build a structured query
-        ref_desc = {
-            "calls": "What calls",
-            "imports": "What imports",
-            "inherits": "What inherits from",
-            "all": "Where is",
-        }.get(reference_type, "Where is")
+        # Build a targeted search query for references
+        query = symbol
 
-        question = f"{ref_desc} {symbol} used?"
+        # Add context keywords based on reference type
+        if reference_type == "calls":
+            query += " call invoke"
+        elif reference_type == "imports":
+            query += " import from require"
+        elif reference_type == "inherits":
+            query += " extends implements inherit"
 
-        args = ["oracle", question, "--source", "code"]
-
-        if project:
-            args.extend(["--project", project])
-
-        # This is a workaround - ideally vlt-cli would have `coderag references`
-        return self._run_vlt_command(args, timeout=60)
+        # Use direct code search instead of oracle
+        return await self.search_code(
+            query=query,
+            limit=limit,
+            language=None,
+            openrouter_api_key=openrouter_api_key,
+        )
 
     async def get_repo_map(
         self,
