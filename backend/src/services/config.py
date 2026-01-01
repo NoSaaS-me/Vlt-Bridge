@@ -82,6 +82,10 @@ class AppConfig(BaseModel):
             "ALLOW-FROM uri. DENY prevents all framing (most secure)"
         )
     )
+    admin_user_ids: set[str] = Field(
+        default_factory=set,
+        description="Set of user IDs with admin privileges (from ADMIN_USER_IDS env var)"
+    )
 
     @field_validator("vault_base_path", mode="before")
     @classmethod
@@ -136,6 +140,10 @@ def get_config() -> AppConfig:
     enable_hsts = _read_env("ENABLE_HSTS", "false").lower() in {"true", "1", "yes"}
     frame_options = _read_env("FRAME_OPTIONS", "DENY")
 
+    # Parse admin user IDs from comma-separated list
+    admin_user_ids_str = _read_env("ADMIN_USER_IDS", "")
+    admin_user_ids = {uid.strip() for uid in admin_user_ids_str.split(",") if uid.strip()} if admin_user_ids_str else set()
+
     config = AppConfig(
         jwt_secret_key=jwt_secret,
         enable_local_mode=enable_local_mode,
@@ -152,6 +160,7 @@ def get_config() -> AppConfig:
         csp_policy=csp_policy,
         enable_hsts=enable_hsts,
         frame_options=frame_options,
+        admin_user_ids=admin_user_ids,
     )
     # Ensure vault base directory and index persist directory exist for downstream services.
     config.vault_base_path.mkdir(parents=True, exist_ok=True)

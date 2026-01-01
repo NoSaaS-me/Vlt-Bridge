@@ -1,4 +1,4 @@
-import type { Note, NoteSummary, NoteUpdateRequest, NoteCreateRequest } from '@/types/note';
+import type { Note, NoteSummary, NoteUpdateRequest, NoteCreateRequest, WikilinkResolution, NotePreview } from '@/types/note';
 import type { SearchResult, Tag, IndexHealth } from '@/types/search';
 import type { User } from '@/types/user';
 import type { APIError } from '@/types/auth';
@@ -307,6 +307,28 @@ export async function deleteNote(path: string, projectId?: string): Promise<void
 }
 
 /**
+ * Resolve a wikilink to its target note path
+ */
+export async function resolveWikilink(
+  linkText: string,
+  contextPath?: string
+): Promise<WikilinkResolution> {
+  const params = new URLSearchParams({ link: linkText });
+  if (contextPath) {
+    params.set('context', contextPath);
+  }
+  return apiFetch<WikilinkResolution>(`/api/wikilinks/resolve?${params.toString()}`);
+}
+
+/**
+ * Get lightweight preview data for a note
+ */
+export async function getNotePreview(path: string): Promise<NotePreview> {
+  const encodedPath = encodeURIComponent(path);
+  return apiFetch<NotePreview>(`/api/notes/${encodedPath}/preview`);
+}
+
+/**
  * Thread API functions
  */
 import type { ThreadListResponse, Thread } from '@/types/thread';
@@ -329,4 +351,3 @@ export async function listThreads(projectId?: string): Promise<ThreadListRespons
 export async function getThread(threadId: string): Promise<Thread> {
   return apiFetch<Thread>(`/api/threads/${encodeURIComponent(threadId)}`);
 }
-

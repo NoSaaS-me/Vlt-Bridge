@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 
 router = APIRouter()
 
@@ -55,7 +55,7 @@ async def _call_elevenlabs(
 
 @router.post("/api/tts")
 async def synthesize_tts(
-    payload: TtsRequest, auth: AuthContext = Depends(get_auth_context)
+    payload: TtsRequest, auth: AuthContext = Depends(require_auth_context)
 ):
     """Synthesize speech for the provided text using ElevenLabs."""
     api_key = os.getenv("ELEVENLABS_API_KEY")

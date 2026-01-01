@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_admin_context
 from ...services.config import PROJECT_ROOT
 from fastapi.responses import PlainTextResponse
 
@@ -55,12 +55,12 @@ logging.getLogger().addHandler(memory_handler)
 logging.getLogger().setLevel(logging.INFO)
 
 @router.get("/api/system/logs", response_model=List[LogEntry])
-async def get_logs(auth: AuthContext = Depends(get_auth_context)):
+async def get_logs(auth: AuthContext = Depends(require_admin_context)):
     """Retrieve recent system logs."""
     return list(LOG_BUFFER)
 
 @router.get("/api/system/debug/widget", response_class=PlainTextResponse)
-async def debug_widget():
+async def debug_widget(auth: AuthContext = Depends(require_admin_context)):
     """Return raw widget.html content for debugging."""
     widget_path = PROJECT_ROOT / "frontend" / "dist" / "widget.html"
     if not widget_path.exists():

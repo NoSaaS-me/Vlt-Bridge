@@ -19,7 +19,7 @@ from ...services.auth import AuthError, AuthService
 from ...services.config import get_config
 from ...services.seed import ensure_welcome_note
 from ...services.vault import VaultService
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 
 logger = logging.getLogger(__name__)
 
@@ -271,14 +271,14 @@ async def callback(
 
 
 @router.post("/api/tokens", response_model=TokenResponse)
-async def create_api_token(auth: AuthContext = Depends(get_auth_context)):
+async def create_api_token(auth: AuthContext = Depends(require_auth_context)):
     """Issue a new JWT for the authenticated user."""
     token, expires_at = auth_service.issue_token_response(auth.user_id)
     return TokenResponse(token=token, token_type="bearer", expires_at=expires_at)
 
 
 @router.get("/api/me", response_model=User)
-async def get_current_user(auth: AuthContext = Depends(get_auth_context)):
+async def get_current_user(auth: AuthContext = Depends(require_auth_context)):
     """Return profile metadata for the authenticated user."""
     user_id = auth.user_id
     vault_service = VaultService()

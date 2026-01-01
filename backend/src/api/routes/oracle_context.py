@@ -17,7 +17,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 from ...models.oracle_context import ContextNode, ContextTree
 from ...services.context_tree_service import (
     ContextTreeService,
@@ -143,7 +143,7 @@ def tree_to_response(tree: ContextTree) -> ContextTreeResponse:
 @router.get("/trees", response_model=ContextTreesListResponse)
 async def get_context_trees(
     project_id: Optional[str] = Query("default", description="Project ID to scope trees"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -193,7 +193,7 @@ async def get_context_trees(
 @router.get("/trees/{root_id}", response_model=ContextTreeDataResponse)
 async def get_context_tree(
     root_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -242,7 +242,7 @@ async def get_context_tree(
 @router.post("/trees", response_model=ContextTreeResponse)
 async def create_context_tree(
     request: CreateTreeRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
@@ -289,7 +289,7 @@ async def create_context_tree(
 @router.delete("/trees/{root_id}")
 async def delete_context_tree(
     root_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -333,7 +333,7 @@ async def delete_context_tree(
 @router.post("/trees/{root_id}/activate")
 async def activate_context_tree(
     root_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -377,7 +377,7 @@ async def activate_context_tree(
 @router.post("/trees/{root_id}/prune", response_model=PruneResponse)
 async def prune_context_tree(
     root_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -430,7 +430,7 @@ async def prune_context_tree(
 @router.post("/nodes/{node_id}/checkout", response_model=ContextTreeResponse)
 async def checkout_node(
     node_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -476,7 +476,7 @@ async def checkout_node(
 async def label_node(
     node_id: str,
     request: LabelNodeRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
@@ -494,18 +494,14 @@ async def label_node(
     - Updated node metadata
     """
     try:
-        node = tree_service.update_node(
-            user_id=auth.user_id,
-            node_id=node_id,
-            label=request.label,
-        )
+        node = tree_service.update_node_label(auth.user_id, node_id, request.label)
         if not node:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Node not found: {node_id}",
             )
 
-        logger.info(f"Labeled node {node_id} as '{request.label}'")
+        logger.info(f"Labeled node {node_id}")
         return node_to_response(node)
 
     except HTTPException:
@@ -528,36 +524,32 @@ async def label_node(
 async def set_checkpoint(
     node_id: str,
     request: SetCheckpointRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
     Set checkpoint status on a node.
 
-    Checkpoint nodes are protected from pruning.
+    Mark a node as a checkpoint so it won't be pruned during cleanup.
 
     **Path Parameters:**
     - `node_id`: Node ID to update
 
     **Request Body:**
-    - `is_checkpoint`: True to protect from pruning, False to allow pruning
+    - `is_checkpoint`: Whether this node is a checkpoint
 
     **Response:**
     - Updated node metadata
     """
     try:
-        node = tree_service.update_node(
-            user_id=auth.user_id,
-            node_id=node_id,
-            is_checkpoint=request.is_checkpoint,
-        )
+        node = tree_service.set_node_checkpoint(auth.user_id, node_id, request.is_checkpoint)
         if not node:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Node not found: {node_id}",
             )
 
-        logger.info(f"Set checkpoint={request.is_checkpoint} on node {node_id}")
+        logger.info(f"Set checkpoint on node {node_id} to {request.is_checkpoint}")
         return node_to_response(node)
 
     except HTTPException:
@@ -583,14 +575,14 @@ async def set_checkpoint(
 
 @router.get("/settings", response_model=ContextSettingsResponse)
 async def get_context_settings(
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """
     Get context settings for the current user.
 
     **Response:**
-    - `max_context_nodes`: Maximum nodes per tree (5-100, default 30)
+    - `max_context_nodes`: Maximum nodes allowed per tree
     """
     try:
         max_nodes = settings_service.get_max_context_nodes(auth.user_id)
@@ -607,14 +599,14 @@ async def get_context_settings(
 @router.put("/settings", response_model=ContextSettingsResponse)
 async def update_context_settings(
     request: UpdateContextSettingsRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """
     Update context settings for the current user.
 
     **Request Body:**
-    - `max_context_nodes`: New max nodes per tree (5-100)
+    - `max_context_nodes`: Maximum nodes allowed per tree (5-100)
 
     **Response:**
     - Updated settings
@@ -622,9 +614,11 @@ async def update_context_settings(
     try:
         if request.max_context_nodes is not None:
             settings_service.set_max_context_nodes(auth.user_id, request.max_context_nodes)
+            max_nodes = request.max_context_nodes
+        else:
+            max_nodes = settings_service.get_max_context_nodes(auth.user_id)
 
-        # Return updated settings
-        max_nodes = settings_service.get_max_context_nodes(auth.user_id)
+        logger.info(f"Updated context settings for user {auth.user_id}")
         return ContextSettingsResponse(max_context_nodes=max_nodes)
 
     except Exception as e:

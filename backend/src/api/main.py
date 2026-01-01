@@ -47,7 +47,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.exception("Startup failed: %s", exc)
         logger.error("App starting without demo data due to initialization error")
-    
+
+    # Security warning for ENABLE_NOAUTH_MCP
+    if config.enable_noauth_mcp:
+        logger.warning("=" * 80)
+        logger.warning("⚠️  SECURITY WARNING: ENABLE_NOAUTH_MCP IS ENABLED ⚠️")
+        logger.warning("=" * 80)
+        logger.warning("The server is running in INSECURE MODE!")
+        logger.warning("ENABLE_NOAUTH_MCP bypasses authentication on all routes.")
+        logger.warning("This should ONLY be used in isolated development environments.")
+        logger.warning("NEVER enable this in production or publicly accessible deployments.")
+        logger.warning("=" * 80)
+
     # Initialize FastMCP session manager task group
     async with session_manager.run():
         yield

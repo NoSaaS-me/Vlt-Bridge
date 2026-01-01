@@ -21,7 +21,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 from ...models.thread import (
     Thread,
     SyncRequest,
@@ -111,7 +111,7 @@ MAX_ENTRY_SIZE_BYTES = 100_000  # 100KB per entry
 @router.post("/sync", response_model=SyncResponse)
 async def sync_thread(
     request: SyncRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     service: ThreadService = Depends(get_thread_service),
 ):
     """
@@ -195,7 +195,7 @@ async def search_threads(
     q: str = Query(..., min_length=1, max_length=256, description="Search query"),
     project_id: Optional[str] = Query(None, description="Filter by project"),
     limit: int = Query(10, ge=1, le=50, description="Maximum results"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     service: ThreadService = Depends(get_thread_service),
 ):
     """
@@ -234,7 +234,7 @@ async def search_threads(
 async def seek_threads(
     q: str = Query(..., min_length=1, max_length=512, description="Semantic search query"),
     project: Optional[str] = Query(None, description="Filter by project slug"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """
     Semantic search across threads via vlt CLI.
@@ -336,7 +336,7 @@ async def seek_threads(
 @router.post("/create", response_model=CreateThreadResponse, status_code=status.HTTP_201_CREATED)
 async def create_thread_via_cli(
     request: CreateThreadRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """
     Create a new thread via vlt CLI.
@@ -419,7 +419,7 @@ async def list_threads(
     thread_status: Optional[str] = Query(None, alias="status", description="Filter by status"),
     limit: int = Query(50, ge=1, le=100, description="Maximum threads to return"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     service: ThreadService = Depends(get_thread_service),
 ):
     """
@@ -452,7 +452,7 @@ async def get_thread(
     thread_id: str,
     include_entries: bool = Query(True, description="Include thread entries"),
     entries_limit: int = Query(50, ge=1, le=500, description="Maximum entries to return"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     service: ThreadService = Depends(get_thread_service),
 ):
     """
@@ -489,7 +489,7 @@ async def get_thread(
 async def push_thread_entry(
     thread_id: str,
     request: PushEntryRequest,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """
     Push a new entry to a thread via vlt CLI.
@@ -556,7 +556,7 @@ async def push_thread_entry(
 @router.get("/{thread_id}/status", response_model=SyncStatus)
 async def get_sync_status(
     thread_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     service: ThreadService = Depends(get_thread_service),
 ):
     """
@@ -592,7 +592,7 @@ async def get_sync_status(
 @router.delete("/{thread_id}")
 async def delete_thread(
     thread_id: str,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     service: ThreadService = Depends(get_thread_service),
 ):
     """
@@ -628,7 +628,7 @@ async def delete_thread(
 async def summarize_thread(
     thread_id: str,
     request: SummarizeRequest = None,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     thread_service: ThreadService = Depends(get_thread_service),
     librarian: LibrarianService = Depends(get_librarian_service),
 ):

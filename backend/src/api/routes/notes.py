@@ -14,7 +14,7 @@ from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
 from ...services.vault import VaultService
 from ...services.config import get_config
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 
 router = APIRouter()
 
@@ -49,7 +49,7 @@ class ConflictError(Exception):
 async def list_notes(
     folder: Optional[str] = Query(None, description="Optional folder filter"),
     project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """List all notes in the project vault."""
     user_id = auth.user_id
@@ -81,7 +81,7 @@ async def list_notes(
 async def create_note(
     create: NoteCreate,
     project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """Create a new note."""
     user_id = auth.user_id
@@ -183,7 +183,7 @@ async def create_note(
 async def get_note(
     path: str,
     project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """Get a specific note by path."""
     user_id = auth.user_id
@@ -258,7 +258,7 @@ async def update_note(
     path: str,
     update: NoteUpdate,
     project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """Update a note with optimistic concurrency control."""
     user_id = auth.user_id
@@ -375,7 +375,7 @@ async def move_note(
     path: str,
     move_request: NoteMoveRequest,
     project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """Move or rename a note to a new path within the same project."""
     user_id = auth.user_id
@@ -461,7 +461,3 @@ async def move_note(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to move note: {str(e)}")
-
-
-__all__ = ["router", "ConflictError"]
-

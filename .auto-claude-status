@@ -1,25 +1,25 @@
 {
   "active": true,
-  "spec": "001-fix-xss-vulnerability-in-search-snippet-rendering",
+  "spec": "003-enforce-authentication-on-sensitive-api-routes",
   "state": "building",
   "subtasks": {
-    "completed": 0,
-    "total": 0,
+    "completed": 7,
+    "total": 20,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Integration Testing & Verification",
+    "current": "Protect Sensitive Routes",
     "id": null,
-    "total": 2
+    "total": 10
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 8,
-    "started_at": "2026-01-01T07:20:09.321024"
+    "number": 9,
+    "started_at": "2026-01-01T07:25:00.058860"
   },
-  "last_update": "2026-01-01T07:39:03.613012"
+  "last_update": "2026-01-01T07:44:09.098308"
 }

@@ -286,31 +286,87 @@ class IndexerService:
             (user_id, project_id, note_count, now_iso),
         )
 
-    def search_notes(self, user_id: str, query: str, *, limit: int = 50, project_id: str = DEFAULT_PROJECT_ID) -> List[Dict[str, Any]]:
-        """Execute a full-text search with recency bonus scoring."""
+    def search_notes(
+        self, user_id: str, query: str, *, tags: List[str] | None = None, limit: int = 50, project_id: str = DEFAULT_PROJECT_ID
+    ) -> List[Dict[str, Any]]:
+        """Execute a full-text search with recency bonus scoring.
+
+        Args:
+            user_id: The user whose notes to search.
+            query: The search query text.
+            tags: Optional list of tags to filter by (AND logic - notes must have ALL tags).
+            limit: Maximum number of results to return.
+            project_id: The project to search within.
+
+        Returns:
+            List of search results with path, title, snippet, score, and updated fields.
+        """
         if not query or not query.strip():
             raise ValueError("Search query cannot be empty")
 
         sanitized_query = _prepare_match_query(query)
 
+        # Normalize and filter tags
+        normalized_tags: List[str] = []
+        if tags:
+            for tag in tags:
+                normalized = normalize_tag(tag)
+                if normalized and normalized not in normalized_tags:
+                    normalized_tags.append(normalized)
+
         conn = self.db_service.connect()
         try:
-            rows = conn.execute(
-                """
-                SELECT
-                    m.note_path,
-                    m.title,
-                    m.updated,
-                    snippet(note_fts, 4, '<mark>', '</mark>', '...', 32) AS snippet,
-                    bm25(note_fts, 3.0, 1.0) AS score
-                FROM note_fts
-                JOIN note_metadata m USING (user_id, project_id, note_path)
-                WHERE note_fts.user_id = ? AND note_fts.project_id = ? AND note_fts MATCH ?
-                ORDER BY score DESC
-                LIMIT ?
-                """,
-                (user_id, project_id, sanitized_query, limit),
-            ).fetchall()
+            if normalized_tags:
+                # Build query with tag filtering using AND logic
+                # Notes must have ALL specified tags to be included
+                # Use a subquery to find notes with all required tags first,
+                # then join with FTS5 to preserve bm25/snippet context
+                tag_placeholders = ", ".join("?" for _ in normalized_tags)
+                tag_count = len(normalized_tags)
+
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        m.note_path,
+                        m.title,
+                        m.updated,
+                        snippet(note_fts, 3, '<mark>', '</mark>', '...', 32) AS snippet,
+                        bm25(note_fts, 3.0, 1.0) AS score
+                    FROM note_fts
+                    JOIN note_metadata m USING (user_id, project_id, note_path)
+                    WHERE note_fts.user_id = ? AND note_fts.project_id = ?
+                      AND note_fts MATCH ?
+                      AND m.note_path IN (
+                          SELECT note_path
+                          FROM note_tags
+                          WHERE user_id = ? AND project_id = ?
+                            AND tag IN ({tag_placeholders})
+                          GROUP BY note_path
+                          HAVING COUNT(DISTINCT tag) = ?
+                      )
+                    ORDER BY score DESC
+                    LIMIT ?
+                    """,
+                    (user_id, project_id, sanitized_query, user_id, project_id, *normalized_tags, tag_count, limit),
+                ).fetchall()
+            else:
+                # Original query without tag filtering
+                rows = conn.execute(
+                    """
+                    SELECT
+                        m.note_path,
+                        m.title,
+                        m.updated,
+                        snippet(note_fts, 3, '<mark>', '</mark>', '...', 32) AS snippet,
+                        bm25(note_fts, 3.0, 1.0) AS score
+                    FROM note_fts
+                    JOIN note_metadata m USING (user_id, project_id, note_path)
+                    WHERE note_fts.user_id = ? AND note_fts.project_id = ? AND note_fts MATCH ?
+                    ORDER BY score DESC
+                    LIMIT ?
+                    """,
+                    (user_id, project_id, sanitized_query, limit),
+                ).fetchall()
         finally:
             conn.close()
 
@@ -395,12 +451,12 @@ class IndexerService:
             for row in rows
         ]
 
-    def get_graph_data(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> Dict[str, List[Dict[str, Any]]]:
-        """Return graph visualization data (nodes and links)."""
+    def get_graph_data(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> Dict[str, Any]:
+        """Return graph data for a project (nodes and edges)."""
         conn = self.db_service.connect()
         try:
-            # Fetch all notes
-            notes_rows = conn.execute(
+            # Get all notes in the project
+            note_rows = conn.execute(
                 """
                 SELECT note_path, title
                 FROM note_metadata
@@ -409,10 +465,10 @@ class IndexerService:
                 (user_id, project_id),
             ).fetchall()
 
-            # Fetch all resolved links
-            links_rows = conn.execute(
+            # Get all resolved links in the project
+            link_rows = conn.execute(
                 """
-                SELECT source_path, target_path
+                SELECT source_path, target_path, link_text
                 FROM note_links
                 WHERE user_id = ? AND project_id = ? AND is_resolved = 1
                 """,
@@ -421,43 +477,38 @@ class IndexerService:
         finally:
             conn.close()
 
-        # Calculate link counts for node sizing
-        link_counts: Dict[str, int] = {}
-        links = []
-        for row in links_rows:
-            source = row["source_path"] if isinstance(row, sqlite3.Row) else row[0]
-            target = row["target_path"] if isinstance(row, sqlite3.Row) else row[1]
-            links.append({"source": source, "target": target})
-            link_counts[source] = link_counts.get(source, 0) + 1
-            link_counts[target] = link_counts.get(target, 0) + 1
+        nodes = [
+            {
+                "id": row["note_path"] if isinstance(row, sqlite3.Row) else row[0],
+                "label": row["title"] if isinstance(row, sqlite3.Row) else row[1],
+            }
+            for row in note_rows
+        ]
 
-        # Build nodes with link counts
-        nodes = []
-        for row in notes_rows:
-            note_path = row["note_path"] if isinstance(row, sqlite3.Row) else row[0]
-            title = row["title"] if isinstance(row, sqlite3.Row) else row[1]
-            nodes.append(
-                {
-                    "id": note_path,
-                    "label": title,
-                    "size": max(1, link_counts.get(note_path, 0)),
-                }
-            )
+        edges = [
+            {
+                "source": row["source_path"] if isinstance(row, sqlite3.Row) else row[0],
+                "target": row["target_path"] if isinstance(row, sqlite3.Row) else row[1],
+                "label": row["link_text"] if isinstance(row, sqlite3.Row) else row[2],
+            }
+            for row in link_rows
+        ]
 
-        return {"nodes": nodes, "links": links}
+        return {"nodes": nodes, "edges": edges}
 
-    def _prepare_tags(self, tags_raw: Any) -> List[str]:
-        """Convert tag input (list, comma-separated string, etc.) to normalized tags."""
-        if not tags_raw:
+    def _prepare_tags(self, tags: Any) -> List[str]:
+        """Extract and normalize tags from metadata."""
+        if not tags:
             return []
-        if isinstance(tags_raw, str):
-            tags_raw = [t.strip() for t in tags_raw.split(",")]
-        if not isinstance(tags_raw, (list, tuple)):
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",")]
+        if not isinstance(tags, (list, tuple)):
             return []
-        return [normalize_tag(t) for t in tags_raw if normalize_tag(t)]
+        normalized = [normalize_tag(tag) for tag in tags]
+        return [tag for tag in normalized if tag]
 
     def _delete_current_entries(self, conn: sqlite3.Connection, user_id: str, note_path: str, project_id: str = DEFAULT_PROJECT_ID) -> None:
-        """Delete all current index entries for a note."""
+        """Delete all existing index entries for a note."""
         conn.execute(
             "DELETE FROM note_metadata WHERE user_id = ? AND project_id = ? AND note_path = ?",
             (user_id, project_id, note_path),

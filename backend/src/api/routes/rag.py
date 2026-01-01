@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 from ...models.project import DEFAULT_PROJECT_ID
 from ...models.rag import ChatRequest, ChatResponse, StatusResponse
 from ...services.rag_index import RAGIndexService
@@ -17,7 +17,7 @@ def get_rag_service() -> RAGIndexService:
 @router.get("/status", response_model=StatusResponse)
 async def get_status(
     project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     rag_service: RAGIndexService = Depends(get_rag_service)
 ):
     """Get the status of the RAG index for a project."""
@@ -27,7 +27,7 @@ async def get_status(
 async def chat(
     request: ChatRequest,
     project_id: str = Query(DEFAULT_PROJECT_ID, description="Project ID (default: 'default')"),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
     rag_service: RAGIndexService = Depends(get_rag_service)
 ):
     """
@@ -42,4 +42,3 @@ async def chat(
         logger.exception("RAG Chat failed")
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=f"RAG Error: {str(e)}")
-
