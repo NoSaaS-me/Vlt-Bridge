@@ -11,6 +11,7 @@ import time
 from typing import Any, Dict, List, Sequence
 
 from .database import DatabaseService
+from .sanitizer import sanitize_snippet
 from .vault import VaultNote
 
 logger = logging.getLogger(__name__)
@@ -333,7 +334,7 @@ class IndexerService:
                 {
                     "path": row["note_path"] if isinstance(row, sqlite3.Row) else row[0],
                     "title": row["title"] if isinstance(row, sqlite3.Row) else row[1],
-                    "snippet": snippet or "",
+                    "snippet": sanitize_snippet(snippet or ""),
                     "score": base_score + bonus,
                     "updated": updated_raw,
                 }
