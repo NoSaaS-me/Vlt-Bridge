@@ -2,7 +2,7 @@
   "feature": "Add hover preview cards for wikilinks",
   "description": "Enhance HoverCard popups that show a preview of linked notes when hovering over wikilinks in the NoteViewer, similar to Wikipedia's preview feature. The current implementation exists but uses inefficient search-based resolution. This plan adds a dedicated API and improves the preview card UI.",
   "created_at": "2026-01-01T13:24:23.485Z",
-  "updated_at": "2026-01-01T15:00:00.000Z",
+  "updated_at": "2026-01-01T15:30:00.000Z",
   "status": "in_progress",
   "planStatus": "in_progress",
   "workflow_type": "development",
@@ -15,7 +15,7 @@
       "id": "phase-1",
       "name": "Backend API Enhancements",
       "description": "Add dedicated endpoints for wikilink resolution and note preview to improve performance and accuracy",
-      "status": "pending",
+      "status": "completed",
       "subtasks": [
         {
           "id": "1.1",
@@ -44,11 +44,12 @@
           "id": "1.3",
           "title": "Add unit tests for new endpoints",
           "description": "Write pytest tests for the wikilink resolution and preview endpoints covering happy path, 404 cases, and edge cases",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "\u2713 Created comprehensive test suite in backend/tests/unit/test_wikilink_api.py\n\u2713 17 test cases covering both endpoints with fixtures and mocks\n\u2713 Wikilink resolution tests (7): success, context, broken links, validation, URL decoding, errors\n\u2713 Note preview tests (10): success, markdown stripping, tags, 404, URL decoding, errors, edge cases\n\u2713 Follows existing test patterns (TestClient, fixtures, mocks, dependency overrides)\n\u2713 Syntax validation passed\n\u2713 Committed: f3fbafb",
           "files": [
             "backend/tests/unit/test_wikilink_api.py"
-          ]
+          ],
+          "updated_at": "2026-01-01T13:35:48.838278+00:00"
         }
       ]
     },
@@ -229,5 +230,5 @@
       "backend/src/api/routes/search.py - add resolution endpoint here"
     ]
   },
-  "last_updated": "2026-01-01T13:32:35.021049+00:00"
+  "last_updated": "2026-01-01T13:35:48.838286+00:00"
 }
