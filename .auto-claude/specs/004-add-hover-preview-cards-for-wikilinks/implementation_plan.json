@@ -1,0 +1,233 @@
+{
+  "feature": "Add hover preview cards for wikilinks",
+  "description": "Enhance HoverCard popups that show a preview of linked notes when hovering over wikilinks in the NoteViewer, similar to Wikipedia's preview feature. The current implementation exists but uses inefficient search-based resolution. This plan adds a dedicated API and improves the preview card UI.",
+  "created_at": "2026-01-01T13:24:23.485Z",
+  "updated_at": "2026-01-01T15:00:00.000Z",
+  "status": "in_progress",
+  "planStatus": "in_progress",
+  "workflow_type": "development",
+  "services_involved": [
+    "backend",
+    "frontend"
+  ],
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Backend API Enhancements",
+      "description": "Add dedicated endpoints for wikilink resolution and note preview to improve performance and accuracy",
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Add wikilink resolution endpoint",
+          "description": "Create GET /api/wikilinks/resolve?link={linkText} endpoint that uses IndexerService.resolve_wikilinks() to accurately resolve a wikilink to its target note path using slug-based matching",
+          "status": "completed",
+          "notes": "\u2713 Added IndexerService.resolve_single_wikilink() method\n\u2713 Created GET /api/wikilinks/resolve endpoint  \n\u2713 Added WikilinkResolution response model\n\u2713 Follows existing code patterns (auth, error handling, URL decoding)\n\u2713 Uses slug-based matching with same-folder preference\n\u2713 Committed: 737dc43",
+          "files": [
+            "backend/src/api/routes/search.py"
+          ],
+          "updated_at": "2026-01-01T13:29:46.193466+00:00"
+        },
+        {
+          "id": "1.2",
+          "title": "Add note preview endpoint",
+          "description": "Create GET /api/notes/{path}/preview endpoint that returns lightweight preview data: title, first 200 chars of body (stripped of markdown), tags array, and updated timestamp",
+          "status": "completed",
+          "notes": "\u2713 Added NotePreview model to backend/src/models/note.py with title, snippet, tags, and updated fields\n\u2713 Created _strip_markdown() helper function to remove markdown formatting\n\u2713 Implemented GET /api/notes/{path}/preview endpoint in backend/src/api/routes/notes.py\n\u2713 Endpoint returns lightweight preview data: title, first 200 chars (markdown stripped), tags array, and updated timestamp\n\u2713 Follows existing code patterns (auth, error handling, URL decoding)\n\u2713 Gets tags from metadata first, falls back to database query\n\u2713 Properly handles timestamps with same parsing logic as other endpoints\n\u2713 Committed: 07ff27e",
+          "files": [
+            "backend/src/api/routes/notes.py",
+            "backend/src/models/note.py"
+          ],
+          "updated_at": "2026-01-01T13:32:35.021040+00:00"
+        },
+        {
+          "id": "1.3",
+          "title": "Add unit tests for new endpoints",
+          "description": "Write pytest tests for the wikilink resolution and preview endpoints covering happy path, 404 cases, and edge cases",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "backend/tests/unit/test_wikilink_api.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Frontend API Integration",
+      "description": "Update frontend API service and WikilinkPreview component to use new backend endpoints",
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Add API service functions",
+          "description": "Add resolveWikilink(linkText) and getNotePreview(path) functions to frontend/src/services/api.ts with proper TypeScript types",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/services/api.ts",
+            "frontend/src/types/note.ts"
+          ]
+        },
+        {
+          "id": "2.2",
+          "title": "Refactor WikilinkPreview to use resolution API",
+          "description": "Update WikilinkPreview component in markdown.tsx to first resolve wikilink text to path using new API, then fetch preview. Handle broken links (resolution returns null)",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/lib/markdown.tsx"
+          ]
+        },
+        {
+          "id": "2.3",
+          "title": "Update preview cache strategy",
+          "description": "Separate caches for resolution (linkText -> path) and previews (path -> previewData). Resolution cache can be longer-lived since paths rarely change",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/lib/markdown.tsx"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Preview Card UI Enhancement",
+      "description": "Improve the visual design and content of the hover preview card",
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Design enhanced preview card layout",
+          "description": "Create rich preview card showing: note title (h4), snippet text (max 3 lines), tags as badges (max 3), and 'Updated X ago' footer. Use existing shadcn components",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/lib/markdown.tsx"
+          ]
+        },
+        {
+          "id": "3.2",
+          "title": "Improve loading skeleton",
+          "description": "Add structured loading skeleton matching the preview card layout (title skeleton, 3 text lines, badge placeholders)",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/lib/markdown.tsx"
+          ]
+        },
+        {
+          "id": "3.3",
+          "title": "Style broken link indicator",
+          "description": "Show distinct card for broken links: red-tinted border, 'Note not found' message, and optional 'Click to create' affordance",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/lib/markdown.tsx"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "UX Polish & Accessibility",
+      "description": "Add finishing touches for accessibility, animations, and edge cases",
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Keyboard accessibility",
+          "description": "Ensure preview cards are accessible: Tab to focus wikilink, Enter to navigate, Escape to dismiss preview. Add ARIA attributes",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/lib/markdown.tsx"
+          ]
+        },
+        {
+          "id": "4.2",
+          "title": "Animation polish",
+          "description": "Tune HoverCard open/close animations. Add subtle fade-in for content after loading completes. Match existing app animation patterns",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/lib/markdown.tsx"
+          ]
+        },
+        {
+          "id": "4.3",
+          "title": "Touch device handling",
+          "description": "On touch devices, long-press to show preview (since hover doesn't work). Use PointerEvents or touch event detection",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/lib/markdown.tsx"
+          ]
+        },
+        {
+          "id": "4.4",
+          "title": "Performance optimization",
+          "description": "Add request deduplication (same link hovered multiple times quickly), abort stale requests on hover-out, limit concurrent preview fetches",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            "frontend/src/lib/markdown.tsx"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "Testing & Validation",
+      "description": "End-to-end testing and final validation",
+      "status": "pending",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Manual testing checklist",
+          "description": "Test: hover shows preview, click navigates, broken links styled, keyboard nav works, fast hover doesn't break, multiple wikilinks on page work",
+          "status": "pending",
+          "notes": "",
+          "files": []
+        },
+        {
+          "id": "5.2",
+          "title": "Update build-progress.txt",
+          "description": "Document completed work, any known issues, and configuration notes",
+          "status": "pending",
+          "notes": "",
+          "files": [
+            ".auto-claude/specs/004-add-hover-preview-cards-for-wikilinks/build-progress.txt"
+          ]
+        }
+      ]
+    }
+  ],
+  "final_acceptance": [
+    "Hovering over a wikilink shows a preview card within 500ms",
+    "Preview card displays note title, text snippet, and tags",
+    "Broken wikilinks show distinct styling and 'not found' message",
+    "Clicking a wikilink navigates to the linked note",
+    "Preview works on notes with many wikilinks without performance issues",
+    "Keyboard navigation works for accessibility"
+  ],
+  "spec_file": "spec.md",
+  "analysis_notes": {
+    "existing_implementation": "WikilinkPreview component exists in frontend/src/lib/markdown.tsx using HoverCard from Radix UI",
+    "current_issues": [
+      "Uses searchNotes() for resolution which may return wrong note",
+      "Preview content is basic (150 chars plain text only)",
+      "No dedicated backend endpoint for wikilink resolution"
+    ],
+    "backend_wikilink_resolution": "IndexerService.resolve_wikilinks() in backend uses proper slug-based matching with same-folder preference",
+    "key_files": [
+      "frontend/src/lib/markdown.tsx - WikilinkPreview component",
+      "frontend/src/components/NoteViewer.tsx - uses createWikilinkComponent",
+      "frontend/src/components/ui/hover-card.tsx - shadcn HoverCard",
+      "backend/src/services/indexer.py - resolve_wikilinks method",
+      "backend/src/api/routes/search.py - add resolution endpoint here"
+    ]
+  },
+  "last_updated": "2026-01-01T13:32:35.021049+00:00"
+}

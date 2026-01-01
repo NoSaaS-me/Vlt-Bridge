@@ -1,0 +1,13 @@
+{
+  "sourceType": "ideation",
+  "ideationType": "ui_ux_improvements",
+  "ideaId": "uiux-005",
+  "rationale": "Currently clicking a wikilink navigates away from the current note. Users often want to peek at linked content without losing their place. HoverCard component from Radix UI is already installed but unused in this context.",
+  "category": "ui_ux",
+  "uiuxCategory": "interaction",
+  "affectedFiles": [
+    "src/lib/markdown.tsx",
+    "src/components/NoteViewer.tsx"
+  ],
+  "problemSolved": "Wikilinks render as clickable links in markdown.tsx. Clicking navigates to the target note. There's no preview on hover. The HoverCard component exists in ui/hover-card.tsx but is not used for wikilinks."
+}

@@ -1,0 +1,139 @@
+# Build Progress: Add Hover Preview Cards for Wikilinks
+
+## Completed Tasks
+
+### ✅ Subtask 1.1: Add wikilink resolution endpoint
+**Commit:** 737dc43
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Added `IndexerService.resolve_single_wikilink()` method in `backend/src/services/indexer.py`
+  - Wraps the existing `resolve_wikilinks()` method for single link resolution
+  - Manages database connection lifecycle
+  - Returns dict with link_text, target_path (or None), and is_resolved boolean
+
+- Created `GET /api/wikilinks/resolve` endpoint in `backend/src/api/routes/search.py`
+  - Query parameters: `link` (required), `context` (optional)
+  - Returns `WikilinkResolution` model with link_text, target_path, is_resolved
+  - Uses slug-based matching with same-folder preference when context provided
+  - Includes proper authentication, URL decoding, and error handling
+
+**Code Pattern Compliance:**
+✓ Follows existing IndexerService patterns (connection management, error handling)
+✓ Matches search.py endpoint patterns (auth, Query params, HTTPException)
+✓ Uses unquote() for URL-encoded parameters
+✓ Proper response model with Pydantic BaseModel
+
+**Testing:**
+- Manual verification required (backend needs to be started)
+- Endpoint accessible at: GET /api/wikilinks/resolve?link={linkText}&context={optional}
+
+### ✅ Subtask 1.2: Add note preview endpoint
+**Commit:** 07ff27e
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Added `NotePreview` model to `backend/src/models/note.py`
+  - Fields: title, snippet (200 chars), tags array, updated timestamp
+  - Lightweight model for hover card previews
+
+- Created `_strip_markdown()` helper function in `backend/src/api/routes/notes.py`
+  - Removes headers, bold/italic, code blocks, links, wikilinks, images
+  - Preserves text content for readable snippets
+
+- Implemented `GET /api/notes/{path}/preview` endpoint in `backend/src/api/routes/notes.py`
+  - Returns lightweight preview data
+  - Strips markdown from first 200 chars of body
+  - Gets tags from metadata first, falls back to database query
+  - Properly handles timestamps with ISO parsing
+  - Includes proper authentication, URL decoding, and error handling
+
+**Code Pattern Compliance:**
+✓ Follows existing notes.py endpoint patterns (auth, path params, HTTPException)
+✓ Uses unquote() for URL-encoded paths
+✓ Proper response model with Pydantic BaseModel
+✓ Consistent timestamp parsing logic
+✓ 404 handling for missing notes
+
+---
+
+### ✅ Subtask 1.3: Add unit tests for new endpoints
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Created comprehensive test suite in `backend/tests/unit/test_wikilink_api.py`
+- 17 test cases covering both endpoints with fixtures and mocks
+
+**Wikilink Resolution Tests (7 tests):**
+- ✓ Successful resolution with slug-based matching
+- ✓ Resolution with context path (same-folder preference)
+- ✓ Broken links (is_resolved=False, target_path=None)
+- ✓ Missing link parameter validation (422 error)
+- ✓ URL decoding of link text
+- ✓ Service error handling (500 error)
+
+**Note Preview Tests (10 tests):**
+- ✓ Successful preview retrieval
+- ✓ Markdown stripping from snippet (headers, bold, italic, code, links, etc.)
+- ✓ Tags from metadata
+- ✓ Tags from database fallback
+- ✓ Snippet length truncation (200 chars max)
+- ✓ Note not found (404 error)
+- ✓ URL decoding of note paths
+- ✓ Service error handling (500 error)
+- ✓ Empty body handling
+- ✓ Timestamp parsing
+
+**Code Pattern Compliance:**
+✓ Uses FastAPI TestClient
+✓ Follows existing test patterns from test_graph_api.py
+✓ Uses pytest fixtures for auth and cleanup
+✓ Mocks services with patch decorator
+✓ Uses app.dependency_overrides for auth injection
+✓ Proper cleanup with autouse fixture
+✓ Comprehensive edge case coverage
+
+**Testing:**
+- Syntax validation passed
+- Manual verification required (environment dependency issues prevent full pytest run)
+
+---
+
+## In Progress
+
+None
+
+---
+
+## Pending Tasks
+
+### Phase 1: Backend API Enhancements
+✅ All subtasks completed!
+
+### Phase 2: Frontend API Integration
+- [ ] 2.1: Add API service functions
+- [ ] 2.2: Refactor WikilinkPreview to use resolution API
+- [ ] 2.3: Update preview cache strategy
+
+### Phase 3: Preview Card UI Enhancement
+- [ ] 3.1: Design enhanced preview card layout
+- [ ] 3.2: Improve loading skeleton
+- [ ] 3.3: Style broken link indicator
+
+### Phase 4: UX Polish & Accessibility
+- [ ] 4.1: Keyboard accessibility
+- [ ] 4.2: Animation polish
+- [ ] 4.3: Touch device handling
+- [ ] 4.4: Performance optimization
+
+### Phase 5: Testing & Validation
+- [ ] 5.1: Manual testing checklist
+- [ ] 5.2: Update build-progress.txt
+
+---
+
+## Notes
+
+- The new endpoint uses the existing `IndexerService.resolve_wikilinks()` which implements the slug-based matching algorithm with same-folder preference
+- No breaking changes to existing code
+- Ready for frontend integration in Phase 2

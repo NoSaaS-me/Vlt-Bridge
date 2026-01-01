@@ -1,0 +1,15 @@
+{
+  "discovered_files": {
+    "frontend/src/lib/markdown.tsx": {
+      "description": "WikilinkPreview component already exists using HoverCard from Radix UI. Uses searchNotes() for resolution (inefficient). Preview shows first 150 chars. Has loading skeleton and broken link detection. Needs enhancement to use dedicated resolution API.",
+      "category": "existing_implementation",
+      "discovered_at": "2026-01-01T13:27:13.674146+00:00"
+    },
+    "backend/src/services/indexer.py": {
+      "description": "IndexerService.resolve_wikilinks() method exists with proper slug-based matching. Uses normalized_title_slug and normalized_path_slug columns. Prefers same-folder matches. Not exposed via HTTP API - needs new endpoint.",
+      "category": "backend_api",
+      "discovered_at": "2026-01-01T13:27:13.678866+00:00"
+    }
+  },
+  "last_updated": "2026-01-01T13:27:13.678872+00:00"
+}

@@ -1,0 +1,34 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/004-add-hover-preview-cards-for-wikilinks/**)",
+      "Write(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/004-add-hover-preview-cards-for-wikilinks/**)",
+      "Edit(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/004-add-hover-preview-cards-for-wikilinks/**)",
+      "Glob(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/004-add-hover-preview-cards-for-wikilinks/**)",
+      "Grep(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/004-add-hover-preview-cards-for-wikilinks/**)",
+      "Read(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/004-add-hover-preview-cards-for-wikilinks/.auto-claude/specs/004-add-hover-preview-cards-for-wikilinks/**)",
+      "Write(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/004-add-hover-preview-cards-for-wikilinks/.auto-claude/specs/004-add-hover-preview-cards-for-wikilinks/**)",
+      "Edit(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/004-add-hover-preview-cards-for-wikilinks/.auto-claude/specs/004-add-hover-preview-cards-for-wikilinks/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__get-library-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}
