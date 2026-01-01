@@ -3,6 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Send, Loader2, Info, Square, GitBranch } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 import { ChatMessage } from './ChatMessage';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { ContextTree } from './ContextTree';
@@ -143,6 +150,21 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
             `Restored ${restoredMessages.length} messages from tree ${response.active_tree_id}`
           );
         }
+      } else if (restoreMessages && !response.active_tree_id && response.trees.length > 0) {
+        // No active tree but trees exist - auto-activate the most recent one
+        // Use the most recent node's created_at time to determine the most recent tree
+        const mostRecent = response.trees.sort((a, b) => {
+          const aLatest = a.nodes.length > 0
+            ? Math.max(...a.nodes.map(n => new Date(n.created_at).getTime()))
+            : 0;
+          const bLatest = b.nodes.length > 0
+            ? Math.max(...b.nodes.map(n => new Date(n.created_at).getTime()))
+            : 0;
+          return bLatest - aLatest;
+        })[0];
+        await setActiveTree(mostRecent.tree.root_id);
+        // Reload trees after setting active
+        return loadContextTrees(true);
       }
     } catch (err) {
       // Context tree API might not be implemented yet - fail silently
@@ -498,9 +520,80 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
               } else if (chunk.type === 'source' && chunk.source) {
                 // Deep copy sources array to avoid mutation
                 lastMsg.sources = [...(lastMsg.sources || []), chunk.source];
+              } else if (chunk.type === 'tool_call' && chunk.tool_call) {
+                // Add or update tool call in the list
+                const existingCalls = lastMsg.tool_calls || [];
+                const existingIndex = existingCalls.findIndex(tc => tc.id === chunk.tool_call!.id);
+                if (existingIndex >= 0) {
+                  // Update existing tool call
+                  existingCalls[existingIndex] = {
+                    ...existingCalls[existingIndex],
+                    ...chunk.tool_call,
+                    status: chunk.tool_call.status as 'pending' | 'running' | 'completed' | 'error' || 'running',
+                  };
+                  lastMsg.tool_calls = [...existingCalls];
+                } else {
+                  // Add new tool call
+                  lastMsg.tool_calls = [...existingCalls, {
+                    id: chunk.tool_call.id,
+                    name: chunk.tool_call.name,
+                    arguments: chunk.tool_call.arguments,
+                    status: 'running',
+                  }];
+                }
+                setStatusMessage(`Running ${chunk.tool_call.name}...`);
+              } else if (chunk.type === 'tool_result') {
+                // Match result to tool call by ID
+                const existingCalls = lastMsg.tool_calls || [];
+                let matchIndex = -1;
+
+                // First try exact ID match
+                if (chunk.tool_call_id) {
+                  matchIndex = existingCalls.findIndex(tc => tc.id === chunk.tool_call_id);
+                }
+
+                // Fallback: find first running tool without result
+                if (matchIndex < 0) {
+                  matchIndex = existingCalls.findIndex(tc => !tc.result && tc.status === 'running');
+                  if (matchIndex >= 0 && chunk.tool_call_id) {
+                    console.warn(
+                      `[ChatPanel] Tool result ID mismatch: expected '${chunk.tool_call_id}', ` +
+                      `using fallback to running tool '${existingCalls[matchIndex].name}'`
+                    );
+                  }
+                }
+
+                if (matchIndex >= 0) {
+                  existingCalls[matchIndex] = {
+                    ...existingCalls[matchIndex],
+                    result: chunk.tool_result || chunk.content || '',
+                    status: 'completed',
+                  };
+                  lastMsg.tool_calls = [...existingCalls];
+                } else {
+                  // No matching tool call found - log warning
+                  console.warn(
+                    `[ChatPanel] Tool result with ID '${chunk.tool_call_id}' has no matching tool call. ` +
+                    `Result dropped: ${(chunk.tool_result || '').substring(0, 100)}...`
+                  );
+                  // Mark message as having a potential issue if tools failed silently
+                  if (existingCalls.length > 0) {
+                    const hasRunningTools = existingCalls.some(tc => tc.status === 'running');
+                    if (!hasRunningTools) {
+                      // All tools done but we got an orphan result - might indicate a problem
+                      console.warn('[ChatPanel] Orphan tool result received after all tools completed');
+                    }
+                  }
+                }
               } else if (chunk.type === 'done') {
                 lastMsg.model = chunk.model_used;
                 setStatusMessage('');
+                // Mark any remaining running tool calls as completed
+                if (lastMsg.tool_calls) {
+                  lastMsg.tool_calls = lastMsg.tool_calls.map(tc =>
+                    tc.status === 'running' ? { ...tc, status: 'completed' as const } : tc
+                  );
+                }
                 // Save context_id from response for next request
                 if (chunk.context_id) {
                   setCurrentContextId(chunk.context_id);
@@ -641,26 +734,40 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
         )}
       </div>
 
-      {/* Main content area with optional context tree */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Context Tree Panel */}
-        {showContextTree && (
-          <div className="w-64 border-r border-border flex-shrink-0 overflow-hidden">
+      {/* Context Tree Modal */}
+      <Dialog open={showContextTree} onOpenChange={setShowContextTree}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Context Trees</DialogTitle>
+            <DialogDescription>
+              Manage conversation branches and checkpoints
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-auto">
             <ContextTree
               trees={contextTrees}
               activeTreeId={activeTreeId}
-              onCheckout={handleCheckout}
+              onCheckout={(nodeId) => {
+                handleCheckout(nodeId);
+                setShowContextTree(false);
+              }}
               onNewRoot={handleNewRoot}
               onLabel={handleLabel}
               onCheckpoint={handleCheckpointToggle}
               onPrune={handlePrune}
               onDeleteTree={handleDeleteTree}
-              onSelectTree={handleSelectTree}
+              onSelectTree={(rootId) => {
+                handleSelectTree(rootId);
+                setShowContextTree(false);
+              }}
               isLoading={isLoadingTrees}
             />
           </div>
-        )}
+        </DialogContent>
+      </Dialog>
 
+      {/* Main content area */}
+      <div className="flex-1 flex overflow-hidden">
         {/* Message List */}
         <div className="flex-1 overflow-y-auto relative" ref={scrollRef}>
         {messages.length === 0 ? (
@@ -679,6 +786,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged }: ChatPanelProps) 
                 onSourceClick={onNavigateToNote}
                 showThinking={showThinking}
                 showSources={showSources}
+                isStreaming={isLoading && i === messages.length - 1 && msg.role === 'assistant'}
               />
             ))}
             {isLoading && statusMessage && (

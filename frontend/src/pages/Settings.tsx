@@ -100,6 +100,7 @@ export function Settings() {
           subagent_model: 'google/gemini-2.0-flash-exp:free',
           subagent_provider: 'openrouter',
           thinking_enabled: false,
+          chat_center_mode: false,
           librarian_timeout: 1200,
           openrouter_api_key: null,
           openrouter_api_key_set: false,
@@ -583,6 +584,40 @@ export function Settings() {
                           When enabled, the Oracle will spend more time reasoning through complex
                           questions before providing an answer. This increases accuracy but uses
                           more tokens and takes longer.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Chat Center Mode */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <label className="text-sm font-medium">Chat Center View</label>
+                    <p className="text-xs text-muted-foreground">
+                      Show AI chat in center view instead of flyout panel
+                    </p>
+                  </div>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div>
+                          <Switch
+                            checked={modelSettings.chat_center_mode}
+                            onCheckedChange={(checked) =>
+                              setModelSettings({ ...modelSettings, chat_center_mode: checked })
+                            }
+                          />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="max-w-xs">
+                          When enabled, clicking the chat button will display the AI chat
+                          in the main center panel instead of a side flyout panel.
                         </p>
                       </TooltipContent>
                     </Tooltip>

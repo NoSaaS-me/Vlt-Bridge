@@ -33,6 +33,10 @@ class ModelSettings(BaseModel):
         default=False,
         description="Enable extended thinking mode (adds :thinking suffix for supported models)"
     )
+    chat_center_mode: bool = Field(
+        default=False,
+        description="Show AI chat in center view instead of flyout panel"
+    )
     librarian_timeout: int = Field(
         default=1200,
         ge=60,
@@ -87,6 +91,7 @@ class ModelSettingsUpdateRequest(BaseModel):
     subagent_model: Optional[str] = None
     subagent_provider: Optional[ModelProvider] = None
     thinking_enabled: Optional[bool] = None
+    chat_center_mode: Optional[bool] = None
     librarian_timeout: Optional[int] = Field(
         default=None,
         ge=60,

@@ -39,6 +39,7 @@ class OracleStreamChunk(BaseModel):
     content: Optional[str] = Field(None, description="Text content for thinking/content chunks")
     source: Optional[SourceReference] = Field(None, description="Source citation for source chunks")
     tool_call: Optional[Dict[str, Any]] = Field(None, description="Tool call info (tool_call chunks)")
+    tool_call_id: Optional[str] = Field(None, description="Tool call ID for associating results with calls")
     tool_result: Optional[str] = Field(None, description="Tool result (tool_result chunks)")
     tokens_used: Optional[int] = Field(None, description="Total tokens used (done chunk only)")
     model_used: Optional[str] = Field(None, description="Model used (done chunk only)")

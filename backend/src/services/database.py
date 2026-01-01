@@ -78,6 +78,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         subagent_model TEXT NOT NULL DEFAULT 'gemini-2.0-flash-exp',
         subagent_provider TEXT NOT NULL DEFAULT 'google',
         thinking_enabled INTEGER NOT NULL DEFAULT 0,
+        chat_center_mode INTEGER NOT NULL DEFAULT 0,
         librarian_timeout INTEGER NOT NULL DEFAULT 1200,
         max_context_nodes INTEGER NOT NULL DEFAULT 30,
         openrouter_api_key TEXT,
@@ -217,6 +218,8 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE user_settings ADD COLUMN librarian_timeout INTEGER NOT NULL DEFAULT 1200",
     # Add max_context_nodes column if it doesn't exist (default 30 nodes per tree)
     "ALTER TABLE user_settings ADD COLUMN max_context_nodes INTEGER NOT NULL DEFAULT 30",
+    # Add chat_center_mode column if it doesn't exist (default 0 = flyout panel)
+    "ALTER TABLE user_settings ADD COLUMN chat_center_mode INTEGER NOT NULL DEFAULT 0",
 )
 
 

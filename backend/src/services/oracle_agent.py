@@ -203,9 +203,16 @@ def _parse_xml_tool_calls(content: str) -> Tuple[List[Dict[str, Any]], str]:
 
     if tool_calls:
         logger.info(
-            f"Parsed {len(tool_calls)} XML-style tool call(s) from content",
+            f"[XML PARSE] Parsed {len(tool_calls)} XML-style tool call(s) from content",
             extra={"tool_names": [tc["function"]["name"] for tc in tool_calls]},
         )
+        for i, tc in enumerate(tool_calls):
+            logger.info(f"[XML PARSE #{i+1}] name={tc['function']['name']} args={tc['function']['arguments'][:500]}")
+    else:
+        # Log when we DON'T find XML tool calls - to help debug
+        if "<function" in content.lower() or "<invoke" in content.lower() or "tool_call" in content.lower():
+            logger.warning(f"[XML PARSE] Content looks like it might have tool calls but none were parsed!")
+            logger.warning(f"[XML PARSE] Content sample: {content[:1000]}")
 
     return tool_calls, cleaned_content
 
@@ -234,7 +241,7 @@ class OracleAgent:
     """
 
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-    MAX_TURNS = 15
+    MAX_TURNS = 30  # Increased from 15 to allow complex multi-step queries
     DEFAULT_MODEL = "anthropic/claude-sonnet-4"
     DEFAULT_SUBAGENT_MODEL = "deepseek/deepseek-chat"
 
@@ -482,6 +489,10 @@ class OracleAgent:
         # Track the original question for context saving
         self._current_question = question
 
+        # Track accumulated content across turns for max-turns fallback
+        accumulated_content = ""
+        accumulated_thinking = ""
+
         # Agent loop
         for turn in range(self.MAX_TURNS):
             # Check cancellation before each turn
@@ -506,6 +517,12 @@ class OracleAgent:
                     yield OracleStreamChunk(type="error", error="Cancelled by user")
                     return
 
+                # Track content and thinking for max-turns fallback
+                if chunk.type == "content" and chunk.content:
+                    accumulated_content += chunk.content
+                elif chunk.type == "thinking" and chunk.content:
+                    accumulated_thinking += chunk.content + "\n"
+
                 yield chunk
 
                 # Check if we're done
@@ -516,10 +533,36 @@ class OracleAgent:
                 if chunk.type == "error":
                     return
 
-        # Max turns reached
+        # Max turns reached - yield accumulated content before error
+        logger.warning(f"Max turns ({self.MAX_TURNS}) reached with accumulated content: {len(accumulated_content)} chars")
+
+        if accumulated_content:
+            # Yield what we have so far before the warning
+            yield OracleStreamChunk(
+                type="content",
+                content=f"\n\n---\n*Note: Response incomplete due to turn limit ({self.MAX_TURNS} turns). Here is what was gathered:*\n\n",
+            )
+        elif accumulated_thinking:
+            # If no content but we have thinking, summarize what was found
+            yield OracleStreamChunk(
+                type="content",
+                content=f"*Response incomplete after {self.MAX_TURNS} turns. Last reasoning:\n{accumulated_thinking[-500:]}*",
+            )
+
+        # Save what we have as a partial exchange
+        if accumulated_content or accumulated_thinking:
+            context_id = self._save_exchange(
+                question=question,
+                answer=accumulated_content or f"*Partial response - thinking: {accumulated_thinking[:500]}*",
+            )
+        else:
+            context_id = None
+
         yield OracleStreamChunk(
-            type="error",
-            error="Maximum conversation turns reached without completion",
+            type="done",
+            tokens_used=None,
+            model_used=self.model,
+            context_id=context_id,
         )
 
     async def _agent_turn(
@@ -550,6 +593,27 @@ class OracleAgent:
             model = f"{model}:thinking"
 
         try:
+            request_body = {
+                "model": model,
+                "messages": messages,
+                "tools": tools if tools else None,
+                "tool_choice": "auto" if tools else None,
+                "parallel_tool_calls": True,
+                "stream": stream,
+                "max_tokens": max_tokens,
+            }
+
+            # Log the request
+            logger.info(f"=== OPENROUTER REQUEST ===")
+            logger.info(f"[REQUEST] model={model} stream={stream} max_tokens={max_tokens}")
+            logger.info(f"[REQUEST] tools_count={len(tools) if tools else 0}")
+            logger.info(f"[REQUEST] messages_count={len(messages)}")
+            # Log last user message
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    logger.info(f"[REQUEST] last_user_msg={msg.get('content', '')[:200]}")
+                    break
+
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{self.OPENROUTER_BASE}/chat/completions",
@@ -559,15 +623,7 @@ class OracleAgent:
                         "X-Title": "Vlt Oracle",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "tools": tools if tools else None,
-                        "tool_choice": "auto" if tools else None,
-                        "parallel_tool_calls": True,
-                        "stream": stream,
-                        "max_tokens": max_tokens,
-                    },
+                    json=request_body,
                 )
                 response.raise_for_status()
 
@@ -617,6 +673,9 @@ class OracleAgent:
         content_buffer = ""
         tool_calls_buffer: Dict[int, Dict[str, Any]] = {}
         finish_reason = None
+        chunk_count = 0
+
+        logger.info("=== STARTING SSE STREAM PROCESSING ===")
 
         async for line in response.aiter_lines():
             if not line.startswith("data: "):
@@ -624,20 +683,47 @@ class OracleAgent:
 
             data_str = line[6:]  # Remove "data: " prefix
             if data_str == "[DONE]":
+                logger.info("=== SSE STREAM [DONE] ===")
                 break
 
             try:
                 data = json.loads(data_str)
             except json.JSONDecodeError:
+                logger.warning(f"[RAW SSE] Failed to parse: {data_str[:500]}")
                 continue
 
+            chunk_count += 1
             choices = data.get("choices", [])
             if not choices:
+                logger.debug(f"[RAW SSE #{chunk_count}] No choices: {json.dumps(data)[:500]}")
                 continue
 
             choice = choices[0]
             delta = choice.get("delta", {})
-            finish_reason = choice.get("finish_reason")
+            # CRITICAL: Only update finish_reason if it has a truthy value
+            # Otherwise later chunks with finish_reason=None will overwrite it!
+            if choice.get("finish_reason"):
+                finish_reason = choice.get("finish_reason")
+
+            # Log EVERY chunk with full details
+            logger.info(f"[RAW SSE #{chunk_count}] finish_reason={finish_reason} delta_keys={list(delta.keys())} delta={json.dumps(delta)[:1000]}")
+
+            # Handle reasoning/thinking traces (from models like DeepSeek)
+            if "reasoning" in delta and delta["reasoning"]:
+                reasoning_text = delta["reasoning"]
+                yield OracleStreamChunk(
+                    type="thinking",
+                    content=reasoning_text,
+                )
+
+            # Handle reasoning_details (alternative format)
+            if "reasoning_details" in delta and delta["reasoning_details"]:
+                for detail in delta["reasoning_details"]:
+                    if isinstance(detail, dict) and detail.get("text"):
+                        yield OracleStreamChunk(
+                            type="thinking",
+                            content=detail["text"],
+                        )
 
             # Handle content
             if "content" in delta and delta["content"]:
@@ -666,6 +752,14 @@ class OracleAgent:
                             tool_calls_buffer[idx]["function"]["name"] = tc["function"]["name"]
                         if "arguments" in tc["function"]:
                             tool_calls_buffer[idx]["function"]["arguments"] += tc["function"]["arguments"]
+
+        # Log final state
+        logger.info(f"=== SSE STREAM ENDED after {chunk_count} chunks ===")
+        logger.info(f"[FINAL STATE] finish_reason={finish_reason}")
+        logger.info(f"[FINAL STATE] content_buffer_len={len(content_buffer)}")
+        logger.info(f"[FINAL STATE] tool_calls_buffer={json.dumps(tool_calls_buffer)[:2000]}")
+        if content_buffer:
+            logger.info(f"[FINAL STATE] content_preview={content_buffer[:500]}")
 
         # Process finish
         if finish_reason == "tool_calls" and tool_calls_buffer:
@@ -869,6 +963,17 @@ class OracleAgent:
 
             parsed_calls.append((call_id, name, arguments, arguments_str))
 
+        # Yield thinking update about tool execution
+        tool_names = [name for _, name, _, _ in parsed_calls]
+        if len(tool_names) == 1:
+            thinking_msg = f"Executing tool: {tool_names[0]}"
+        else:
+            thinking_msg = f"Executing {len(tool_names)} tools: {', '.join(tool_names)}"
+        yield OracleStreamChunk(
+            type="thinking",
+            content=thinking_msg,
+        )
+
         # Yield all tool call notifications first (pending status)
         for call_id, name, arguments, arguments_str in parsed_calls:
             yield OracleStreamChunk(
@@ -876,7 +981,7 @@ class OracleAgent:
                 tool_call={
                     "id": call_id,
                     "name": name,
-                    "arguments": arguments_str[:200],  # Preview
+                    "arguments": arguments_str,  # Full arguments for frontend display
                     "status": "pending",
                 },
             )
@@ -940,11 +1045,19 @@ class OracleAgent:
                 # Success case
                 yield OracleStreamChunk(
                     type="tool_result",
+                    tool_call_id=result.call_id,  # Associate result with tool call
                     tool_result=(
-                        result.result[:1000]
-                        if len(result.result) > 1000
+                        result.result[:2000]  # Allow more content for frontend display
+                        if len(result.result) > 2000
                         else result.result
                     ),
+                )
+
+                # Yield thinking update about tool completion
+                result_preview = result.result[:100] + "..." if len(result.result) > 100 else result.result
+                yield OracleStreamChunk(
+                    type="thinking",
+                    content=f"✓ {result.name} returned: {result_preview}",
                 )
 
                 # Extract sources from successful result
@@ -977,7 +1090,14 @@ class OracleAgent:
 
                 yield OracleStreamChunk(
                     type="tool_result",
+                    tool_call_id=result.call_id,  # Associate error with tool call
                     tool_result=error_content,
+                )
+
+                # Yield thinking update about tool error
+                yield OracleStreamChunk(
+                    type="thinking",
+                    content=f"✗ {result.name} failed: {result.error or 'Unknown error'}",
                 )
 
                 # Collect failed tool call for context persistence

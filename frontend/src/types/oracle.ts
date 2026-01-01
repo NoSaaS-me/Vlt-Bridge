@@ -45,6 +45,7 @@ export interface OracleStreamChunk {
     arguments: string;
     status?: string;
   };
+  tool_call_id?: string;     // for tool_result events - associates result with tool call
   tool_result?: string;      // for tool_result events
 }
 
@@ -59,6 +60,17 @@ export interface SlashCommand {
 }
 
 /**
+ * Tool call with execution result
+ */
+export interface ToolCallInfo {
+  id: string;
+  name: string;
+  arguments: string;
+  status?: 'pending' | 'running' | 'completed' | 'error';
+  result?: string;
+}
+
+/**
  * Oracle conversation message (extends ChatMessage)
  */
 export interface OracleMessage {
@@ -67,6 +79,7 @@ export interface OracleMessage {
   timestamp: string;
   thinking?: string;         // Optional thinking/reasoning content
   sources?: RetrievalResult[];
+  tool_calls?: ToolCallInfo[]; // Tool calls made during response
   model?: string;
   is_error?: boolean;
 }

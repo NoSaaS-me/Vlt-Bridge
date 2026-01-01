@@ -35,8 +35,8 @@ class UserSettingsService:
             cursor = conn.execute(
                 """
                 SELECT oracle_model, oracle_provider, subagent_model,
-                       subagent_provider, thinking_enabled, librarian_timeout,
-                       max_context_nodes, openrouter_api_key
+                       subagent_provider, thinking_enabled, chat_center_mode,
+                       librarian_timeout, max_context_nodes, openrouter_api_key
                 FROM user_settings
                 WHERE user_id = ?
                 """,
@@ -61,6 +61,7 @@ class UserSettingsService:
                     subagent_model=row["subagent_model"],
                     subagent_provider=ModelProvider(row["subagent_provider"]),
                     thinking_enabled=bool(row["thinking_enabled"]),
+                    chat_center_mode=bool(row["chat_center_mode"]) if row["chat_center_mode"] is not None else False,
                     librarian_timeout=librarian_timeout,
                     max_context_nodes=max_context_nodes,
                     openrouter_api_key=None,  # Never return the actual key
@@ -227,6 +228,7 @@ class UserSettingsService:
         subagent_model: Optional[str] = None,
         subagent_provider: Optional[ModelProvider] = None,
         thinking_enabled: Optional[bool] = None,
+        chat_center_mode: Optional[bool] = None,
         librarian_timeout: Optional[int] = None,
         max_context_nodes: Optional[int] = None,
         openrouter_api_key: Optional[str] = None
@@ -241,6 +243,7 @@ class UserSettingsService:
             subagent_model: Subagent model ID (optional)
             subagent_provider: Subagent provider (optional)
             thinking_enabled: Enable thinking mode (optional)
+            chat_center_mode: Show AI chat in center view (optional)
             librarian_timeout: Timeout in seconds for Librarian operations (optional, 60-3600)
             max_context_nodes: Max nodes per context tree (optional, 5-100)
             openrouter_api_key: OpenRouter API key (optional, empty string to clear)
@@ -282,6 +285,7 @@ class UserSettingsService:
                 subagent_model=subagent_model if subagent_model is not None else current.subagent_model,
                 subagent_provider=subagent_provider if subagent_provider is not None else current.subagent_provider,
                 thinking_enabled=thinking_enabled if thinking_enabled is not None else current.thinking_enabled,
+                chat_center_mode=chat_center_mode if chat_center_mode is not None else current.chat_center_mode,
                 librarian_timeout=new_librarian_timeout,
                 max_context_nodes=new_max_context_nodes,
                 openrouter_api_key=None,  # Never return the key
@@ -297,15 +301,16 @@ class UserSettingsService:
                     INSERT INTO user_settings (
                         user_id, oracle_model, oracle_provider,
                         subagent_model, subagent_provider, thinking_enabled,
-                        librarian_timeout, max_context_nodes, openrouter_api_key,
-                        created, updated
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        chat_center_mode, librarian_timeout, max_context_nodes,
+                        openrouter_api_key, created, updated
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(user_id) DO UPDATE SET
                         oracle_model = excluded.oracle_model,
                         oracle_provider = excluded.oracle_provider,
                         subagent_model = excluded.subagent_model,
                         subagent_provider = excluded.subagent_provider,
                         thinking_enabled = excluded.thinking_enabled,
+                        chat_center_mode = excluded.chat_center_mode,
                         librarian_timeout = excluded.librarian_timeout,
                         max_context_nodes = excluded.max_context_nodes,
                         openrouter_api_key = excluded.openrouter_api_key,
@@ -318,6 +323,7 @@ class UserSettingsService:
                         updated.subagent_model,
                         updated.subagent_provider.value,
                         int(updated.thinking_enabled),
+                        int(updated.chat_center_mode),
                         updated.librarian_timeout,
                         updated.max_context_nodes,
                         new_api_key,

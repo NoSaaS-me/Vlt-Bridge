@@ -74,6 +74,81 @@ class OracleBridge:
         # Store conversation history per user session
         # Key: user_id, Value: list of conversation messages
         self._conversation_history: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        # Cache for vlt command availability check
+        self._vlt_available: Optional[bool] = None
+        # Cache for CodeRAG initialization status
+        self._coderag_initialized: Optional[bool] = None
+
+    def _check_vlt_available(self) -> bool:
+        """Check if vlt command is available in PATH.
+
+        Returns:
+            True if vlt is available, False otherwise
+        """
+        if self._vlt_available is not None:
+            return self._vlt_available
+
+        try:
+            result = subprocess.run(
+                [self.vlt_command, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            self._vlt_available = result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            self._vlt_available = False
+
+        if not self._vlt_available:
+            logger.warning(f"vlt command not available: {self.vlt_command}")
+
+        return self._vlt_available
+
+    def _check_coderag_initialized(self, project: Optional[str] = None) -> bool:
+        """Check if CodeRAG index exists for the project.
+
+        Args:
+            project: Project ID to check (auto-detected if None)
+
+        Returns:
+            True if CodeRAG is initialized, False otherwise
+        """
+        # Skip check if vlt is not available
+        if not self._check_vlt_available():
+            return False
+
+        try:
+            args = ["coderag", "status"]
+            if project:
+                args.extend(["--project", project])
+            args.append("--json")
+
+            result = subprocess.run(
+                [self.vlt_command] + args,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode != 0:
+                self._coderag_initialized = False
+                return False
+
+            # Try to parse the status response
+            try:
+                status = json.loads(result.stdout)
+                # Check if index exists based on status response
+                self._coderag_initialized = status.get("indexed", False) or status.get("chunks", 0) > 0
+                return self._coderag_initialized
+            except json.JSONDecodeError:
+                # If output isn't JSON, check for success indicators in text
+                self._coderag_initialized = "indexed" in result.stdout.lower()
+                return self._coderag_initialized
+
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            logger.warning(f"Failed to check CodeRAG status: {e}")
+            self._coderag_initialized = False
+            return False
 
     def _run_vlt_command(
         self,
@@ -93,6 +168,14 @@ class OracleBridge:
         Raises:
             OracleBridgeError: If command fails or returns invalid JSON
         """
+        # Check vlt availability before running
+        if not self._check_vlt_available():
+            return {
+                "error": True,
+                "message": "vlt CLI is not available. Please install vlt-cli or ensure it's in PATH.",
+                "suggestion": "Run 'pip install vlt-cli' or check your PATH configuration.",
+            }
+
         cmd = [self.vlt_command] + args + ["--json"]
 
         try:
@@ -105,29 +188,68 @@ class OracleBridge:
                 check=True,
             )
 
+            # Validate output before parsing
+            stdout = result.stdout.strip()
+            if not stdout:
+                logger.warning(f"vlt command returned empty output: {' '.join(cmd)}")
+                return {
+                    "error": True,
+                    "message": "vlt command returned empty response",
+                    "command": ' '.join(args),
+                }
+
             # Parse JSON output
             try:
-                return json.loads(result.stdout)
+                return json.loads(stdout)
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse vlt JSON output: {result.stdout}")
-                raise OracleBridgeError(
-                    "Invalid JSON response from vlt",
-                    {"stdout": result.stdout, "stderr": result.stderr}
-                ) from e
+                logger.error(f"Failed to parse vlt JSON output: {stdout[:500]}")
+                # Return structured error instead of raising
+                return {
+                    "error": True,
+                    "message": f"Invalid JSON response from vlt: {str(e)}",
+                    "raw_output": stdout[:1000] if len(stdout) > 1000 else stdout,
+                    "command": ' '.join(args),
+                }
 
         except subprocess.TimeoutExpired as e:
             logger.error(f"vlt command timeout: {' '.join(cmd)}")
-            raise OracleBridgeError(
-                f"vlt command timeout after {timeout}s",
-                {"command": cmd}
-            ) from e
+            return {
+                "error": True,
+                "message": f"vlt command timeout after {timeout}s",
+                "command": ' '.join(args),
+            }
 
         except subprocess.CalledProcessError as e:
             logger.error(f"vlt command failed: {e.stderr}")
-            raise OracleBridgeError(
-                f"vlt command failed: {e.stderr}",
-                {"command": cmd, "returncode": e.returncode, "stderr": e.stderr}
-            ) from e
+            # Try to parse stderr as JSON (some vlt errors are JSON formatted)
+            error_msg = e.stderr.strip() if e.stderr else "Unknown error"
+            try:
+                error_data = json.loads(error_msg)
+                error_msg = error_data.get("message", error_msg)
+            except json.JSONDecodeError:
+                pass
+            return {
+                "error": True,
+                "message": f"vlt command failed: {error_msg}",
+                "command": ' '.join(args),
+                "returncode": e.returncode,
+            }
+
+        except FileNotFoundError:
+            logger.error(f"vlt command not found: {self.vlt_command}")
+            self._vlt_available = False
+            return {
+                "error": True,
+                "message": "vlt CLI not found. Please install vlt-cli.",
+                "suggestion": "Run 'pip install vlt-cli' or add vlt to your PATH.",
+            }
+
+        except OSError as e:
+            logger.error(f"OS error running vlt: {e}")
+            return {
+                "error": True,
+                "message": f"Failed to run vlt command: {str(e)}",
+            }
 
     async def ask_oracle_stream(
         self,
@@ -360,6 +482,16 @@ class OracleBridge:
         Returns:
             Search results with code chunks
         """
+        # Check if CodeRAG is initialized before searching
+        if not self._check_coderag_initialized(project):
+            logger.warning(f"CodeRAG not initialized for project: {project or 'default'}")
+            return {
+                "error": True,
+                "message": "CodeRAG index not initialized. Please run 'vlt coderag init' first.",
+                "suggestion": "Initialize the code index with: vlt coderag init --project <project>",
+                "results": [],
+            }
+
         args = ["coderag", "search", query, "--limit", str(limit)]
 
         if project:

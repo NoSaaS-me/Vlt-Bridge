@@ -48,6 +48,7 @@ import { AUTH_TOKEN_CHANGED_EVENT, isDemoSession, login } from '@/services/auth'
 import { synthesizeTts } from '@/services/tts';
 import { markdownToPlainText } from '@/lib/markdownToText';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
+import { getModelSettings } from '@/services/models';
 
 export function MainApp() {
   const navigate = useNavigate();
@@ -70,6 +71,8 @@ export function MainApp() {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isChatCenterView, setIsChatCenterView] = useState(false);
+  const [chatCenterMode, setChatCenterMode] = useState(false);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
   const [isSynthesizingTts, setIsSynthesizingTts] = useState(false);
   const ttsUrlRef = useRef<string | null>(null);
@@ -111,6 +114,19 @@ export function MainApp() {
     return () => {
       window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, handleAuthChange);
     };
+  }, []);
+
+  // Load chat center mode setting on mount
+  useEffect(() => {
+    const loadChatCenterMode = async () => {
+      try {
+        const settings = await getModelSettings();
+        setChatCenterMode(settings.chat_center_mode);
+      } catch (err) {
+        console.debug('Failed to load model settings for chat center mode:', err);
+      }
+    };
+    loadChatCenterMode();
   }, []);
 
   useEffect(() => {
@@ -284,6 +300,7 @@ export function MainApp() {
     setSelectedPath(path);
     setError(null);
     setIsEditMode(false); // Exit edit mode when switching notes
+    setIsChatCenterView(false); // Exit chat center view when switching notes
   };
 
   // Refresh all views when notes are changed
@@ -574,17 +591,40 @@ export function MainApp() {
               </Button>
             )}
             <Button
-              variant={isChatOpen ? "secondary" : "ghost"}
+              variant={(chatCenterMode ? isChatCenterView : isChatOpen) ? "secondary" : "ghost"}
               size="sm"
-              onClick={() => setIsChatOpen(!isChatOpen)}
-              title={isChatOpen ? "Close Chat" : "Open AI Planning Agent"}
+              onClick={() => {
+                if (chatCenterMode) {
+                  const newChatCenterView = !isChatCenterView;
+                  setIsChatCenterView(newChatCenterView);
+                  // Exit edit and graph modes when entering chat center view
+                  if (newChatCenterView) {
+                    setIsEditMode(false);
+                    setIsGraphView(false);
+                  }
+                } else {
+                  setIsChatOpen(!isChatOpen);
+                }
+              }}
+              title={
+                chatCenterMode
+                  ? (isChatCenterView ? "Close Chat" : "Open AI Planning Agent")
+                  : (isChatOpen ? "Close Chat" : "Open AI Planning Agent")
+              }
             >
               <MessageCircle className="h-4 w-4" />
             </Button>
             <Button
               variant={isGraphView ? "secondary" : "ghost"}
               size="sm"
-              onClick={() => setIsGraphView(!isGraphView)}
+              onClick={() => {
+                const newGraphView = !isGraphView;
+                setIsGraphView(newGraphView);
+                // Exit chat center view when entering graph view
+                if (newGraphView) {
+                  setIsChatCenterView(false);
+                }
+              }}
               title={isGraphView ? "Switch to Note View" : "Switch to Graph View"}
               className="transition-all duration-250 ease-out"
             >
@@ -735,7 +775,15 @@ export function MainApp() {
                 </div>
               )}
 
-              {isGraphView ? (
+              {isChatCenterView ? (
+                <ChatPanel
+                  onNavigateToNote={(path) => {
+                    handleSelectNote(path);
+                    setIsChatCenterView(false);
+                  }}
+                  onNotesChanged={refreshAll}
+                />
+              ) : isGraphView ? (
                 <GraphView
                   onSelectNote={(path) => {
                     handleSelectNote(path);
@@ -786,7 +834,7 @@ export function MainApp() {
             </div>
           </ResizablePanel>
 
-          {isChatOpen && (
+          {isChatOpen && !chatCenterMode && (
             <>
               <ResizableHandle withHandle />
               <ResizablePanel defaultSize={25} minSize={20} maxSize={40} className="animate-slide-in">
