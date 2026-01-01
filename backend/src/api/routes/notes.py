@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ...models.note import Note, NoteSummary, NoteUpdate, NoteCreate
+from ...models.note import Note, NoteSummary, NoteUpdate, NoteCreate, NotePreview
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
 from ...services.vault import VaultService
@@ -17,6 +18,38 @@ from ..middleware import AuthContext, get_auth_context
 router = APIRouter()
 
 DEMO_USER_ID = "demo-user"
+
+
+def _strip_markdown(text: str) -> str:
+    """Strip markdown formatting from text."""
+    # Remove code blocks
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    # Remove inline code
+    text = re.sub(r'`[^`]+`', '', text)
+    # Remove headers
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Remove bold/italic
+    text = re.sub(r'\*\*([^\*]+)\*\*', r'\1', text)
+    text = re.sub(r'\*([^\*]+)\*', r'\1', text)
+    text = re.sub(r'__([^_]+)__', r'\1', text)
+    text = re.sub(r'_([^_]+)_', r'\1', text)
+    # Remove links but keep text
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    # Remove wikilinks but keep text
+    text = re.sub(r'\[\[([^\]]+)\]\]', r'\1', text)
+    # Remove images
+    text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', '', text)
+    # Remove horizontal rules
+    text = re.sub(r'^[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
+    # Remove blockquotes
+    text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
+    # Remove list markers
+    text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
+    # Collapse multiple spaces/newlines
+    text = re.sub(r'\n\s*\n', '\n', text)
+    text = re.sub(r'  +', ' ', text)
+    return text.strip()
 
 
 def _ensure_write_allowed(user_id: str) -> None:
@@ -172,14 +205,14 @@ async def get_note(path: str, auth: AuthContext = Depends(get_auth_context)):
     user_id = auth.user_id
     vault_service = VaultService()
     db_service = DatabaseService()
-    
+
     try:
         # URL decode the path
         note_path = unquote(path)
-        
+
         # Read note from vault
         note_data = vault_service.read_note(user_id, note_path)
-        
+
         # Get version from index
         conn = db_service.connect()
         try:
@@ -191,7 +224,7 @@ async def get_note(path: str, auth: AuthContext = Depends(get_auth_context)):
             version = row["version"] if row else 1
         finally:
             conn.close()
-        
+
         # Parse metadata
         metadata = note_data.get("metadata", {})
         created = metadata.get("created")
@@ -218,7 +251,7 @@ async def get_note(path: str, auth: AuthContext = Depends(get_auth_context)):
                 updated = created
         except (ValueError, TypeError):
             updated = created
-        
+
         return Note(
             user_id=user_id,
             note_path=note_path,
@@ -234,6 +267,67 @@ async def get_note(path: str, auth: AuthContext = Depends(get_auth_context)):
         raise HTTPException(status_code=404, detail=f"Note not found: {path}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read note: {str(e)}")
+
+
+@router.get("/api/notes/{path:path}/preview", response_model=NotePreview)
+async def get_note_preview(path: str, auth: AuthContext = Depends(get_auth_context)):
+    """Get lightweight preview data for a note."""
+    user_id = auth.user_id
+    vault_service = VaultService()
+    db_service = DatabaseService()
+
+    try:
+        # URL decode the path
+        note_path = unquote(path)
+
+        # Read note from vault
+        note_data = vault_service.read_note(user_id, note_path)
+
+        # Parse metadata
+        metadata = note_data.get("metadata", {})
+        updated = metadata.get("updated")
+
+        # Parse updated timestamp
+        try:
+            if isinstance(updated, str):
+                updated = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+            elif isinstance(updated, datetime):
+                pass  # Already a datetime
+            else:
+                updated = datetime.now()
+        except (ValueError, TypeError):
+            updated = datetime.now()
+
+        # Get tags from metadata or database
+        tags = metadata.get("tags", [])
+        if not tags:
+            # Try to get tags from database
+            conn = db_service.connect()
+            try:
+                cursor = conn.execute(
+                    "SELECT tag FROM note_tags WHERE user_id = ? AND note_path = ?",
+                    (user_id, note_path),
+                )
+                rows = cursor.fetchall()
+                tags = [row["tag"] if hasattr(row, "keys") else row[0] for row in rows]
+            finally:
+                conn.close()
+
+        # Strip markdown and get first 200 chars
+        body = note_data.get("body", "")
+        stripped_body = _strip_markdown(body)
+        snippet = stripped_body[:200] if stripped_body else ""
+
+        return NotePreview(
+            title=note_data["title"],
+            snippet=snippet,
+            tags=tags if isinstance(tags, list) else [],
+            updated=updated,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Note not found: {path}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get note preview: {str(e)}")
 
 
 @router.put("/api/notes/{path:path}", response_model=Note)

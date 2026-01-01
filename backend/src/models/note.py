@@ -99,4 +99,13 @@ class NoteSummary(BaseModel):
     updated: datetime
 
 
-__all__ = ["NoteMetadata", "Note", "NoteCreate", "NoteUpdate", "NoteSummary"]
+class NotePreview(BaseModel):
+    """Lightweight preview data for hover cards."""
+
+    title: str = Field(..., description="Note title")
+    snippet: str = Field(..., description="First 200 chars of body (markdown stripped)")
+    tags: list[str] = Field(default_factory=list, description="Note tags")
+    updated: datetime = Field(..., description="Last update timestamp")
+
+
+__all__ = ["NoteMetadata", "Note", "NoteCreate", "NoteUpdate", "NoteSummary", "NotePreview"]
