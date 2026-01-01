@@ -42,9 +42,10 @@ interface OracleMessageWithId extends OracleMessage {
 interface ChatPanelProps {
   onNavigateToNote: (path: string) => void;
   onNotesChanged?: () => void;
+  projectId?: string | null;
 }
 
-export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged }: ChatPanelProps) {
+export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, projectId }: ChatPanelProps) {
   const navigate = useNavigate();
   const [messages, setMessages] = useState<OracleMessageWithId[]>([]);
   const [input, setInput] = useState('');
@@ -145,7 +146,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged }:
   const loadContextTrees = useCallback(async (restoreMessages = true) => {
     setIsLoadingTrees(true);
     try {
-      const response = await getContextTrees();
+      const response = await getContextTrees(projectId || undefined);
       setContextTrees(response.trees);
       setActiveTreeId(response.active_tree_id);
 
@@ -187,7 +188,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged }:
     } finally {
       setIsLoadingTrees(false);
     }
-  }, [loadMessagesFromTree]);
+  }, [loadMessagesFromTree, projectId]);
 
   useEffect(() => {
     loadContextTrees(true); // Restore messages on initial mount
@@ -196,7 +197,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged }:
   // Context tree handlers
   const handleNewRoot = useCallback(async () => {
     try {
-      const tree = await createTree();
+      const tree = await createTree(undefined, projectId || undefined);
       await loadContextTrees(false); // Don't restore messages, we're starting fresh
       setActiveTreeId(tree.root_id);
       setCurrentContextId(null); // Reset context for new tree
@@ -206,13 +207,13 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged }:
       console.error('Failed to create tree:', err);
       toast.error('Failed to create new conversation tree');
     }
-  }, [loadContextTrees, toast]);
+  }, [loadContextTrees, toast, projectId]);
 
   const handleCheckout = useCallback(async (nodeId: string) => {
     try {
       await checkoutNode(nodeId);
       // Reload trees and find the active tree to load messages
-      const response = await getContextTrees();
+      const response = await getContextTrees(projectId || undefined);
       setContextTrees(response.trees);
       setActiveTreeId(response.active_tree_id);
 
@@ -238,7 +239,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged }:
       console.error('Failed to checkout node:', err);
       toast.error('Failed to checkout conversation point');
     }
-  }, [loadMessagesFromTree, toast]);
+  }, [loadMessagesFromTree, toast, projectId]);
 
   const handleLabel = useCallback(async (nodeId: string, label: string) => {
     try {
@@ -543,6 +544,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged }:
           model: modelSettings?.oracle_model,
           thinking: modelSettings?.thinking_enabled,
           context_id: currentContextId ?? undefined, // Pass current context for conversation continuity
+          project_id: projectId || undefined, // Scope to current project
         },
         (chunk: OracleStreamChunk) => {
           chunkProcessedCount++;

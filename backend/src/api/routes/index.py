@@ -16,12 +16,18 @@ from ...models.project import DEFAULT_PROJECT_ID
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
 from ...services.vault import VaultService
+from ...services.config import get_config
 from ..middleware import AuthContext, get_auth_context
 
 DEMO_USER_ID = "demo-user"
 
 
 def _ensure_index_mutation_allowed(user_id: str) -> None:
+    # Allow index operations in local development mode
+    config = get_config()
+    if config.enable_local_mode:
+        return
+
     if user_id == DEMO_USER_ID:
         raise HTTPException(
             status_code=403,

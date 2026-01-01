@@ -18,9 +18,10 @@ import type { SearchResult } from '@/types/search';
 
 interface SearchBarProps {
   onSelectNote: (path: string) => void;
+  projectId?: string | null;
 }
 
-export function SearchBar({ onSelectNote }: SearchBarProps) {
+export function SearchBar({ onSelectNote, projectId }: SearchBarProps) {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -47,7 +48,7 @@ export function SearchBar({ onSelectNote }: SearchBarProps) {
     const performSearch = async () => {
       setIsLoading(true);
       try {
-        const searchResults = await searchNotes(debouncedQuery);
+        const searchResults = await searchNotes(debouncedQuery, projectId || undefined);
         setResults(searchResults);
         setIsOpen(searchResults.length > 0);
       } catch (error) {

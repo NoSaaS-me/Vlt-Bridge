@@ -13,6 +13,7 @@ export interface OracleRequest {
   thinking?: boolean;        // Enable thinking mode
   max_tokens?: number;       // Maximum tokens for context assembly
   context_id?: string;       // Context tree node ID for conversation continuity
+  project_id?: string;       // Project scope for multi-project support
 }
 
 /**

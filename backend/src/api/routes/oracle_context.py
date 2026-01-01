@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from ..middleware import AuthContext, get_auth_context
@@ -74,6 +74,7 @@ class ContextTreesListResponse(BaseModel):
 class CreateTreeRequest(BaseModel):
     """Request to create a new context tree."""
     label: Optional[str] = None
+    project_id: Optional[str] = "default"
 
 
 class LabelNodeRequest(BaseModel):
@@ -141,6 +142,7 @@ def tree_to_response(tree: ContextTree) -> ContextTreeResponse:
 
 @router.get("/trees", response_model=ContextTreesListResponse)
 async def get_context_trees(
+    project_id: Optional[str] = Query("default", description="Project ID to scope trees"),
     auth: AuthContext = Depends(get_auth_context),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
@@ -154,8 +156,7 @@ async def get_context_trees(
     - `active_tree_id`: Root ID of the most recently used tree
     """
     try:
-        # Get all trees for user (using default project for now)
-        project_id = "default"
+        # Get all trees for user within the specified project
         trees = tree_service.get_trees(auth.user_id, project_id)
         active_tree_id = tree_service.get_active_tree_id(auth.user_id, project_id)
 
@@ -263,7 +264,7 @@ async def create_context_tree(
 
         tree = tree_service.create_tree(
             user_id=auth.user_id,
-            project_id="default",
+            project_id=request.project_id or "default",
             label=request.label,
             max_nodes=max_nodes,
         )

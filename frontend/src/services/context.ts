@@ -15,8 +15,13 @@ import type {
 /**
  * Get all context trees for the current user
  */
-export async function getContextTrees(): Promise<ContextTreesResponse> {
-  return apiFetch<ContextTreesResponse>('/api/oracle/context/trees');
+export async function getContextTrees(projectId?: string): Promise<ContextTreesResponse> {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return apiFetch<ContextTreesResponse>(`/api/oracle/context/trees${query ? `?${query}` : ''}`);
 }
 
 /**
@@ -29,10 +34,10 @@ export async function getContextTree(rootId: string): Promise<ContextTreeData> {
 /**
  * Create a new context tree
  */
-export async function createTree(label?: string): Promise<ContextTree> {
+export async function createTree(label?: string, projectId?: string): Promise<ContextTree> {
   return apiFetch<ContextTree>('/api/oracle/context/trees', {
     method: 'POST',
-    body: JSON.stringify({ label }),
+    body: JSON.stringify({ label, project_id: projectId }),
   });
 }
 

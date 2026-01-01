@@ -158,22 +158,25 @@ export function MainApp() {
     }
   }, [ttsPlayerError, toast]);
 
-  // T083: Load directory tree on mount
+  // T083: Load directory tree on mount and when project changes
   // T119: Load index health
   useEffect(() => {
+    // Don't load until we have a project selected
+    if (!selectedProjectId) return;
+
     const loadData = async () => {
       setIsLoadingNotes(true);
       setError(null);
       try {
         // Load notes and index health in parallel
         const [notesList, health] = await Promise.all([
-          listNotes(),
-          getIndexHealth().catch(() => null), // Don't fail if health unavailable
+          listNotes(selectedProjectId),
+          getIndexHealth(selectedProjectId).catch(() => null), // Don't fail if health unavailable
         ]);
-        
+
         setNotes(notesList);
         setIndexHealth(health);
-        
+
         // Auto-select first note if available
         if (notesList.length > 0 && !selectedPath) {
           setSelectedPath(notesList[0].note_path);
@@ -191,7 +194,7 @@ export function MainApp() {
     };
 
     loadData();
-  }, []);
+  }, [selectedProjectId]);
 
   useEffect(() => {
     // Stop TTS when switching notes
@@ -217,8 +220,8 @@ export function MainApp() {
       setError(null);
       try {
         const [note, noteBacklinks] = await Promise.all([
-          getNote(selectedPath),
-          getBacklinks(selectedPath),
+          getNote(selectedPath, selectedProjectId || undefined),
+          getBacklinks(selectedPath, selectedProjectId || undefined),
         ]);
         setCurrentNote(note);
         setBacklinks(noteBacklinks);
@@ -295,7 +298,7 @@ export function MainApp() {
     // 4. Last resort: try search API (may return content matches)
     try {
       console.log(`[Wikilink] No local match, trying search API`);
-      const searchResults = await searchNotes(linkText);
+      const searchResults = await searchNotes(linkText, selectedProjectId || undefined);
 
       if (searchResults.length > 0) {
         // Only use search if result title/path is reasonably close to what we're looking for
@@ -381,10 +384,10 @@ export function MainApp() {
       // Small delay to ensure backend indexing completes
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Fetch fresh data
+      // Fetch fresh data for current project
       const [notesList, health] = await Promise.all([
-        listNotes(),
-        getIndexHealth().catch(() => null)
+        listNotes(selectedProjectId || undefined),
+        getIndexHealth(selectedProjectId || undefined).catch(() => null)
       ]);
 
       console.log('[MainApp] Fetched', notesList.length, 'notes');
@@ -416,7 +419,7 @@ export function MainApp() {
     setIsEditMode(false);
     setError(null);
     // Reload notes list to update modified timestamp
-    listNotes().then(setNotes).catch(console.error);
+    listNotes(selectedProjectId || undefined).then(setNotes).catch(console.error);
   };
 
   // Handle editor cancel
@@ -529,7 +532,7 @@ export function MainApp() {
           });
 
           // Refresh notes list
-          const notesList = await listNotes();
+          const notesList = await listNotes(selectedProjectId || undefined);
           setNotes(notesList);
 
           // Select the new note
@@ -593,7 +596,7 @@ export function MainApp() {
       });
 
       // Refresh notes list
-      const notesList = await listNotes();
+      const notesList = await listNotes(selectedProjectId || undefined);
       setNotes(notesList);
 
       toast.success(`Folder "${folderPath}" created successfully`);
@@ -638,7 +641,7 @@ export function MainApp() {
       await moveNote(oldPath, newPath);
 
       // Refresh notes list
-      const notesList = await listNotes();
+      const notesList = await listNotes(selectedProjectId || undefined);
       setNotes(notesList);
 
       // If moving currently selected note, update selection
@@ -885,7 +888,7 @@ export function MainApp() {
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
-                <SearchBar onSelectNote={handleSelectNote} />
+                <SearchBar onSelectNote={handleSelectNote} projectId={selectedProjectId} />
                 <Separator />
               </div>
               <div className="flex-1 overflow-hidden">
@@ -924,6 +927,7 @@ export function MainApp() {
                       setIsChatCenterView(false);
                     }}
                     onNotesChanged={refreshAll}
+                    projectId={selectedProjectId}
                   />
                 </ErrorBoundary>
               ) : isGraphView ? (
@@ -933,6 +937,7 @@ export function MainApp() {
                     setIsGraphView(false);
                   }}
                   refreshTrigger={graphRefreshTrigger}
+                  projectId={selectedProjectId}
                 />
               ) : (
                 isLoadingNote || !isFontReady ? (
@@ -1016,6 +1021,7 @@ export function MainApp() {
                   <ChatPanel
                     onNavigateToNote={handleWikilinkClick}
                     onNotesChanged={refreshAll}
+                    projectId={selectedProjectId}
                   />
                 </ErrorBoundary>
               </ResizablePanel>

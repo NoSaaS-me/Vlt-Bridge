@@ -9,9 +9,10 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 interface GraphViewProps {
   onSelectNote: (path: string) => void;
   refreshTrigger?: number;
+  projectId?: string | null;
 }
 
-export function GraphView({ onSelectNote, refreshTrigger }: GraphViewProps) {
+export function GraphView({ onSelectNote, refreshTrigger, projectId }: GraphViewProps) {
   console.log('[GraphView] Component rendered, refreshTrigger:', refreshTrigger);
 
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
@@ -60,12 +61,12 @@ export function GraphView({ onSelectNote, refreshTrigger }: GraphViewProps) {
   }, []);
 
   useEffect(() => {
-    console.log('[GraphView] useEffect triggered, refreshTrigger:', refreshTrigger);
+    console.log('[GraphView] useEffect triggered, refreshTrigger:', refreshTrigger, 'projectId:', projectId);
     const fetchData = async () => {
       try {
         console.log('[GraphView] Fetching graph data...');
         setIsLoading(true);
-        const graphData = await getGraphData();
+        const graphData = await getGraphData(projectId || undefined);
         console.log('[GraphView] Received graph data:', {
           nodes: graphData.nodes.length,
           links: graphData.links.length
@@ -80,7 +81,7 @@ export function GraphView({ onSelectNote, refreshTrigger }: GraphViewProps) {
       }
     };
     fetchData();
-  }, [refreshTrigger]);
+  }, [refreshTrigger, projectId]);
 
   // Configure forces when data is loaded
   useEffect(() => {
