@@ -191,3 +191,91 @@ async def get_logs(
 **Commit:** e5c8fd2
 
 **Status:** Phase 1 (Foundational Security Improvements) complete! Ready to begin Phase 2 (Protect Sensitive Routes)
+
+---
+
+### ✅ P2.1 - Protect notes CRUD routes (COMPLETED)
+
+Successfully updated all /api/notes endpoints to use require_auth_context instead of get_auth_context. All note operations (list, create, read, update, move) now require strict authentication without ENABLE_NOAUTH_MCP bypass.
+
+**Files Modified:**
+- backend/src/api/routes/notes.py
+
+---
+
+### ✅ P2.2 - Protect index routes (COMPLETED)
+
+Successfully updated /api/index/rebuild endpoint to use require_auth_context for strict authentication. Kept /api/index/health using get_auth_context for optional authentication.
+
+**Files Modified:**
+- backend/src/api/routes/index.py
+
+---
+
+### ✅ P2.3 - Protect search and graph routes (COMPLETED)
+
+Successfully updated all search and graph routes to use require_auth_context. Protected routes: /api/search, /api/backlinks/{path:path}, /api/tags, and /api/graph.
+
+**Files Modified:**
+- backend/src/api/routes/search.py
+- backend/src/api/routes/graph.py
+
+---
+
+### ✅ P2.4 - Protect Oracle routes (COMPLETED)
+
+Successfully updated all /api/oracle/* endpoints to use require_auth_context. Protected endpoints that consume OpenRouter API credits: query, stream, cancel, history, clear_history.
+
+**Files Modified:**
+- backend/src/api/routes/oracle.py
+
+---
+
+### ✅ P2.5 - Protect Oracle Context routes (COMPLETED)
+
+Successfully updated all /api/oracle/context/* endpoints to use require_auth_context. All 11 oracle context operations now require strict authentication.
+
+**Files Modified:**
+- backend/src/api/routes/oracle_context.py
+
+---
+
+### ✅ P2.6 - Protect Thread routes (COMPLETED)
+
+Successfully updated all /api/threads/* endpoints to use require_auth_context. All 10 thread operations now require strict authentication.
+
+**Files Modified:**
+- backend/src/api/routes/threads.py
+
+---
+
+### ✅ P2.7 - Protect RAG routes (COMPLETED)
+
+**Implementation Details:**
+- Updated both `/api/rag/status` and `/api/rag/chat` endpoints to use `require_auth_context`
+- These endpoints consume LLM resources (Gemini API) which cost money and must be protected
+- Changed import statement from `get_auth_context` to `require_auth_context`
+- Updated both endpoint functions to use strict authentication
+- Verified no remaining usage of `get_auth_context` in the file
+
+**Key Changes:**
+- `/api/rag/status`: Now requires strict authentication (was optional with demo-user fallback)
+- `/api/rag/chat`: Now requires strict authentication (was optional with demo-user fallback)
+
+**Why This Matters:**
+- The RAG chat endpoint uses Google Gemini API for embeddings and LLM responses
+- These are paid API resources that cost money per request
+- Without authentication, anyone could abuse these endpoints and rack up costs
+- Status endpoint reveals information about the RAG index which is user-specific
+
+**Verification:**
+- Grepped for `get_auth_context` in rag.py - no matches found
+- Code follows the same pattern as other protected routes (notes, oracle, threads)
+- Proper import structure maintained
+
+**Files Modified:**
+- backend/src/api/routes/rag.py
+
+**Commit:** 53c75bd
+
+**Status:** Ready for P2.8 (Protect TTS routes)
