@@ -13,7 +13,7 @@ from ...models.index import Tag
 from ...models.search import SearchResult
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
-from ..middleware import AuthContext, get_auth_context
+from ..middleware import AuthContext, require_auth_context
 
 router = APIRouter()
 
@@ -28,7 +28,7 @@ class BacklinkResult(BaseModel):
 @router.get("/api/search", response_model=list[SearchResult])
 async def search_notes(
     q: str = Query(..., min_length=1, max_length=256),
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_auth_context),
 ):
     """Full-text search across all notes."""
     user_id = auth.user_id
@@ -64,7 +64,7 @@ async def search_notes(
 
 
 @router.get("/api/backlinks/{path:path}", response_model=list[BacklinkResult])
-async def get_backlinks(path: str, auth: AuthContext = Depends(get_auth_context)):
+async def get_backlinks(path: str, auth: AuthContext = Depends(require_auth_context)):
     """Get all notes that link to this note."""
     user_id = auth.user_id
     indexer_service = IndexerService()
@@ -87,7 +87,7 @@ async def get_backlinks(path: str, auth: AuthContext = Depends(get_auth_context)
 
 
 @router.get("/api/tags", response_model=list[Tag])
-async def get_tags(auth: AuthContext = Depends(get_auth_context)):
+async def get_tags(auth: AuthContext = Depends(require_auth_context)):
     """Get all tags with usage counts."""
     user_id = auth.user_id
     indexer_service = IndexerService()
