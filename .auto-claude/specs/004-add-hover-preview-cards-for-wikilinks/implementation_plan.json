@@ -179,11 +179,12 @@
           "id": "4.4",
           "title": "Performance optimization",
           "description": "Add request deduplication (same link hovered multiple times quickly), abort stale requests on hover-out, limit concurrent preview fetches",
-          "status": "pending",
-          "notes": "",
+          "status": "completed",
+          "notes": "✓ Added inflightRequests Map to track and deduplicate ongoing preview fetch requests\n✓ Implemented AbortController to cancel stale requests when hover card closes\n✓ Added fetch queue with MAX_CONCURRENT_FETCHES limit (3 concurrent requests)\n✓ Created processQueue() helper function to manage queue when fetches complete\n✓ Enhanced fetchPreview logic with abort signal checks at each async step\n✓ Prevents redundant API calls when same link hovered multiple times quickly\n✓ Improves performance on notes with many wikilinks by limiting concurrent fetches\n✓ Committed: bc6a663",
           "files": [
             "frontend/src/lib/markdown.tsx"
-          ]
+          ],
+          "updated_at": "2026-01-01T15:45:00.000000+00:00"
         }
       ]
     },

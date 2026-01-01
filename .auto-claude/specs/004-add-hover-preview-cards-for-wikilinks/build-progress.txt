@@ -364,6 +364,82 @@
 
 ---
 
+### ✅ Subtask 4.3: Touch device handling
+**Commit:** c8ba1e2
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Added touch device support with long-press functionality using PointerEvents API
+- Implemented long-press timer (500ms threshold matching openDelay)
+- Added movement detection to cancel long-press if user scrolls/drags (10px threshold)
+- Handles pointer events: pointerdown, pointermove, pointerup, pointercancel
+- Only triggers on touch input (not mouse) via pointerType check
+- Cleanup effect properly clears timers on unmount
+- Integrated with existing hover/focus logic - preview shows on hover OR focus OR long-press
+- Preview dismisses when card closes via handleOpenChange
+
+**Code Pattern Compliance:**
+✓ Follows React patterns (useState, useRef, useEffect)
+✓ Proper TypeScript typing for all event handlers
+✓ Non-intrusive to existing desktop hover behavior
+✓ Cleanup prevents memory leaks
+
+**Benefits:**
+- Touch device users can now access preview functionality
+- Long-press gesture is intuitive and matches mobile UX patterns
+- Movement detection prevents accidental triggers during scrolling
+- Seamless integration with existing keyboard and mouse interactions
+
+---
+
+### ✅ Subtask 4.4: Performance optimization
+**Commit:** bc6a663
+**Date:** 2026-01-01
+
+**Implementation Details:**
+- Added `inflightRequests` Map to track and deduplicate ongoing preview fetch requests
+  - Maps linkText → Promise<NotePreview | null>
+  - Prevents multiple simultaneous requests for the same wikilink
+  - Requests in progress are reused when same link hovered quickly
+
+- Implemented `AbortController` for canceling stale requests
+  - Creates new AbortController when hover card opens
+  - Aborts request when card closes (shouldBeOpen becomes false)
+  - Checks abort signal after each async operation
+  - Cleanup function aborts controller on unmount
+
+- Added fetch queue with concurrency limiting
+  - `MAX_CONCURRENT_FETCHES` set to 3 simultaneous requests
+  - `fetchQueue` array holds pending fetch operations
+  - `activeFetchCount` tracks current active fetches
+  - `processQueue()` helper processes next queued fetch when slot available
+  - Completed fetches decrease count and trigger queue processing
+
+- Enhanced `fetchPreview` logic with abort checks
+  - Checks `abortController.signal.aborted` after each await
+  - Early returns on abort prevent unnecessary state updates
+  - Ignores abort errors in catch block
+  - Only updates loading state if not aborted
+
+**Code Pattern Compliance:**
+✓ Follows React patterns (useRef, useEffect cleanup)
+✓ Proper TypeScript typing for all maps and promises
+✓ Module-level state for cross-component deduplication
+✓ Non-blocking queue processing
+
+**Performance Benefits:**
+- Prevents redundant API calls when same link hovered multiple times quickly
+- Reduces server load by limiting concurrent requests to 3
+- Improves responsiveness by aborting unnecessary in-flight requests
+- Efficient memory usage with proper cleanup of inflight request tracking
+- Scales well on notes with many wikilinks (10+)
+
+**Testing:**
+- TypeScript compilation successful (no syntax errors)
+- Ready for manual testing with notes containing multiple wikilinks
+
+---
+
 ## In Progress
 
 None
@@ -384,8 +460,8 @@ None
 ### Phase 4: UX Polish & Accessibility
 - [x] 4.1: Keyboard accessibility
 - [x] 4.2: Animation polish
-- [ ] 4.3: Touch device handling
-- [ ] 4.4: Performance optimization
+- [x] 4.3: Touch device handling
+- [x] 4.4: Performance optimization
 
 ### Phase 5: Testing & Validation
 - [ ] 5.1: Manual testing checklist
