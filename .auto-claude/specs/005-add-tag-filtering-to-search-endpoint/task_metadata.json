@@ -1,0 +1,31 @@
+{
+  "sourceType": "ideation",
+  "ideationType": "code_improvements",
+  "ideaId": "ci-005",
+  "rationale": "The IndexerService already maintains a note_tags table with tag indexing (see indexer.py lines 130-137). The search_notes method uses FTS5 for full-text search. Tags are displayed in NoteViewer and retrieved via /api/tags but cannot be used as search filters. The data model supports this - just needs query extension.",
+  "category": "feature",
+  "estimatedEffort": "small",
+  "complexity": "small",
+  "affectedFiles": [
+    "backend/src/services/indexer.py",
+    "backend/src/api/routes/search.py",
+    "frontend/src/services/api.ts",
+    "frontend/src/components/SearchBar.tsx"
+  ],
+  "model": "opus",
+  "thinkingLevel": "high",
+  "isAutoProfile": true,
+  "phaseModels": {
+    "spec": "opus",
+    "planning": "opus",
+    "coding": "opus",
+    "qa": "opus"
+  },
+  "phaseThinking": {
+    "spec": "ultrathink",
+    "planning": "high",
+    "coding": "low",
+    "qa": "low"
+  },
+  "requireReviewBeforeCoding": false
+}

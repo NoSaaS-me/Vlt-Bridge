@@ -1,0 +1,15 @@
+{
+  "discovered_files": {
+    "backend/src/services/indexer.py": {
+      "description": "IndexerService.search_notes() uses FTS5 with bm25() scoring + recency bonus. The note_tags table stores (user_id, note_path, tag) with indexes on user_tag and user_path. Tag filtering can be added via JOIN with GROUP BY/HAVING for AND logic.",
+      "category": "search",
+      "discovered_at": "2026-01-01T14:14:40.395747+00:00"
+    },
+    "backend/src/services/database.py": {
+      "description": "note_tags table has PRIMARY KEY (user_id, note_path, tag) and index idx_tags_user_tag for efficient tag lookups. Tags are normalized to lowercase before storage.",
+      "category": "database",
+      "discovered_at": "2026-01-01T14:14:40.400584+00:00"
+    }
+  },
+  "last_updated": "2026-01-01T14:14:40.400592+00:00"
+}

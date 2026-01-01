@@ -1,0 +1,34 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/005-add-tag-filtering-to-search-endpoint/**)",
+      "Write(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/005-add-tag-filtering-to-search-endpoint/**)",
+      "Edit(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/005-add-tag-filtering-to-search-endpoint/**)",
+      "Glob(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/005-add-tag-filtering-to-search-endpoint/**)",
+      "Grep(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/005-add-tag-filtering-to-search-endpoint/**)",
+      "Read(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/005-add-tag-filtering-to-search-endpoint/.auto-claude/specs/005-add-tag-filtering-to-search-endpoint/**)",
+      "Write(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/005-add-tag-filtering-to-search-endpoint/.auto-claude/specs/005-add-tag-filtering-to-search-endpoint/**)",
+      "Edit(/mnt/Samsung2tb/Projects/00Tooling/Vlt-Bridge/.worktrees/005-add-tag-filtering-to-search-endpoint/.auto-claude/specs/005-add-tag-filtering-to-search-endpoint/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__get-library-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}

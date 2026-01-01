@@ -1,0 +1,31 @@
+# Build Progress: Add Tag Filtering to Search Endpoint
+
+## Status: Planning Complete
+
+## Implementation Plan Created
+- 5 phases with 7 subtasks identified
+- Files to modify:
+  - backend/src/services/indexer.py (core search logic)
+  - backend/src/models/search.py (add tags field)
+  - backend/src/api/routes/search.py (API endpoint)
+  - backend/src/mcp/server.py (MCP tool)
+  - backend/tests/unit/test_indexer_search.py (unit tests)
+  - backend/tests/integration/test_search_api.py (integration tests)
+
+## Key Technical Decisions
+- Tag filtering uses AND logic (notes must have ALL specified tags)
+- Tags are normalized to lowercase for case-insensitive matching
+- Uses existing note_tags table with idx_tags_user_tag index
+- FTS5 + tag JOIN query structure for efficient filtering
+
+## Progress Log
+- [2026-01-01] Created implementation_plan.json with detailed phases and subtasks
+- [2026-01-01] Analyzed existing codebase structure and test patterns
+
+## Next Steps
+1. T001: Extend IndexerService.search_notes() with tags parameter
+2. T002: Update SearchRequest model
+3. T003: Update /api/search endpoint
+4. T004: Update MCP search_notes tool
+5. T005-T006: Add tests
+6. T007: Run full test suite

@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "spec": "005-add-tag-filtering-to-search-endpoint",
+  "state": "complete",
+  "subtasks": {
+    "completed": 7,
+    "total": 7,
+    "in_progress": 0,
+    "failed": 0
+  },
+  "phase": {
+    "current": "Verification",
+    "id": null,
+    "total": 1
+  },
+  "workers": {
+    "active": 0,
+    "max": 1
+  },
+  "session": {
+    "number": 8,
+    "started_at": "2026-01-01T08:12:16.827080"
+  },
+  "last_update": "2026-01-01T08:37:33.408596"
+}
