@@ -6,8 +6,10 @@
 import React, { useState } from 'react';
 import type { Components } from 'react-markdown';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
+import { Badge } from '@/components/ui/badge';
 import { resolveWikilink, getNotePreview } from '@/services/api';
 import type { NotePreview } from '@/types/note';
+import { formatDistanceToNow } from '@/lib/utils';
 
 export interface WikilinkComponentProps {
   linkText: string;
@@ -156,8 +158,33 @@ function WikilinkPreview({
             Note not found
           </div>
         ) : preview ? (
-          <div className="text-sm text-muted-foreground">
-            {preview.snippet}
+          // T031: Rich preview card
+          <div className="space-y-3">
+            {/* Title */}
+            <h4 className="font-semibold text-base leading-tight">
+              {preview.title}
+            </h4>
+
+            {/* Snippet text (max 3 lines) */}
+            <p className="text-sm text-muted-foreground line-clamp-3 leading-relaxed">
+              {preview.snippet}
+            </p>
+
+            {/* Tags (max 3) */}
+            {preview.tags && preview.tags.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap">
+                {preview.tags.slice(0, 3).map((tag) => (
+                  <Badge key={tag} variant="secondary" className="text-xs">
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            {/* Updated timestamp footer */}
+            <div className="text-xs text-muted-foreground pt-2 border-t">
+              Updated {formatDistanceToNow(preview.updated)}
+            </div>
           </div>
         ) : null}
       </HoverCardContent>
