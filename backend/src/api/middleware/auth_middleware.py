@@ -22,6 +22,13 @@ def _unauthorized(message: str, error: str = "unauthorized") -> HTTPException:
     )
 
 
+def _forbidden(message: str, error: str = "forbidden") -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": error, "message": message},
+    )
+
+
 @dataclass
 class AuthContext:
     """Context extracted from a bearer token."""
@@ -98,6 +105,34 @@ def require_auth_context(
     return AuthContext(user_id=payload.sub, token=token, payload=payload)
 
 
+def require_admin_context(
+    authorization: Annotated[Optional[str], Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """
+    Extract and validate the user_id from a Bearer token, then verify admin privileges.
+
+    This dependency enforces strict authentication (no demo-user fallback) and then
+    checks if the authenticated user has admin privileges.
+
+    Use this for administrative routes like system logs, user management, etc.
+
+    Raises HTTPException(401) if the header is missing/invalid.
+    Raises HTTPException(403) if the user is not an admin.
+    """
+    # First, enforce strict authentication
+    auth_context = require_auth_context(authorization)
+
+    # Then, check if the user is an admin
+    config = get_config()
+    if auth_context.user_id not in config.admin_user_ids:
+        raise _forbidden(
+            "Admin privileges required",
+            error="insufficient_permissions"
+        )
+
+    return auth_context
+
+
 def extract_user_id_from_jwt(
     authorization: Annotated[Optional[str], Header(alias="Authorization")] = None,
 ) -> str:
@@ -105,4 +140,4 @@ def extract_user_id_from_jwt(
     return get_auth_context(authorization).user_id
 
 
-__all__ = ["AuthContext", "extract_user_id_from_jwt", "get_auth_context", "require_auth_context"]
+__all__ = ["AuthContext", "extract_user_id_from_jwt", "get_auth_context", "require_auth_context", "require_admin_context"]

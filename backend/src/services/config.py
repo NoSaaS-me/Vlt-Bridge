@@ -61,6 +61,10 @@ class AppConfig(BaseModel):
         default="http://localhost:5173",
         description="Base URL of the HF Space or local dev server"
     )
+    admin_user_ids: set[str] = Field(
+        default_factory=set,
+        description="Set of user IDs with admin privileges (from ADMIN_USER_IDS env var)"
+    )
 
     @field_validator("vault_base_path", mode="before")
     @classmethod
@@ -112,6 +116,10 @@ def get_config() -> AppConfig:
     google_api_key = _read_env("GOOGLE_API_KEY")
     llamaindex_persist_dir = _read_env("LLAMAINDEX_PERSIST_DIR", str(PROJECT_ROOT / "data" / "llamaindex"))
 
+    # Parse admin user IDs from comma-separated list
+    admin_user_ids_str = _read_env("ADMIN_USER_IDS", "")
+    admin_user_ids = {uid.strip() for uid in admin_user_ids_str.split(",") if uid.strip()} if admin_user_ids_str else set()
+
     config = AppConfig(
         jwt_secret_key=jwt_secret,
         enable_local_mode=enable_local_mode,
@@ -125,6 +133,7 @@ def get_config() -> AppConfig:
         hf_oauth_client_id=hf_client_id,
         hf_oauth_client_secret=hf_client_secret,
         hf_space_url=hf_space_url,
+        admin_user_ids=admin_user_ids,
     )
     # Ensure vault base directory and index persist directory exist for downstream services.
     config.vault_base_path.mkdir(parents=True, exist_ok=True)
