@@ -65,6 +65,7 @@ export function resetSlugCache(): void {
 
 /**
  * T021-T026: Wikilink preview component with HoverCard
+ * T090: Keyboard accessibility - Tab to focus, Enter to navigate, Escape to dismiss
  */
 function WikilinkPreview({
   linkText,
@@ -79,10 +80,14 @@ function WikilinkPreview({
   const [isLoading, setIsLoading] = useState(false);
   const [isBroken, setIsBroken] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
 
-  // T023: Fetch preview when hover card opens
+  // T090: Control open state based on hover OR focus
+  const shouldBeOpen = isOpen || isFocused;
+
+  // T023: Fetch preview when hover card opens (hover or focus)
   React.useEffect(() => {
-    if (!isOpen) return;
+    if (!shouldBeOpen) return;
 
     // Start loading
     setIsLoading(true);
@@ -135,16 +140,28 @@ function WikilinkPreview({
     };
 
     fetchPreview();
-  }, [isOpen, linkText]);
+  }, [shouldBeOpen, linkText]);
 
   return (
-    <HoverCard openDelay={500} closeDelay={100} onOpenChange={setIsOpen}>
+    <HoverCard
+      openDelay={500}
+      closeDelay={100}
+      open={shouldBeOpen}
+      onOpenChange={setIsOpen}
+    >
       <HoverCardTrigger asChild>
-        <span onClick={onClick}>
+        <span
+          onClick={onClick}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
+        >
           {children}
         </span>
       </HoverCardTrigger>
-      <HoverCardContent className={`w-80 ${isBroken ? 'border-destructive/50 bg-destructive/5' : ''}`}>
+      <HoverCardContent
+        className={`w-80 ${isBroken ? 'border-destructive/50 bg-destructive/5' : ''}`}
+        aria-label={isBroken ? `Note "${linkText}" not found` : `Preview of note "${linkText}"`}
+      >
         {isLoading ? (
           // T025: Loading skeleton matching preview card layout
           <div className="space-y-3">
@@ -237,6 +254,7 @@ function WikilinkPreview({
 
 /**
  * Custom renderer for wikilinks in markdown
+ * T090: Enhanced with keyboard accessibility support
  */
 export function createWikilinkComponent(
   onWikilinkClick?: (linkText: string) => void
@@ -268,6 +286,8 @@ export function createWikilinkComponent(
                   onWikilinkClick?.(linkText);
                 }
               }}
+              aria-label={`Link to note: ${linkText}. Press Enter to navigate, or focus to see preview.`}
+              aria-haspopup="dialog"
               title={`Go to ${linkText}`}
             >
               {children}
@@ -361,6 +381,7 @@ export function createWikilinkComponent(
 
 /**
  * Render broken wikilinks with distinct styling
+ * T090: Enhanced with keyboard accessibility
  */
 export function renderBrokenWikilink(
   linkText: string,
@@ -370,8 +391,15 @@ export function renderBrokenWikilink(
     <span
       className="wikilink-broken text-destructive border-b border-dashed border-destructive cursor-pointer hover:bg-destructive/10"
       onClick={onCreate}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onCreate?.();
+        }
+      }}
       role="link"
       tabIndex={0}
+      aria-label={`Broken link to note: ${linkText}. Press Enter to create this note.`}
       title={`Note "${linkText}" not found. Click to create.`}
     >
       [[{linkText}]]
