@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, Optional
+from enum import Enum
+from typing import Annotated, Callable, Optional
 
 from fastapi import Header, HTTPException, status
 
@@ -27,6 +28,19 @@ def _forbidden(message: str, error: str = "forbidden") -> HTTPException:
         status_code=status.HTTP_403_FORBIDDEN,
         detail={"error": error, "message": message},
     )
+
+
+class AuthMode(Enum):
+    """
+    Authentication mode for API routes.
+
+    - OPTIONAL: Authentication is optional; falls back to demo-user if ENABLE_NOAUTH_MCP=true
+    - STRICT: Authentication is required; never falls back to demo-user
+    - ADMIN: Authentication is required AND user must have admin privileges
+    """
+    OPTIONAL = "optional"
+    STRICT = "strict"
+    ADMIN = "admin"
 
 
 @dataclass
@@ -140,4 +154,54 @@ def extract_user_id_from_jwt(
     return get_auth_context(authorization).user_id
 
 
-__all__ = ["AuthContext", "extract_user_id_from_jwt", "get_auth_context", "require_auth_context", "require_admin_context"]
+def get_auth_dependency(mode: AuthMode) -> Callable[[Optional[str]], AuthContext]:
+    """
+    Factory function to get the appropriate authentication dependency based on mode.
+
+    This provides a more explicit and type-safe way to specify authentication requirements
+    for routes.
+
+    Args:
+        mode: The authentication mode (OPTIONAL, STRICT, or ADMIN)
+
+    Returns:
+        The appropriate authentication dependency function
+
+    Raises:
+        ValueError: If an unknown auth mode is provided
+
+    Example:
+        @router.get("/api/notes")
+        async def list_notes(auth: AuthContext = Depends(get_auth_dependency(AuthMode.STRICT))):
+            # This route requires strict authentication
+            ...
+
+        @router.get("/api/system/logs")
+        async def get_logs(auth: AuthContext = Depends(get_auth_dependency(AuthMode.ADMIN))):
+            # This route requires admin privileges
+            ...
+
+        @router.get("/api/index/health")
+        async def health_check(auth: AuthContext = Depends(get_auth_dependency(AuthMode.OPTIONAL))):
+            # This route allows optional authentication
+            ...
+    """
+    if mode == AuthMode.OPTIONAL:
+        return get_auth_context
+    elif mode == AuthMode.STRICT:
+        return require_auth_context
+    elif mode == AuthMode.ADMIN:
+        return require_admin_context
+    else:
+        raise ValueError(f"Unknown auth mode: {mode}")
+
+
+__all__ = [
+    "AuthContext",
+    "AuthMode",
+    "extract_user_id_from_jwt",
+    "get_auth_context",
+    "get_auth_dependency",
+    "require_auth_context",
+    "require_admin_context",
+]
