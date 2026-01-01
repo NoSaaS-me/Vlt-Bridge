@@ -16,7 +16,14 @@ export interface WikilinkComponentProps {
 }
 
 /**
- * T019: Preview cache for wikilink tooltips
+ * T019: Resolution cache - maps wikilink text to resolved note path
+ * Longer-lived since note paths rarely change
+ */
+const resolutionCache = new Map<string, string | null>();
+
+/**
+ * T019: Preview cache - maps note path to preview data
+ * Can be invalidated more frequently as note content changes
  */
 const previewCache = new Map<string, NotePreview>();
 
@@ -75,35 +82,45 @@ function WikilinkPreview({
   React.useEffect(() => {
     if (!isOpen) return;
 
-    // T028: Check cache first
-    if (previewCache.has(linkText)) {
-      setPreview(previewCache.get(linkText)!);
-      setIsLoading(false);
-      setIsBroken(false);
-      return;
-    }
-
     // Start loading
     setIsLoading(true);
 
     const fetchPreview = async () => {
       try {
-        // First resolve the wikilink to get its target path
-        const resolution = await resolveWikilink(linkText);
+        // Step 1: Resolve wikilink text to note path (with caching)
+        let targetPath: string | null = null;
 
-        if (!resolution.is_resolved || !resolution.target_path) {
-          // Resolution failed - broken link
+        if (resolutionCache.has(linkText)) {
+          // Use cached resolution
+          targetPath = resolutionCache.get(linkText)!;
+        } else {
+          // Resolve and cache the result
+          const resolution = await resolveWikilink(linkText);
+          targetPath = resolution.is_resolved ? resolution.target_path : null;
+          resolutionCache.set(linkText, targetPath);
+        }
+
+        // Check if resolution failed (broken link)
+        if (!targetPath) {
           setIsBroken(true);
           setPreview(null);
           setIsLoading(false);
           return;
         }
 
-        // Fetch the preview data for the resolved note
-        const previewData = await getNotePreview(resolution.target_path);
+        // Step 2: Fetch preview data for resolved path (with caching)
+        let previewData: NotePreview;
 
-        // T019: Cache the preview
-        previewCache.set(linkText, previewData);
+        if (previewCache.has(targetPath)) {
+          // Use cached preview
+          previewData = previewCache.get(targetPath)!;
+        } else {
+          // Fetch and cache preview data
+          previewData = await getNotePreview(targetPath);
+          previewCache.set(targetPath, previewData);
+        }
+
+        // Display the preview
         setPreview(previewData);
         setIsBroken(false);
       } catch (error) {
