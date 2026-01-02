@@ -231,6 +231,8 @@ class OracleAgent:
 
         # Use provided project_id or fall back to init value
         effective_project_id = project_id or self.project_id or "default"
+        # Update instance variable so tool injection uses correct project
+        self.project_id = effective_project_id
 
         # Check cancellation at start
         if self._cancelled:
@@ -307,6 +309,27 @@ class OracleAgent:
         except Exception as e:
             logger.warning(f"Failed to load vault files for system prompt: {e}")
 
+        # Fetch threads for this project to include in system prompt
+        threads: List[Dict[str, Any]] = []
+        try:
+            thread_response = tool_executor.threads.list_threads(
+                user_id,
+                project_id=effective_project_id,
+                status="active",
+                limit=50,
+            )
+            threads = [
+                {
+                    "thread_id": t.thread_id,
+                    "name": t.name,
+                    "entry_count": None,  # Could be expensive to fetch
+                }
+                for t in thread_response.threads
+            ]
+            logger.info(f"[THREADS] Loaded {len(threads)} threads for project {effective_project_id}")
+        except Exception as e:
+            logger.warning(f"Failed to load threads for system prompt: {e}")
+
         # Build initial messages
         system_prompt = prompt_loader.load(
             "oracle/system.md",
@@ -314,6 +337,7 @@ class OracleAgent:
                 "project_id": effective_project_id,
                 "user_id": user_id,
                 "vault_files": vault_files,
+                "threads": threads,
             },
         )
 
@@ -385,78 +409,94 @@ class OracleAgent:
         # Track accumulated content across turns for max-turns fallback
         accumulated_content = ""
         accumulated_thinking = ""
+        exchange_saved = False  # Track if we've already saved
 
-        # Agent loop
-        for turn in range(self.MAX_TURNS):
-            # Check cancellation before each turn
-            if self._cancelled:
-                logger.info(f"Agent cancelled at turn {turn + 1}")
-                yield OracleStreamChunk(type="error", error="Cancelled by user")
-                return
-
-            logger.debug(f"Agent turn {turn + 1}/{self.MAX_TURNS}")
-
-            async for chunk in self._agent_turn(
-                messages=messages,
-                tools=tools,
-                stream=stream,
-                thinking=thinking,
-                max_tokens=max_tokens,
-                user_id=user_id,
-            ):
-                # Check cancellation during streaming
+        try:
+            # Agent loop
+            for turn in range(self.MAX_TURNS):
+                # Check cancellation before each turn
                 if self._cancelled:
-                    logger.info("Agent cancelled during streaming")
+                    logger.info(f"Agent cancelled at turn {turn + 1}")
                     yield OracleStreamChunk(type="error", error="Cancelled by user")
                     return
 
-                # Track content and thinking for max-turns fallback
-                if chunk.type == "content" and chunk.content:
-                    accumulated_content += chunk.content
-                elif chunk.type == "thinking" and chunk.content:
-                    accumulated_thinking += chunk.content + "\n"
+                logger.debug(f"Agent turn {turn + 1}/{self.MAX_TURNS}")
 
-                yield chunk
+                async for chunk in self._agent_turn(
+                    messages=messages,
+                    tools=tools,
+                    stream=stream,
+                    thinking=thinking,
+                    max_tokens=max_tokens,
+                    user_id=user_id,
+                ):
+                    # Check cancellation during streaming
+                    if self._cancelled:
+                        logger.info("Agent cancelled during streaming")
+                        yield OracleStreamChunk(type="error", error="Cancelled by user")
+                        return
 
-                # Check if we're done
-                if chunk.type == "done":
-                    return
+                    # Track content and thinking for max-turns fallback
+                    if chunk.type == "content" and chunk.content:
+                        accumulated_content += chunk.content
+                    elif chunk.type == "thinking" and chunk.content:
+                        accumulated_thinking += chunk.content + "\n"
 
-                # If we got an error, stop
-                if chunk.type == "error":
-                    return
+                    yield chunk
 
-        # Max turns reached - yield accumulated content before error
-        logger.warning(f"Max turns ({self.MAX_TURNS}) reached with accumulated content: {len(accumulated_content)} chars")
+                    # Check if we're done - mark as saved since _agent_turn handles it
+                    if chunk.type == "done":
+                        exchange_saved = True
+                        return
 
-        if accumulated_content:
-            # Yield what we have so far before the warning
+                    # If we got an error, stop
+                    if chunk.type == "error":
+                        return
+
+            # Max turns reached - yield accumulated content before error
+            logger.warning(f"Max turns ({self.MAX_TURNS}) reached with accumulated content: {len(accumulated_content)} chars")
+
+            if accumulated_content:
+                # Yield what we have so far before the warning
+                yield OracleStreamChunk(
+                    type="content",
+                    content=f"\n\n---\n*Note: Response incomplete due to turn limit ({self.MAX_TURNS} turns). Here is what was gathered:*\n\n",
+                )
+            elif accumulated_thinking:
+                # If no content but we have thinking, summarize what was found
+                yield OracleStreamChunk(
+                    type="content",
+                    content=f"*Response incomplete after {self.MAX_TURNS} turns. Last reasoning:\n{accumulated_thinking[-500:]}*",
+                )
+
+            # Save what we have as a partial exchange
+            if accumulated_content or accumulated_thinking:
+                context_id = self._save_exchange(
+                    question=question,
+                    answer=accumulated_content or f"*Partial response - thinking: {accumulated_thinking[:500]}*",
+                )
+                exchange_saved = True
+            else:
+                context_id = None
+
             yield OracleStreamChunk(
-                type="content",
-                content=f"\n\n---\n*Note: Response incomplete due to turn limit ({self.MAX_TURNS} turns). Here is what was gathered:*\n\n",
-            )
-        elif accumulated_thinking:
-            # If no content but we have thinking, summarize what was found
-            yield OracleStreamChunk(
-                type="content",
-                content=f"*Response incomplete after {self.MAX_TURNS} turns. Last reasoning:\n{accumulated_thinking[-500:]}*",
+                type="done",
+                tokens_used=None,
+                model_used=self.model,
+                context_id=context_id,
             )
 
-        # Save what we have as a partial exchange
-        if accumulated_content or accumulated_thinking:
-            context_id = self._save_exchange(
-                question=question,
-                answer=accumulated_content or f"*Partial response - thinking: {accumulated_thinking[:500]}*",
-            )
-        else:
-            context_id = None
-
-        yield OracleStreamChunk(
-            type="done",
-            tokens_used=None,
-            model_used=self.model,
-            context_id=context_id,
-        )
+        finally:
+            # Ensure we save something if the connection was dropped mid-response
+            if not exchange_saved and (accumulated_content or accumulated_thinking or question):
+                logger.info(f"Saving partial exchange due to early termination (content={len(accumulated_content)}, thinking={len(accumulated_thinking)})")
+                try:
+                    self._save_exchange(
+                        question=question,
+                        answer=accumulated_content or accumulated_thinking[:500] or "*Response interrupted*",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to save partial exchange in finally block: {e}")
 
     async def _agent_turn(
         self,
@@ -897,8 +937,13 @@ class OracleAgent:
 
         # Tools that should receive project_id context for scoping
         PROJECT_SCOPED_TOOLS = {
+            # Thread tools
             "thread_list", "thread_read", "thread_seek", "thread_push",
+            # Code tools
             "search_code", "coderag_status",
+            # Vault tools
+            "vault_read", "vault_write", "vault_search", "vault_list",
+            "vault_move", "vault_create_index",
         }
 
         # Execute all tools in parallel
@@ -1079,18 +1124,42 @@ class OracleAgent:
         """Format a tool error message for the agent.
 
         Provides structured error information that helps the agent:
-        - Understand what failed
+        - Understand what failed and why
+        - Categorize the error (configuration vs user input vs runtime)
         - Decide whether to retry with different parameters
         - Choose an alternative approach
 
+        The error includes:
+        - error: The raw error message
+        - category: One of configuration_error, user_input_error, resource_error, network_error, etc.
+        - suggestion: Context-specific advice on how to recover
+        - failed_arguments: The arguments that were passed (for debugging)
+
         Args:
             tool_name: Name of the failed tool
-            error: Error message
+            error: Error message from tool execution
             arguments: Arguments that were passed to the tool
 
         Returns:
-            JSON-formatted error message
+            JSON-formatted error message with structured information
         """
+        # Try to parse if error is already JSON (from tool_executor)
+        error_data = {}
+        if isinstance(error, str) and error.startswith('{'):
+            try:
+                error_data = json.loads(error)
+            except json.JSONDecodeError:
+                pass
+
+        # If we successfully parsed JSON from tool_executor, use it
+        if error_data and "category" in error_data:
+            # Merge in the suggestion from oracle agent level
+            if "suggestion" not in error_data:
+                error_data["suggestion"] = self._get_error_suggestion(tool_name, error)
+            error_data["failed_arguments"] = arguments
+            return json.dumps(error_data)
+
+        # Fallback: format as a simple error with oracle-level suggestion
         return json.dumps({
             "error": True,
             "tool": tool_name,

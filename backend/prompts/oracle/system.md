@@ -272,6 +272,20 @@ When referencing vault documents with [[wikilinks]], use these actual file paths
 **Important**: Only use paths from this list when creating wikilinks. Do not hallucinate or guess file paths.
 {% endif %}
 
+{% if threads %}
+---
+
+## Available Threads
+
+Development memory threads for this project:
+
+{% for thread in threads %}
+- **{{ thread.thread_id }}** {% if thread.entry_count %}({{ thread.entry_count }} entries){% endif %}
+{% endfor %}
+
+Use `thread_read` to access thread contents and `thread_seek` to search across all threads.
+{% endif %}
+
 ---
 
 Remember: You don't know what you don't know. Use your tools to verify before answering. When uncertain, ask clarifying questions rather than guessing.

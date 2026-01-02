@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..models.project import DEFAULT_PROJECT_ID
 from ..models.thread import ThreadEntry
 from .database import DatabaseService
 from .indexer import IndexerService
@@ -260,13 +261,57 @@ class ToolExecutor:
             })
         except FileNotFoundError as e:
             logger.warning(f"Tool {name} file not found: {e}")
-            return json.dumps({"error": f"File not found: {str(e)}"})
+            return json.dumps({
+                "error": f"File not found: {str(e)}",
+                "category": "file_error",
+                "tool": name,
+            })
         except ValueError as e:
             logger.warning(f"Tool {name} validation error: {e}")
-            return json.dumps({"error": f"Invalid arguments: {str(e)}"})
+            return json.dumps({
+                "error": f"Invalid arguments: {str(e)}",
+                "category": "user_input_error",
+                "tool": name,
+                "suggestion": "Check the tool arguments and ensure all required parameters are provided with correct types.",
+            })
+        except (NameError, AttributeError) as e:
+            # Configuration/import errors (e.g., missing constants, bad imports)
+            logger.exception(f"Tool {name} configuration error: {e}")
+            error_msg = str(e)
+            return json.dumps({
+                "error": f"Backend configuration issue: {error_msg}",
+                "category": "configuration_error",
+                "tool": name,
+                "suggestion": "This appears to be a backend setup problem, not an issue with your request. Check that all required modules and constants are properly initialized.",
+                "details": error_msg,
+            })
+        except PermissionError as e:
+            logger.warning(f"Tool {name} permission denied: {e}")
+            return json.dumps({
+                "error": f"Access denied: {str(e)}",
+                "category": "permission_error",
+                "tool": name,
+                "suggestion": "The user may not have permission to access this resource.",
+            })
+        except TimeoutError as e:
+            logger.warning(f"Tool {name} operation timed out: {e}")
+            return json.dumps({
+                "error": f"Operation timed out: {str(e)}",
+                "category": "timeout_error",
+                "tool": name,
+                "suggestion": "Try with more specific parameters or a smaller scope.",
+            })
         except Exception as e:
-            logger.exception(f"Tool {name} execution failed: {e}")
-            return json.dumps({"error": f"Tool execution failed: {str(e)}"})
+            # Catch-all for unexpected errors
+            logger.exception(f"Tool {name} execution failed: {type(e).__name__}: {e}")
+            error_category = self._categorize_error(e)
+            return json.dumps({
+                "error": f"Tool execution failed: {str(e)}",
+                "category": error_category,
+                "tool": name,
+                "error_type": type(e).__name__,
+                "suggestion": self._get_error_suggestion_for_agent(error_category, name, str(e)),
+            })
 
     async def execute_batch(
         self,
@@ -326,10 +371,18 @@ class ToolExecutor:
         for i, result in enumerate(results):
             call = tool_calls[i]
             call_id = call.get("id", f"batch_{i}")
+            tool_name = call.get("name", "unknown")
 
             if isinstance(result, Exception):
-                # Convert exception to error JSON
-                error_json = json.dumps({"error": str(result)})
+                # Convert exception to error JSON with categorization
+                error_category = self._categorize_error(result)
+                error_json = json.dumps({
+                    "error": str(result),
+                    "category": error_category,
+                    "tool": tool_name,
+                    "error_type": type(result).__name__,
+                    "suggestion": self._get_error_suggestion_for_agent(error_category, tool_name, str(result)),
+                })
                 if include_call_ids:
                     processed_results.append((call_id, error_json))
                 else:
@@ -371,6 +424,97 @@ class ToolExecutor:
 
         logger.debug(f"Loaded {len(filtered_tools)} tools for agent '{agent}'")
         return filtered_tools
+
+    def _categorize_error(self, exception: Exception) -> str:
+        """
+        Categorize an exception into a user-friendly error type.
+
+        Args:
+            exception: The exception to categorize
+
+        Returns:
+            Error category string: 'configuration_error', 'user_input_error', 'runtime_error',
+            'network_error', 'resource_error', 'timeout_error', 'api_error', or 'unknown_error'
+        """
+        error_str = str(exception).lower()
+        error_type = type(exception).__name__
+
+        # Configuration errors
+        if error_type in ('NameError', 'AttributeError', 'ImportError', 'ModuleNotFoundError'):
+            return "configuration_error"
+        if "not defined" in error_str or ("not found" in error_str and "module" in error_str):
+            return "configuration_error"
+
+        # Timeout errors (check before network since TimeoutError exists)
+        if error_type == 'TimeoutError' or "timeout" in error_str:
+            return "timeout_error"
+
+        # Network errors
+        if error_type in ('ConnectionError',):
+            return "network_error"
+        if any(x in error_str for x in ['connection refused', 'network unreachable', 'host unreachable']):
+            return "network_error"
+
+        # File/Resource errors
+        if error_type in ('FileNotFoundError', 'OSError', 'IOError'):
+            return "resource_error"
+        if any(x in error_str for x in ['not found', 'does not exist', 'no such file']):
+            return "resource_error"
+
+        # User input errors (validation failures)
+        if error_type == 'ValueError':
+            return "user_input_error"
+        if any(x in error_str for x in ['invalid', 'validation', 'type error']):
+            return "user_input_error"
+
+        # API/HTTP errors
+        if error_type in ('HTTPError', 'HTTPStatusError', 'InvalidURL'):
+            return "api_error"
+        if any(x in error_str for x in ['http', 'status code', 'request failed']):
+            return "api_error"
+
+        # Default to runtime error for everything else
+        return "runtime_error"
+
+    def _get_error_suggestion_for_agent(self, category: str, tool_name: str, error_msg: str) -> str:
+        """
+        Generate a helpful suggestion for the agent based on error category.
+
+        Args:
+            category: Error category from _categorize_error
+            tool_name: Name of the tool that failed
+            error_msg: The error message
+
+        Returns:
+            A suggestion string to help the agent recover or understand the issue
+        """
+        suggestions = {
+            "configuration_error": (
+                "This is a backend configuration issue, not a problem with your request. "
+                "The error suggests a missing module, constant, or incorrect setup. "
+                "Please check that all required imports and constants are properly initialized."
+            ),
+            "network_error": (
+                "A network operation failed. This could be temporary. Try again in a moment, "
+                "or check that your connection is stable and the target service is reachable."
+            ),
+            "resource_error": (
+                f"The requested resource does not exist. For {tool_name}, verify the path/ID "
+                "is correct, or use a listing tool (e.g., vault_list, thread_list) to find available resources."
+            ),
+            "api_error": (
+                "An API request failed. This could be due to rate limiting, service unavailability, "
+                "or an invalid request. Check the error details and try again."
+            ),
+            "runtime_error": (
+                f"The {tool_name} tool encountered an unexpected error. Check your input parameters "
+                "and try again with adjusted arguments if needed."
+            ),
+            "unknown_error": (
+                "An unexpected error occurred. Check the error details and try a different approach."
+            ),
+        }
+        return suggestions.get(category, suggestions["unknown_error"])
 
     def _load_tool_schemas(self) -> Dict[str, Any]:
         """
@@ -716,7 +860,9 @@ class ToolExecutor:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Read a markdown note from the vault."""
-        note = self.vault.read_note(user_id, path)
+        project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
+        logger.debug(f"[VAULT_READ] user_id={user_id}, project_id={project_id}, path={path}")
+        note = self.vault.read_note(user_id, path, project_id=project_id)
         return {
             "path": path,
             "title": note.get("title", ""),
@@ -733,14 +879,17 @@ class ToolExecutor:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Create or update a markdown note in the vault."""
+        project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
+        logger.debug(f"[VAULT_WRITE] user_id={user_id}, project_id={project_id}, path={path}")
         note = self.vault.write_note(
             user_id,
             path,
             title=title,
             body=body,
+            project_id=project_id,
         )
         # Index the note after writing
-        self.indexer.index_note(user_id, note)
+        self.indexer.index_note(user_id, note, project_id=project_id)
         return {
             "status": "ok",
             "path": path,
@@ -755,7 +904,9 @@ class ToolExecutor:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Search the documentation vault using full-text search."""
-        results = self.indexer.search_notes(user_id, query, limit=limit)
+        project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
+        logger.info(f"[VAULT_SEARCH] user_id={user_id}, project_id={project_id}, query={query[:50]}")
+        results = self.indexer.search_notes(user_id, query, limit=limit, project_id=project_id)
         return {
             "query": query,
             "results": results,
@@ -769,7 +920,9 @@ class ToolExecutor:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """List notes in a vault folder."""
-        notes = self.vault.list_notes(user_id, folder=folder)
+        project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
+        logger.debug(f"[VAULT_LIST] user_id={user_id}, project_id={project_id}, folder={folder}")
+        notes = self.vault.list_notes(user_id, folder=folder, project_id=project_id)
         return {
             "folder": folder or "/",
             "notes": notes,
@@ -784,6 +937,8 @@ class ToolExecutor:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Move or rename a note (Librarian tool)."""
+        project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
+        logger.debug(f"[VAULT_MOVE] user_id={user_id}, project_id={project_id}, {old_path} -> {new_path}")
         # Not yet implemented - would need to update wikilinks
         return {"error": f"Tool not yet implemented: vault_move"}
 
@@ -796,6 +951,8 @@ class ToolExecutor:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Create an index.md file for a folder (Librarian tool)."""
+        project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
+        logger.debug(f"[VAULT_CREATE_INDEX] user_id={user_id}, project_id={project_id}, folder={folder}")
         # Not yet implemented
         return {"error": f"Tool not yet implemented: vault_create_index"}
 
