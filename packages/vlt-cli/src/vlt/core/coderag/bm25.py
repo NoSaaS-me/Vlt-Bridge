@@ -218,50 +218,61 @@ class BM25Indexer:
 
     def _sanitize_query(self, query: str) -> str:
         """
-        Sanitize user query for FTS5 MATCH.
+        Sanitize user query for FTS5 MATCH using token extraction.
 
-        FTS5 has special characters that can cause syntax errors.
-        This escapes them while preserving search intent.
+        Extracts alphanumeric tokens (including underscores for identifiers)
+        and wraps each in quotes to prevent FTS5 syntax errors from special
+        characters like =, <, >, /, etc.
+
+        This approach:
+        - Automatically handles ALL special characters (=, <, >, /, !, @, etc.)
+        - Preserves word boundaries correctly
+        - Supports prefix matching with trailing *
+        - Works well for code search (keeps underscores in identifiers)
 
         Args:
-            query: Raw user query
+            query: Raw user query (may contain code syntax, operators, etc.)
 
         Returns:
-            Sanitized query safe for FTS5 MATCH
+            Sanitized query safe for FTS5 MATCH, or empty string if no valid tokens
+
+        Examples:
+            >>> _sanitize_query("from fastapi import FastAPI app = FastAPI")
+            '"from" "fastapi" "import" "FastAPI" "app" "FastAPI"'
+
+            >>> _sanitize_query("VaultService")
+            '"VaultService"'
+
+            >>> _sanitize_query("find_definition*")
+            '"find_definition"*'
         """
+        import re
+
         if not query or not query.strip():
             return ""
 
-        # Remove/escape FTS5 special characters that can cause errors
-        # FTS5 special chars: " ( ) : * ? AND OR NOT NEAR
-        # Strategy: Remove quotes and parens, keep alphanumeric and basic punctuation
+        # Token pattern: alphanumeric + underscores + optional trailing *
+        # Underscores are included for code identifiers (e.g., my_function)
+        TOKEN_PATTERN = re.compile(r"[0-9A-Za-z_]+(?:\*)?")
 
-        # Replace special chars with spaces
-        special_chars = ['"', '(', ')', ':', '^', '{', '}', '[', ']', '?']
-        sanitized = query
-        for char in special_chars:
-            sanitized = sanitized.replace(char, ' ')
+        sanitized_terms = []
 
-        # Split into tokens and rejoin
-        # This handles multiple spaces and prevents empty MATCH
-        tokens = sanitized.split()
+        for match in TOKEN_PATTERN.finditer(query):
+            token = match.group()
+            has_prefix_star = token.endswith("*")
+            core = token[:-1] if has_prefix_star else token
 
-        if not tokens:
+            if not core:
+                continue
+
+            # Wrap token in quotes to neutralize FTS5 operators
+            # Preserve trailing * for prefix matching
+            sanitized_terms.append(f'"{core}"{"*" if has_prefix_star else ""}')
+
+        if not sanitized_terms:
             return ""
 
-        # Rejoin with AND implicit (FTS5 default)
-        # Escape any remaining special tokens
-        safe_tokens = []
-        for token in tokens:
-            # Skip FTS5 operators (case-insensitive)
-            upper_token = token.upper()
-            if upper_token in ['AND', 'OR', 'NOT', 'NEAR']:
-                # Wrap in quotes to make literal
-                safe_tokens.append(f'"{token}"')
-            else:
-                safe_tokens.append(token)
-
-        return ' '.join(safe_tokens)
+        return " ".join(sanitized_terms)
 
     def get_stats(self, project_id: Optional[str] = None) -> dict:
         """

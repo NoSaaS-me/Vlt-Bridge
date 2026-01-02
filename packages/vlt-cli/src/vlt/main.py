@@ -1926,13 +1926,20 @@ def coderag_status(
         # T034: Time elapsed since started_at
         elapsed_line = ""
         if job.started_at:
-            elapsed_seconds = (now - job.started_at).total_seconds()
+            # Ensure both datetimes are timezone-aware for comparison
+            started = job.started_at
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            elapsed_seconds = (now - started).total_seconds()
             elapsed_line = f"Elapsed: {_format_duration(elapsed_seconds)}"
 
         # T035: Estimated time remaining based on progress rate
         eta_line = ""
         if job.started_at and job.progress_percent > 0 and job.status == JobStatus.RUNNING:
-            elapsed_seconds = (now - job.started_at).total_seconds()
+            started = job.started_at
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            elapsed_seconds = (now - started).total_seconds()
             eta_seconds = (elapsed_seconds / job.progress_percent) * (100 - job.progress_percent)
             eta_line = f"ETA: ~{_format_duration(eta_seconds)}"
 

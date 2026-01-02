@@ -586,17 +586,17 @@ class OracleBridge:
         Returns:
             Search results for the symbol definition
         """
-        # Build a targeted search query for definitions
-        # Include keywords that commonly appear near definitions
-        query_parts = [symbol]
+        # Build a simple search query for the symbol
+        # The hybrid retrieval system (BM25 + vector + graph) naturally ranks
+        # definitions higher through:
+        # - BM25 field weighting (qualified_name, signature fields)
+        # - Vector semantic similarity to definition contexts
+        # - Graph PageRank (definitions are highly connected nodes)
+        query = symbol
 
         if kind:
-            query_parts.append(kind)
-
-        # Add definition-specific keywords
-        query_parts.extend(["def", "class", "function", "const", "let", "var"])
-
-        query = " ".join(query_parts)
+            # Optionally narrow by kind (e.g., "VaultService class")
+            query = f"{symbol} {kind}"
 
         # Use direct code search instead of oracle
         return await self.search_code(

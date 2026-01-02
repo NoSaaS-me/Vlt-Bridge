@@ -940,14 +940,19 @@ class ToolExecutor:
         """List all threads for the current project."""
         # Map status filter
         status_filter = None if status == "all" else status
+        project_id = kwargs.get("project_id")
+
+        logger.info(f"[THREAD_LIST] user_id={user_id}, project_id={project_id}, status={status_filter}")
 
         response = self.threads.list_threads(
             user_id,
-            project_id=kwargs.get("project_id"),
+            project_id=project_id,
             status=status_filter,
             limit=kwargs.get("limit", 50),
             offset=kwargs.get("offset", 0),
         )
+
+        logger.info(f"[THREAD_LIST] Found {response.total} threads")
 
         # Convert threads to serializable format
         threads = [

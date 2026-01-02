@@ -895,6 +895,12 @@ class OracleAgent:
                 },
             )
 
+        # Tools that should receive project_id context for scoping
+        PROJECT_SCOPED_TOOLS = {
+            "thread_list", "thread_read", "thread_seek", "thread_push",
+            "search_code", "coderag_status",
+        }
+
         # Execute all tools in parallel
         async def execute_single_tool(
             call_id: str,
@@ -903,6 +909,13 @@ class OracleAgent:
         ) -> ToolExecutionResult:
             """Execute a single tool and return structured result."""
             try:
+                # Inject project_id for tools that need project context
+                if name in PROJECT_SCOPED_TOOLS and "project_id" not in arguments:
+                    arguments = {**arguments, "project_id": self.project_id}
+                    logger.info(f"[PROJECT_SCOPE] Injected project_id={self.project_id} for tool {name}")
+                elif name in PROJECT_SCOPED_TOOLS:
+                    logger.info(f"[PROJECT_SCOPE] Tool {name} already has project_id={arguments.get('project_id')}")
+
                 result = await tool_executor.execute(
                     name=name,
                     arguments=arguments,

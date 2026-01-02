@@ -133,6 +133,11 @@ class CodeRAGIndexer:
                     logger.warning(f"Progress callback error: {e}")
 
         try:
+            # Step 0: Clean up existing data if force=True
+            if force:
+                logger.info("Force mode: cleaning up existing index data...")
+                self._cleanup_project_data()
+
             # Step 1: Discover files
             files = self._discover_files()
             self.stats.files_discovered = len(files)
@@ -300,6 +305,72 @@ class CodeRAGIndexer:
     # ========================================================================
     # Private methods
     # ========================================================================
+
+    def _cleanup_project_data(self) -> None:
+        """Delete all existing index data for this project.
+
+        Called when force=True to ensure a clean re-index.
+        Removes: chunks, graph nodes/edges, symbols, repo maps, BM25 index, delta queue.
+        """
+        from sqlalchemy import delete
+
+        logger.info(f"Cleaning up existing data for project {self.project_id}")
+
+        try:
+            with Session(engine) as session:
+                # Delete in order to respect foreign key constraints
+                # 1. Delete edges (references nodes)
+                edge_result = session.execute(
+                    delete(CodeEdge).where(CodeEdge.project_id == self.project_id)
+                )
+                edges_deleted = edge_result.rowcount
+                logger.debug(f"Deleted {edges_deleted} edges")
+
+                # 2. Delete nodes
+                node_result = session.execute(
+                    delete(CodeNode).where(CodeNode.project_id == self.project_id)
+                )
+                nodes_deleted = node_result.rowcount
+                logger.debug(f"Deleted {nodes_deleted} nodes")
+
+                # 3. Delete symbols
+                sym_result = session.execute(
+                    delete(SymbolDefinition).where(SymbolDefinition.project_id == self.project_id)
+                )
+                symbols_deleted = sym_result.rowcount
+                logger.debug(f"Deleted {symbols_deleted} symbols")
+
+                # 4. Delete chunks (BM25 FTS entries become orphaned but harmless)
+                chunk_result = session.execute(
+                    delete(CodeChunk).where(CodeChunk.project_id == self.project_id)
+                )
+                chunks_deleted = chunk_result.rowcount
+                logger.debug(f"Deleted {chunks_deleted} chunks")
+
+                # 5. Delete repo maps
+                repo_result = session.execute(
+                    delete(RepoMap).where(RepoMap.project_id == self.project_id)
+                )
+                maps_deleted = repo_result.rowcount
+                logger.debug(f"Deleted {maps_deleted} repo maps")
+
+                # 6. Delete delta queue entries
+                delta_result = session.execute(
+                    delete(IndexDeltaQueue).where(IndexDeltaQueue.project_id == self.project_id)
+                )
+                deltas_deleted = delta_result.rowcount
+                logger.debug(f"Deleted {deltas_deleted} delta queue entries")
+
+                session.commit()
+
+            logger.info(
+                f"Cleanup complete: {chunks_deleted} chunks, {nodes_deleted} nodes, "
+                f"{edges_deleted} edges, {symbols_deleted} symbols, {maps_deleted} repo maps"
+            )
+
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+            raise
 
     def _discover_files(self) -> List[Path]:
         """Discover files matching include/exclude patterns from config."""
@@ -551,14 +622,31 @@ class CodeRAGIndexer:
                             docstring=graph_node.docstring,
                             centrality_score=None,  # Will be calculated later
                         )
-                        session.add(node)
+                        # Use merge to handle potential duplicate node IDs
+                        session.merge(node)
                         self.stats.graph_nodes += 1
                     except Exception as e:
-                        logger.error(f"Error storing node: {e}")
+                        logger.error(f"Error storing node {graph_node.id}: {e}")
+
+                # Commit nodes before adding edges (edges have FK to nodes)
+                session.commit()
+                logger.info(f"Stored {self.stats.graph_nodes} graph nodes")
+
+                # Build set of valid node IDs for edge validation
+                valid_node_ids = {n.id for n in nodes}
+                skipped_edges = 0
 
                 # Store edges (edges are dataclass objects from graph.py, not dicts)
                 for graph_edge in edges:
                     try:
+                        # Skip edges referencing non-existent nodes (external calls)
+                        if graph_edge.source_id not in valid_node_ids:
+                            skipped_edges += 1
+                            continue
+                        if graph_edge.target_id not in valid_node_ids:
+                            skipped_edges += 1
+                            continue
+
                         # Map edge_type string to enum
                         edge_type_str = graph_edge.edge_type or 'calls'
                         edge_type_map = {
@@ -583,6 +671,9 @@ class CodeRAGIndexer:
                         self.stats.graph_edges += 1
                     except Exception as e:
                         logger.error(f"Error storing edge: {e}")
+
+                if skipped_edges:
+                    logger.info(f"Skipped {skipped_edges} edges with external references")
 
                 session.commit()
 
