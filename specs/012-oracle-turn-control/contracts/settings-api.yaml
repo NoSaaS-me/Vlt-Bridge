@@ -1,0 +1,218 @@
+openapi: 3.0.3
+info:
+  title: Oracle Agent Config API
+  description: Endpoints for managing Oracle agent configuration per user
+  version: 1.0.0
+
+paths:
+  /api/settings/agent-config:
+    get:
+      summary: Get agent configuration
+      description: Retrieve the current user's agent configuration settings
+      operationId: getAgentConfig
+      tags:
+        - Settings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Agent configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentConfig'
+              example:
+                max_iterations: 15
+                soft_warning_percent: 70
+                token_budget: 50000
+                token_warning_percent: 80
+                timeout_seconds: 120
+                max_tool_calls_per_turn: 5
+                max_parallel_tools: 3
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    put:
+      summary: Update agent configuration
+      description: Update the current user's agent configuration settings
+      operationId: updateAgentConfig
+      tags:
+        - Settings
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentConfigUpdate'
+            example:
+              max_iterations: 20
+              token_budget: 75000
+      responses:
+        '200':
+          description: Agent configuration updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentConfig'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/settings/agent-config/reset:
+    post:
+      summary: Reset agent configuration to defaults
+      description: Reset all agent configuration settings to their default values
+      operationId: resetAgentConfig
+      tags:
+        - Settings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Agent configuration reset to defaults
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    AgentConfig:
+      type: object
+      description: Complete agent configuration with all fields
+      required:
+        - max_iterations
+        - soft_warning_percent
+        - token_budget
+        - token_warning_percent
+        - timeout_seconds
+        - max_tool_calls_per_turn
+        - max_parallel_tools
+      properties:
+        max_iterations:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 15
+          description: Maximum number of agent turns per query
+        soft_warning_percent:
+          type: integer
+          minimum: 50
+          maximum: 90
+          default: 70
+          description: Percentage of max iterations to trigger warning
+        token_budget:
+          type: integer
+          minimum: 1000
+          maximum: 200000
+          default: 50000
+          description: Maximum tokens per session
+        token_warning_percent:
+          type: integer
+          minimum: 50
+          maximum: 95
+          default: 80
+          description: Percentage of token budget to trigger warning
+        timeout_seconds:
+          type: integer
+          minimum: 10
+          maximum: 600
+          default: 120
+          description: Overall query timeout in seconds
+        max_tool_calls_per_turn:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+          description: Maximum tool calls per agent turn
+        max_parallel_tools:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 3
+          description: Maximum concurrent tool executions
+
+    AgentConfigUpdate:
+      type: object
+      description: Partial update - only include fields to change
+      properties:
+        max_iterations:
+          type: integer
+          minimum: 1
+          maximum: 50
+        soft_warning_percent:
+          type: integer
+          minimum: 50
+          maximum: 90
+        token_budget:
+          type: integer
+          minimum: 1000
+          maximum: 200000
+        token_warning_percent:
+          type: integer
+          minimum: 50
+          maximum: 95
+        timeout_seconds:
+          type: integer
+          minimum: 10
+          maximum: 600
+        max_tool_calls_per_turn:
+          type: integer
+          minimum: 1
+          maximum: 20
+        max_parallel_tools:
+          type: integer
+          minimum: 1
+          maximum: 10
+
+    ValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+              msg:
+                type: string
+              type:
+                type: string
+
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+                example: "Not authenticated"
+
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationError'
+          example:
+            detail:
+              - loc: ["body", "max_iterations"]
+                msg: "ensure this value is less than or equal to 50"
+                type: "value_error.number.not_le"
