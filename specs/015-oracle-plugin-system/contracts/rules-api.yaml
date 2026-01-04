@@ -1,0 +1,462 @@
+openapi: 3.0.3
+info:
+  title: Oracle Plugin System - Rules API
+  description: API for managing rules and plugins in the Oracle agent
+  version: 1.0.0
+  contact:
+    name: Vlt-Bridge Team
+
+servers:
+  - url: /api
+    description: Backend API
+
+paths:
+  /rules:
+    get:
+      summary: List all rules
+      description: Returns all registered rules with their enabled/disabled status
+      operationId: listRules
+      tags:
+        - Rules
+      parameters:
+        - name: plugin_id
+          in: query
+          description: Filter by plugin ID
+          schema:
+            type: string
+        - name: trigger
+          in: query
+          description: Filter by hook point trigger
+          schema:
+            type: string
+            enum:
+              - on_query_start
+              - on_turn_start
+              - on_turn_end
+              - on_tool_call
+              - on_tool_complete
+              - on_tool_failure
+              - on_session_end
+        - name: enabled_only
+          in: query
+          description: Only return enabled rules
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: List of rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rules:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RuleInfo'
+                  total:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /rules/{rule_id}:
+    get:
+      summary: Get rule details
+      operationId: getRule
+      tags:
+        - Rules
+      parameters:
+        - $ref: '#/components/parameters/RuleId'
+      responses:
+        '200':
+          description: Rule details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuleDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /rules/{rule_id}/toggle:
+    post:
+      summary: Toggle rule enabled/disabled
+      description: Enable or disable a rule. Core rules cannot be disabled.
+      operationId: toggleRule
+      tags:
+        - Rules
+      parameters:
+        - $ref: '#/components/parameters/RuleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+              required:
+                - enabled
+      responses:
+        '200':
+          description: Rule toggled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuleInfo'
+        '400':
+          description: Cannot disable core rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /rules/{rule_id}/test:
+    post:
+      summary: Test a rule manually
+      description: Trigger a rule manually for testing purposes
+      operationId: testRule
+      tags:
+        - Rules
+      parameters:
+        - $ref: '#/components/parameters/RuleId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                context_override:
+                  type: object
+                  description: Optional context values to override for testing
+      responses:
+        '200':
+          description: Test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  condition_result:
+                    type: boolean
+                  action_would_execute:
+                    type: boolean
+                  evaluation_time_ms:
+                    type: number
+                  error:
+                    type: string
+                    nullable: true
+
+  /plugins:
+    get:
+      summary: List all plugins
+      operationId: listPlugins
+      tags:
+        - Plugins
+      responses:
+        '200':
+          description: List of plugins
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plugins:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PluginInfo'
+
+  /plugins/{plugin_id}:
+    get:
+      summary: Get plugin details
+      operationId: getPlugin
+      tags:
+        - Plugins
+      parameters:
+        - $ref: '#/components/parameters/PluginId'
+      responses:
+        '200':
+          description: Plugin details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plugins/{plugin_id}/settings:
+    get:
+      summary: Get plugin settings
+      operationId: getPluginSettings
+      tags:
+        - Plugins
+      parameters:
+        - $ref: '#/components/parameters/PluginId'
+      responses:
+        '200':
+          description: Plugin settings
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+    put:
+      summary: Update plugin settings
+      operationId: updatePluginSettings
+      tags:
+        - Plugins
+      parameters:
+        - $ref: '#/components/parameters/PluginId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Invalid settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /plugins/{plugin_id}/state:
+    get:
+      summary: Get plugin state
+      description: Get plugin-scoped persistent state
+      operationId: getPluginState
+      tags:
+        - Plugins
+      parameters:
+        - $ref: '#/components/parameters/PluginId'
+      responses:
+        '200':
+          description: Plugin state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+    delete:
+      summary: Clear plugin state
+      description: Clear all plugin-scoped state
+      operationId: clearPluginState
+      tags:
+        - Plugins
+      parameters:
+        - $ref: '#/components/parameters/PluginId'
+      responses:
+        '204':
+          description: State cleared
+
+components:
+  parameters:
+    RuleId:
+      name: rule_id
+      in: path
+      required: true
+      description: Rule identifier
+      schema:
+        type: string
+        pattern: '^[a-z0-9-]+$'
+
+    PluginId:
+      name: plugin_id
+      in: path
+      required: true
+      description: Plugin identifier
+      schema:
+        type: string
+        pattern: '^[a-z0-9-]+$'
+
+  schemas:
+    RuleInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        trigger:
+          type: string
+          enum:
+            - on_query_start
+            - on_turn_start
+            - on_turn_end
+            - on_tool_call
+            - on_tool_complete
+            - on_tool_failure
+            - on_session_end
+        enabled:
+          type: boolean
+        core:
+          type: boolean
+        priority:
+          type: integer
+        plugin_id:
+          type: string
+          nullable: true
+      required:
+        - id
+        - name
+        - trigger
+        - enabled
+        - core
+
+    RuleDetail:
+      allOf:
+        - $ref: '#/components/schemas/RuleInfo'
+        - type: object
+          properties:
+            version:
+              type: string
+            condition:
+              type: string
+              nullable: true
+            script:
+              type: string
+              nullable: true
+            action:
+              $ref: '#/components/schemas/RuleAction'
+            source_path:
+              type: string
+
+    RuleAction:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - notify_self
+            - log
+            - set_state
+            - emit_event
+        message:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        priority:
+          type: string
+          enum: [low, normal, high, critical]
+        deliver_at:
+          type: string
+          enum: [immediate, turn_start, after_tool, turn_end]
+      required:
+        - type
+
+    PluginInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        rule_count:
+          type: integer
+        enabled:
+          type: boolean
+      required:
+        - id
+        - name
+        - version
+
+    PluginDetail:
+      allOf:
+        - $ref: '#/components/schemas/PluginInfo'
+        - type: object
+          properties:
+            rules:
+              type: array
+              items:
+                $ref: '#/components/schemas/RuleInfo'
+            requires:
+              type: array
+              items:
+                type: string
+            settings_schema:
+              type: object
+              additionalProperties:
+                $ref: '#/components/schemas/PluginSettingSchema'
+            source_dir:
+              type: string
+
+    PluginSettingSchema:
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [integer, float, string, boolean]
+        default:
+          oneOf:
+            - type: integer
+            - type: number
+            - type: string
+            - type: boolean
+        description:
+          type: string
+        min_value:
+          type: number
+          nullable: true
+        max_value:
+          type: number
+          nullable: true
+        options:
+          type: array
+          items:
+            type: string
+          nullable: true
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+      required:
+        - error
+
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+tags:
+  - name: Rules
+    description: Rule management endpoints
+  - name: Plugins
+    description: Plugin management endpoints
