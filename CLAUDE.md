@@ -439,10 +439,10 @@ The app can be embedded in ChatGPT as an iFrame:
 - Entry point: `frontend/src/widget.tsx`
 
 ## Recent Changes
+- 013-agent-notification-system: Added Python 3.11+ (backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, python-toon, Jinja2 (backend); React 18+, shadcn/ui (frontend)
 - 011-coderag-project-init: Added Python 3.11+ (CLI, backend), TypeScript 5.x (frontend)
 - 009-oracle-agent: Added Python 3.11+ (backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, httpx, Jinja2, FastMCP (existing)
-- 008-thread-sync: Added Python 3.11+ (vlt-cli & backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, SQLAlchemy (vlt-cli), httpx, SQLite
 
 ## Active Technologies
-- Python 3.11+ (CLI, backend), TypeScript 5.x (frontend) (011-coderag-project-init)
-- SQLite (`~/.vlt/vault.db` for CLI, `data/index.db` for backend) (011-coderag-project-init)
+- Python 3.11+ (backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, python-toon, Jinja2 (backend); React 18+, shadcn/ui (frontend) (013-agent-notification-system)
+- SQLite (extend existing user_settings + context_nodes tables) (013-agent-notification-system)

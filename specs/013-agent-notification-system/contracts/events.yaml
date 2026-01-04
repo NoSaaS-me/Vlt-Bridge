@@ -1,0 +1,204 @@
+# Agent Notification System - Event Schema
+# Defines the structure of events emitted by the system
+
+version: "1.0.0"
+
+# Event Type Hierarchy
+event_types:
+  # Tool Events
+  tool:
+    call:
+      pending:
+        description: Tool call initiated, awaiting execution
+        severity: info
+        payload:
+          tool_name: { type: string, required: true }
+          call_id: { type: string, required: true }
+          arguments: { type: object, required: false }
+
+      success:
+        description: Tool call completed successfully
+        severity: info
+        payload:
+          tool_name: { type: string, required: true }
+          call_id: { type: string, required: true }
+          duration_ms: { type: integer, required: true }
+          result_summary: { type: string, required: false }
+
+      failure:
+        description: Tool call failed with error
+        severity: error
+        payload:
+          tool_name: { type: string, required: true }
+          call_id: { type: string, required: true }
+          error_type: { type: string, required: true }
+          error_message: { type: string, required: true }
+          retry_count: { type: integer, required: false, default: 0 }
+
+      timeout:
+        description: Tool call exceeded time limit
+        severity: warning
+        payload:
+          tool_name: { type: string, required: true }
+          call_id: { type: string, required: true }
+          timeout_ms: { type: integer, required: true }
+          retry_count: { type: integer, required: false, default: 0 }
+
+    batch:
+      complete:
+        description: Parallel tool batch finished
+        severity: info
+        payload:
+          batch_id: { type: string, required: true }
+          tool_count: { type: integer, required: true }
+          success_count: { type: integer, required: true }
+          failure_count: { type: integer, required: true }
+          total_duration_ms: { type: integer, required: true }
+
+  # Budget Events
+  budget:
+    token:
+      warning:
+        description: Token budget threshold crossed
+        severity: warning
+        payload:
+          current: { type: integer, required: true }
+          limit: { type: integer, required: true }
+          percentage: { type: integer, required: true }
+          remaining: { type: integer, required: true }
+
+      exceeded:
+        description: Token budget exhausted
+        severity: critical
+        payload:
+          current: { type: integer, required: true }
+          limit: { type: integer, required: true }
+
+    iteration:
+      warning:
+        description: Iteration count threshold crossed
+        severity: warning
+        payload:
+          current: { type: integer, required: true }
+          limit: { type: integer, required: true }
+          percentage: { type: integer, required: true }
+          remaining: { type: integer, required: true }
+
+      exceeded:
+        description: Iteration limit reached
+        severity: critical
+        payload:
+          current: { type: integer, required: true }
+          limit: { type: integer, required: true }
+
+    timeout:
+      warning:
+        description: Turn timeout approaching
+        severity: warning
+        payload:
+          elapsed_seconds: { type: integer, required: true }
+          limit_seconds: { type: integer, required: true }
+          remaining_seconds: { type: integer, required: true }
+
+  # Agent Events
+  agent:
+    turn:
+      start:
+        description: New agent turn beginning
+        severity: info
+        payload:
+          turn_number: { type: integer, required: true }
+          session_id: { type: string, required: true }
+
+      end:
+        description: Agent turn completed
+        severity: info
+        payload:
+          turn_number: { type: integer, required: true }
+          session_id: { type: string, required: true }
+          reason: { type: string, required: true }
+          tool_calls: { type: integer, required: true }
+          tokens_used: { type: integer, required: true }
+
+    loop:
+      detected:
+        description: Repetitive pattern detected
+        severity: warning
+        payload:
+          pattern: { type: string, required: true }
+          repetitions: { type: integer, required: true }
+          window_seconds: { type: integer, required: true }
+
+  # Future: External Events
+  subagent:
+    complete:
+      description: Async subagent finished successfully
+      severity: info
+      payload:
+        task_id: { type: string, required: true }
+        result_summary: { type: string, required: true }
+        duration_ms: { type: integer, required: true }
+
+    failed:
+      description: Async subagent failed
+      severity: error
+      payload:
+        task_id: { type: string, required: true }
+        error_message: { type: string, required: true }
+
+  cli:
+    event:
+      description: Event from vlt CLI
+      severity: info
+      payload:
+        event_name: { type: string, required: true }
+        data: { type: object, required: false }
+
+# Severity Levels
+severity_levels:
+  - name: debug
+    value: 0
+    description: Verbose diagnostics, typically not shown
+  - name: info
+    value: 1
+    description: Normal operation events
+  - name: warning
+    value: 2
+    description: Potential issues that may need attention
+  - name: error
+    value: 3
+    description: Operation failures
+  - name: critical
+    value: 4
+    description: System-level issues requiring immediate action
+
+# Base Event Schema
+base_event:
+  id:
+    type: uuid
+    required: true
+    description: Unique event identifier
+  type:
+    type: string
+    required: true
+    description: Hierarchical event type (e.g., "tool.call.failure")
+  source:
+    type: string
+    required: true
+    description: Component that generated the event
+  severity:
+    type: string
+    enum: [debug, info, warning, error, critical]
+    required: true
+  timestamp:
+    type: datetime
+    required: true
+    description: UTC timestamp when event occurred
+  payload:
+    type: object
+    required: true
+    description: Event-specific data
+  dedupe_key:
+    type: string
+    required: false
+    description: Key for deduplication (derived from type+source if not set)

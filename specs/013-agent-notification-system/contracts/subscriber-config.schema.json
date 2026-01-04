@@ -1,0 +1,185 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "subscriber-config.schema.json",
+  "title": "Subscriber Configuration Schema",
+  "description": "Schema for ANS subscriber configuration files (TOML format)",
+  "type": "object",
+  "required": ["subscriber", "events", "output"],
+  "properties": {
+    "subscriber": {
+      "type": "object",
+      "description": "Subscriber identity and metadata",
+      "required": ["id", "name", "description", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Unique subscriber identifier (lowercase, underscores allowed)",
+          "examples": ["tool_failure", "budget_warning"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Human-readable subscriber name",
+          "examples": ["Tool Failure Notifications"]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "What this subscriber does",
+          "examples": ["Notifies agent when tool calls fail or timeout"]
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Semantic version of this config",
+          "examples": ["1.0.0"]
+        }
+      }
+    },
+    "events": {
+      "type": "object",
+      "description": "Event filtering configuration",
+      "required": ["types"],
+      "properties": {
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]+\\.[a-z]+\\.[a-z]+$"
+          },
+          "minItems": 1,
+          "description": "Event types to listen for",
+          "examples": [["tool.call.failure", "tool.call.timeout"]]
+        },
+        "severity_filter": {
+          "type": "string",
+          "enum": ["debug", "info", "warning", "error", "critical"],
+          "default": "info",
+          "description": "Minimum severity level to process"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Only process events from these sources (optional)",
+          "examples": [["tool_executor", "oracle_agent"]]
+        }
+      }
+    },
+    "batching": {
+      "type": "object",
+      "description": "Batching and deduplication configuration",
+      "properties": {
+        "window_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "default": 2000,
+          "description": "Time window for batching events (0 = no batching)"
+        },
+        "max_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 10,
+          "description": "Maximum events per batch"
+        },
+        "dedupe_key": {
+          "type": "string",
+          "description": "Expression for deduplication key",
+          "examples": ["type:payload.tool_name"]
+        },
+        "dedupe_window_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000,
+          "default": 5000,
+          "description": "Time window for deduplication (0 = no deduplication)"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "description": "Notification output configuration",
+      "required": ["priority", "inject_at", "template"],
+      "properties": {
+        "priority": {
+          "type": "string",
+          "enum": ["critical", "high", "normal", "low"],
+          "description": "Notification priority level"
+        },
+        "inject_at": {
+          "type": "string",
+          "enum": ["immediate", "turn_start", "after_tool", "turn_end"],
+          "description": "When to inject the notification"
+        },
+        "template": {
+          "type": "string",
+          "description": "Path to Jinja2 template file (relative to templates/)",
+          "examples": ["tool_failure.toon.j2"]
+        },
+        "core": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, subscriber cannot be disabled by users"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "subscriber": {
+        "id": "tool_failure",
+        "name": "Tool Failure Notifications",
+        "description": "Notifies agent when tool calls fail or timeout",
+        "version": "1.0.0"
+      },
+      "events": {
+        "types": ["tool.call.failure", "tool.call.timeout"],
+        "severity_filter": "warning"
+      },
+      "batching": {
+        "window_ms": 2000,
+        "max_size": 10,
+        "dedupe_key": "type:payload.tool_name",
+        "dedupe_window_ms": 5000
+      },
+      "output": {
+        "priority": "high",
+        "inject_at": "after_tool",
+        "template": "tool_failure.toon.j2",
+        "core": true
+      }
+    },
+    {
+      "subscriber": {
+        "id": "budget_warning",
+        "name": "Budget Warning Notifications",
+        "description": "Warns agent when approaching resource limits",
+        "version": "1.0.0"
+      },
+      "events": {
+        "types": [
+          "budget.token.warning",
+          "budget.iteration.warning",
+          "budget.timeout.warning"
+        ],
+        "severity_filter": "warning"
+      },
+      "batching": {
+        "window_ms": 0,
+        "dedupe_window_ms": 10000
+      },
+      "output": {
+        "priority": "high",
+        "inject_at": "turn_start",
+        "template": "budget_warning.toon.j2",
+        "core": true
+      }
+    }
+  ]
+}

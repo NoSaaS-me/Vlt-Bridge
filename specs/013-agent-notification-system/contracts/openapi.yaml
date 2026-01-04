@@ -1,0 +1,263 @@
+openapi: 3.1.0
+info:
+  title: Agent Notification System API
+  description: API for managing notification subscribers and settings
+  version: 1.0.0
+
+servers:
+  - url: /api
+    description: API base path
+
+paths:
+  /notifications/subscribers:
+    get:
+      summary: List all notification subscribers
+      description: Returns all loaded notification subscribers with their current state
+      operationId: listSubscribers
+      tags:
+        - Notifications
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of subscribers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriberListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /notifications/subscribers/{subscriberId}/toggle:
+    post:
+      summary: Toggle subscriber enabled state
+      description: Enable or disable a subscriber. Core subscribers cannot be disabled.
+      operationId: toggleSubscriber
+      tags:
+        - Notifications
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscriberId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique subscriber identifier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToggleSubscriberRequest'
+      responses:
+        '200':
+          description: Subscriber state updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriberInfo'
+        '400':
+          description: Cannot disable core subscriber
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Subscriber not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /settings/notifications:
+    get:
+      summary: Get notification settings
+      description: Get user's notification preferences including disabled subscribers
+      operationId: getNotificationSettings
+      tags:
+        - Settings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Notification settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    put:
+      summary: Update notification settings
+      description: Update user's notification preferences
+      operationId: updateNotificationSettings
+      tags:
+        - Settings
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationSettingsUpdate'
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationSettings'
+        '400':
+          description: Invalid settings (e.g., trying to disable core subscriber)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    SubscriberInfo:
+      type: object
+      required:
+        - id
+        - name
+        - description
+        - event_types
+        - priority
+        - core
+        - enabled
+      properties:
+        id:
+          type: string
+          description: Unique subscriber identifier
+          example: "tool_failure"
+        name:
+          type: string
+          description: Human-readable subscriber name
+          example: "Tool Failure Notifications"
+        description:
+          type: string
+          description: What this subscriber does
+          example: "Notifies agent when tool calls fail or timeout"
+        event_types:
+          type: array
+          items:
+            type: string
+          description: Event types this subscriber listens to
+          example: ["tool.call.failure", "tool.call.timeout"]
+        priority:
+          type: string
+          enum: [critical, high, normal, low]
+          description: Notification priority level
+          example: "high"
+        inject_at:
+          type: string
+          enum: [immediate, turn_start, after_tool, turn_end]
+          description: When notifications are injected
+          example: "after_tool"
+        core:
+          type: boolean
+          description: If true, subscriber cannot be disabled
+          example: true
+        enabled:
+          type: boolean
+          description: Current enabled state for this user
+          example: true
+
+    SubscriberListResponse:
+      type: object
+      required:
+        - subscribers
+      properties:
+        subscribers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubscriberInfo'
+
+    ToggleSubscriberRequest:
+      type: object
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+          description: Desired enabled state
+          example: false
+
+    NotificationSettings:
+      type: object
+      required:
+        - disabled_subscribers
+      properties:
+        disabled_subscribers:
+          type: array
+          items:
+            type: string
+          description: List of subscriber IDs that are disabled
+          example: ["tool_success"]
+
+    NotificationSettingsUpdate:
+      type: object
+      properties:
+        disabled_subscribers:
+          type: array
+          items:
+            type: string
+          description: List of subscriber IDs to disable (replaces current list)
+          example: ["tool_success"]
+
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: "Cannot disable core subscriber: tool_failure"
+
+    # SSE Stream Types (for documentation)
+    SystemStreamChunk:
+      type: object
+      description: SSE chunk for system notifications
+      required:
+        - type
+        - content
+      properties:
+        type:
+          type: string
+          const: "system"
+          description: Chunk type identifier
+        content:
+          type: string
+          description: TOON-formatted notification content
+          example: "tool_fail: vault_search timeout after 5000ms"
+        source:
+          type: string
+          description: Source of the notification
+          example: "Tool Executor"
+        timestamp:
+          type: string
+          format: date-time
+          description: When the notification was generated
