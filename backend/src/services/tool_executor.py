@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 from ..models.project import DEFAULT_PROJECT_ID
 from ..models.thread import ThreadEntry
 from .database import DatabaseService
+from .github_service import GitHubService, get_github_service, GitHubError, GitHubNotFoundError
 from .indexer import IndexerService
 from .librarian_service import LibrarianService, get_librarian_service
 from .oracle_bridge import OracleBridge
@@ -90,6 +91,9 @@ class ToolExecutor:
         "delegate_librarian": 1200.0,  # 20 minutes for large summarizations and web research
         # Self-notification - fast local operation
         "notify_self": 5.0,
+        # GitHub operations - network latency dependent
+        "github_read": 30.0,
+        "github_search": 45.0,  # Search can be slower
     }
 
     def __init__(
@@ -101,6 +105,7 @@ class ToolExecutor:
         db_service: Optional[DatabaseService] = None,
         user_settings_service: Optional[UserSettingsService] = None,
         librarian_service: Optional[LibrarianService] = None,
+        github_service: Optional[GitHubService] = None,
         default_timeout: Optional[float] = None,
     ) -> None:
         """
@@ -114,6 +119,7 @@ class ToolExecutor:
             db_service: DatabaseService instance for indexer (created if None)
             user_settings_service: UserSettingsService for accessing user model preferences
             librarian_service: LibrarianService for subagent summarization
+            github_service: GitHubService for GitHub repository access
             default_timeout: Override the default timeout for all tools (seconds).
                 Individual tool timeouts from TOOL_TIMEOUTS still apply unless
                 overridden at call time. If None, uses DEFAULT_TIMEOUT (30s).
@@ -125,6 +131,7 @@ class ToolExecutor:
         self.oracle_bridge = oracle_bridge or OracleBridge()
         self.user_settings = user_settings_service or get_user_settings_service()
         self.librarian = librarian_service or get_librarian_service()
+        self.github = github_service or get_github_service()
 
         # Instance-level default timeout (can override class default)
         self._default_timeout = default_timeout if default_timeout is not None else self.DEFAULT_TIMEOUT
@@ -154,6 +161,9 @@ class ToolExecutor:
             # Meta tools
             "delegate_librarian": self._delegate_librarian,
             "notify_self": self._notify_self,
+            # GitHub tools
+            "github_read": self._github_read,
+            "github_search": self._github_search,
         }
 
         # Cache for tool schemas
@@ -2099,6 +2109,202 @@ class ToolExecutor:
             "persistence_id": persistence_id,
             "message": f"Notification scheduled for delivery at {deliver_at}",
         }
+
+    # =========================================================================
+    # GitHub Tool Implementations
+    # =========================================================================
+
+    async def _github_read(
+        self,
+        user_id: str,
+        repo: str,
+        path: str,
+        branch: str = "main",
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Read a file from a GitHub repository.
+
+        Attempts to use the GitHub API with authentication if available.
+        Falls back to raw URL fetching for public repositories when:
+        - No GitHub token is configured
+        - Token is invalid or expired
+        - API rate limit is exceeded
+
+        Args:
+            user_id: User ID for token lookup
+            repo: Repository in "owner/repo" format (e.g., "facebook/react")
+            path: Path to file within repository (e.g., "src/index.js")
+            branch: Branch, tag, or commit SHA (default: "main")
+            **kwargs: Additional arguments (ignored)
+
+        Returns:
+            Dict with:
+                - content: File content as string
+                - path: Full path within repo
+                - repo: Repository name
+                - branch: Branch/ref used
+                - size: File size in bytes (if available)
+                - sha: Git SHA (if available from API)
+                - from_cache: Whether content came from cache
+                - source: "api", "raw", or "cache"
+
+        Raises:
+            GitHubNotFoundError: File does not exist
+            GitHubError: Other GitHub API errors
+        """
+        logger.info(
+            f"GitHub read: repo={repo}, path={path}, branch={branch}",
+            extra={"user_id": user_id},
+        )
+
+        try:
+            result = await self.github.read_file(
+                user_id=user_id,
+                repo=repo,
+                path=path,
+                branch=branch,
+            )
+
+            # Add helpful metadata for the agent
+            result["success"] = True
+
+            logger.info(
+                f"GitHub read success: {repo}/{path}@{branch}, "
+                f"size={result.get('size', 'unknown')}, source={result.get('source')}",
+                extra={"user_id": user_id},
+            )
+
+            return result
+
+        except GitHubNotFoundError as e:
+            logger.warning(f"GitHub file not found: {repo}/{path}@{branch}")
+            return {
+                "error": str(e),
+                "error_type": "not_found",
+                "repo": repo,
+                "path": path,
+                "branch": branch,
+                "suggestion": (
+                    "The file was not found. Check: (1) the repository name is correct, "
+                    "(2) the file path exists, (3) the branch/ref is valid. "
+                    "For private repos, ensure GitHub is connected in settings."
+                ),
+            }
+        except GitHubError as e:
+            logger.warning(f"GitHub read error: {e}")
+            return {
+                "error": str(e),
+                "error_type": "github_error",
+                "repo": repo,
+                "path": path,
+                "branch": branch,
+                "suggestion": (
+                    "GitHub API error. This could be due to: "
+                    "(1) rate limiting - try again later, "
+                    "(2) authentication issues - reconnect GitHub in settings, "
+                    "(3) repository access - ensure you have permission."
+                ),
+            }
+        except Exception as e:
+            logger.exception(f"Unexpected error in github_read: {e}")
+            return {
+                "error": f"Failed to read file: {str(e)}",
+                "error_type": "unknown",
+                "repo": repo,
+                "path": path,
+                "branch": branch,
+            }
+
+    async def _github_search(
+        self,
+        user_id: str,
+        query: str,
+        repo: Optional[str] = None,
+        language: Optional[str] = None,
+        limit: int = 10,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Search code across GitHub repositories.
+
+        Uses GitHub's code search API. Requires authentication for best results.
+        Without auth, search is limited and may fail for private repos.
+
+        Args:
+            user_id: User ID for token lookup
+            query: Search query (supports GitHub search syntax)
+            repo: Limit search to specific repository (owner/repo format)
+            language: Filter by programming language (e.g., "python", "typescript")
+            limit: Maximum results to return (default: 10, max: 100)
+            **kwargs: Additional arguments (ignored)
+
+        Returns:
+            Dict with:
+                - query: Full query string used
+                - total_count: Total matches found (may be estimated)
+                - results: List of matching code locations
+                - incomplete: Whether results may be incomplete
+
+        Note:
+            Results include file paths and URLs but NOT file content.
+            Use github_read to fetch the actual content of interesting files.
+        """
+        logger.info(
+            f"GitHub search: query='{query[:50]}...', repo={repo}, language={language}",
+            extra={"user_id": user_id},
+        )
+
+        try:
+            result = await self.github.search_code(
+                user_id=user_id,
+                query=query,
+                repo=repo,
+                language=language,
+                limit=limit,
+            )
+
+            logger.info(
+                f"GitHub search success: found {result.get('total_count', 0)} results",
+                extra={"user_id": user_id},
+            )
+
+            return result
+
+        except GitHubError as e:
+            logger.warning(f"GitHub search error: {e}")
+
+            # Check if this is an auth issue
+            github_connected = self.github.get_github_username(user_id) is not None
+
+            if not github_connected:
+                return {
+                    "error": str(e),
+                    "error_type": "auth_required",
+                    "query": query,
+                    "suggestion": (
+                        "GitHub code search works best with authentication. "
+                        "Connect your GitHub account in Settings to enable full search capabilities."
+                    ),
+                }
+
+            return {
+                "error": str(e),
+                "error_type": "github_error",
+                "query": query,
+                "suggestion": (
+                    "GitHub search failed. This could be due to: "
+                    "(1) rate limiting - try again later, "
+                    "(2) invalid search syntax - simplify the query."
+                ),
+            }
+        except Exception as e:
+            logger.exception(f"Unexpected error in github_search: {e}")
+            return {
+                "error": f"Search failed: {str(e)}",
+                "error_type": "unknown",
+                "query": query,
+            }
 
 
 # Singleton instance for dependency injection

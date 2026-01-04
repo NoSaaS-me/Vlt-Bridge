@@ -4,8 +4,8 @@
  * T046-T054: Added CodeRAG index status panel with progress monitoring
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Copy, RefreshCw, Check, Save } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { ArrowLeft, Copy, RefreshCw, Check, Save, Github, Unlink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -29,12 +29,15 @@ import type { IndexHealth } from '@/types/search';
 import type { ModelInfo, ModelSettings } from '@/types/models';
 import type { ContextSettings } from '@/types/context';
 import type { CodeRAGStatusResponse } from '@/types/coderag';
+import type { GitHubStatus } from '@/types/github';
 import { getCodeRAGStatus, initCodeRAG } from '@/services/coderag';
+import { getGitHubStatus, disconnectGitHub, getGitHubConnectUrl } from '@/services/github';
 import { SystemLogs } from '@/components/SystemLogs';
 import { useProjectContext } from '@/contexts/ProjectContext';
 
 export function Settings() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { selectedProjectId, selectedProject, isLoading: projectsLoading } = useProjectContext();
   const [user, setUser] = useState<User | null>(null);
   const [apiToken, setApiToken] = useState<string>('');
@@ -60,6 +63,11 @@ export function Settings() {
   const [coderagStatus, setCoderagStatus] = useState<CodeRAGStatusResponse | null>(null);
   const [isReindexing, setIsReindexing] = useState(false);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // GitHub connection state
+  const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
+  const [isDisconnectingGithub, setIsDisconnectingGithub] = useState(false);
+  const [githubMessage, setGithubMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     loadData();
@@ -181,8 +189,69 @@ export function Settings() {
 
       // T046: Load CodeRAG status
       await loadCodeRAGStatus();
+
+      // Load GitHub connection status
+      try {
+        const ghStatus = await getGitHubStatus();
+        setGithubStatus(ghStatus);
+      } catch (err) {
+        console.debug('GitHub status not available:', err);
+        setGithubStatus({ connected: false, username: null });
+      }
     } catch (err) {
       console.error('Error loading settings:', err);
+    }
+  };
+
+  // Check for GitHub OAuth callback result in URL hash
+  useEffect(() => {
+    const hash = location.hash;
+    if (hash.includes('github=')) {
+      const params = new URLSearchParams(hash.replace('#', ''));
+      const status = params.get('github');
+      const message = params.get('message');
+
+      if (status === 'connected') {
+        setGithubMessage({ type: 'success', text: 'GitHub connected successfully!' });
+        // Reload GitHub status
+        getGitHubStatus().then(setGithubStatus).catch(() => {});
+      } else if (status === 'error') {
+        setGithubMessage({ type: 'error', text: message || 'GitHub connection failed' });
+      }
+
+      // Clear the hash from URL
+      window.history.replaceState(null, '', location.pathname);
+
+      // Clear message after 5 seconds
+      setTimeout(() => setGithubMessage(null), 5000);
+    }
+  }, [location.hash, location.pathname]);
+
+  const handleConnectGitHub = () => {
+    if (isDemoMode) {
+      setError('Demo mode is read-only. Sign in to connect GitHub.');
+      return;
+    }
+    window.location.href = getGitHubConnectUrl();
+  };
+
+  const handleDisconnectGitHub = async () => {
+    if (isDemoMode) {
+      setError('Demo mode is read-only. Sign in to disconnect GitHub.');
+      return;
+    }
+
+    setIsDisconnectingGithub(true);
+    try {
+      await disconnectGitHub();
+      setGithubStatus({ connected: false, username: null });
+      setGithubMessage({ type: 'success', text: 'GitHub disconnected successfully' });
+      setTimeout(() => setGithubMessage(null), 3000);
+    } catch (err) {
+      console.error('Error disconnecting GitHub:', err);
+      setError('Failed to disconnect GitHub');
+    } finally {
+      setIsDisconnectingGithub(false);
     }
   };
 
@@ -699,6 +768,92 @@ export function Settings() {
             description="CodeRAG indexing status for code search"
           />
         )}
+
+        {/* GitHub Connection */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Github className="h-5 w-5" />
+              GitHub Integration
+            </CardTitle>
+            <CardDescription>
+              Connect GitHub to access private repositories and enable code search
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {githubMessage && (
+              <Alert variant={githubMessage.type === 'error' ? 'destructive' : 'default'}>
+                <AlertDescription>{githubMessage.text}</AlertDescription>
+              </Alert>
+            )}
+
+            {githubStatus?.connected ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-10 w-10">
+                      <AvatarImage src={`https://github.com/${githubStatus.username}.png`} />
+                      <AvatarFallback>{githubStatus.username?.slice(0, 2).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <div className="font-medium">{githubStatus.username}</div>
+                      <div className="text-sm text-muted-foreground">GitHub connected</div>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={handleDisconnectGitHub}
+                    disabled={isDemoMode || isDisconnectingGithub}
+                  >
+                    <Unlink className="h-4 w-4 mr-2" />
+                    {isDisconnectingGithub ? 'Disconnecting...' : 'Disconnect'}
+                  </Button>
+                </div>
+
+                {githubStatus.rate_limit && (
+                  <>
+                    <Separator />
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <div className="text-muted-foreground">API Requests Remaining</div>
+                        <div className="font-medium">
+                          {githubStatus.rate_limit.remaining} / {githubStatus.rate_limit.limit}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Resets At</div>
+                        <div className="font-medium">
+                          {new Date(githubStatus.rate_limit.reset * 1000).toLocaleTimeString()}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Connect your GitHub account to:
+                </p>
+                <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                  <li>Read files from private repositories</li>
+                  <li>Search code across your repositories</li>
+                  <li>Access organization repositories you have permission to</li>
+                </ul>
+
+                <Button onClick={handleConnectGitHub} disabled={isDemoMode}>
+                  <Github className="h-4 w-4 mr-2" />
+                  Connect GitHub
+                </Button>
+              </>
+            )}
+
+            <div className="text-xs text-muted-foreground mt-4">
+              Your GitHub token is stored securely and only used for repository access.
+              You can disconnect at any time. Public repositories are accessible without authentication.
+            </div>
+          </CardContent>
+        </Card>
           </TabsContent>
 
           <TabsContent value="models" className="space-y-6 mt-6">

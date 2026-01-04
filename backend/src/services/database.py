@@ -285,6 +285,20 @@ DDL_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_plugin_state_lookup ON plugin_state(user_id, project_id, plugin_id)",
+    # GitHub cache table (016-github-integration)
+    """
+    CREATE TABLE IF NOT EXISTS github_cache (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo TEXT NOT NULL,
+        path TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        content TEXT,
+        etag TEXT,
+        cached_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(repo, path, ref)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_github_cache_lookup ON github_cache(repo, path, ref)",
 )
 
 # Migration statements for existing databases
@@ -307,6 +321,9 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE user_settings ADD COLUMN disabled_rules_json TEXT DEFAULT '[]'",
     # Add plugin_settings_json column to user_settings (015-oracle-plugin-system)
     "ALTER TABLE user_settings ADD COLUMN plugin_settings_json TEXT DEFAULT '{}'",
+    # Add GitHub OAuth columns to user_settings (016-github-integration)
+    "ALTER TABLE user_settings ADD COLUMN github_token_encrypted TEXT",
+    "ALTER TABLE user_settings ADD COLUMN github_username TEXT",
 )
 
 

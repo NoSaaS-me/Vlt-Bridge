@@ -471,6 +471,68 @@
       },
       "agent_scope": ["oracle"],
       "category": "meta"
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "github_read",
+        "description": "Read a file from a GitHub repository. Works with both public and private repos (private requires GitHub connection). Falls back to raw URL for public repos without auth.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "repo": {
+              "type": "string",
+              "description": "Repository in owner/repo format (e.g., 'facebook/react', 'anthropics/anthropic-sdk-python')"
+            },
+            "path": {
+              "type": "string",
+              "description": "Path to file within the repository (e.g., 'src/index.js', 'README.md')"
+            },
+            "branch": {
+              "type": "string",
+              "default": "main",
+              "description": "Branch, tag, or commit SHA (default: 'main')"
+            }
+          },
+          "required": ["repo", "path"]
+        }
+      },
+      "agent_scope": ["oracle", "librarian"],
+      "category": "github"
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "github_search",
+        "description": "Search code across GitHub repositories. Returns file paths and URLs (use github_read to get content). Best results with GitHub connected.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query (supports GitHub search syntax like 'class MyClass language:python')"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Limit search to specific repository (owner/repo format)"
+            },
+            "language": {
+              "type": "string",
+              "description": "Filter by programming language (e.g., 'python', 'typescript', 'go')"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10,
+              "description": "Maximum results to return"
+            }
+          },
+          "required": ["query"]
+        }
+      },
+      "agent_scope": ["oracle"],
+      "category": "github"
     }
   ],
   "agent_definitions": {
@@ -482,7 +544,8 @@
         "search_code", "find_definition", "find_references", "get_repo_map",
         "vault_read", "vault_write", "vault_search", "vault_list",
         "thread_push", "thread_read", "thread_seek", "thread_list",
-        "web_search", "web_fetch", "delegate_librarian", "notify_self"
+        "web_search", "web_fetch", "delegate_librarian", "notify_self",
+        "github_read", "github_search"
       ],
       "max_turns": 15
     },
@@ -493,7 +556,7 @@
       "tools": [
         "vault_read", "vault_write", "vault_search", "vault_list",
         "vault_move", "vault_create_index", "search_code",
-        "web_search", "web_fetch"
+        "web_search", "web_fetch", "github_read"
       ],
       "max_turns": 10,
       "model_override": "deepseek/deepseek-chat"
