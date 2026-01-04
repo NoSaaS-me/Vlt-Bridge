@@ -1,0 +1,10 @@
+{% if events|length == 1 %}
+{% set e = events[0] %}
+checkpoint: {{ e.payload.message | default("progress update") }}{% if e.payload.turn %} (turn {{ e.payload.turn }}){% endif %}
+
+{% else %}
+checkpoints[{{ events|length }}]{turn,message}:
+{% for e in events %}
+  {{ e.payload.turn | default("?") }},{{ e.payload.message | default("") }}
+{% endfor %}
+{% endif %}

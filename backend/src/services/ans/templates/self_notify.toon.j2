@@ -1,0 +1,15 @@
+{% set e = events[0] %}
+{% set cat = e.payload.category | default("context") %}
+{% set pri = e.payload.priority | default("normal") %}
+{% set msg = e.payload.message | default("") %}
+{% if cat == "discovery" %}
+[DISCOVERY{% if pri == "high" or pri == "critical" %}!{% endif %}] {{ msg }}
+{% elif cat == "warning" %}
+[WARN{% if pri == "critical" %}!{% endif %}] {{ msg }}
+{% elif cat == "checkpoint" %}
+[CHECKPOINT] {{ msg }}
+{% elif cat == "reminder" %}
+[REMINDER{% if pri == "high" or pri == "critical" %}!{% endif %}] {{ msg }}
+{% else %}
+[NOTE] {{ msg }}
+{% endif %}

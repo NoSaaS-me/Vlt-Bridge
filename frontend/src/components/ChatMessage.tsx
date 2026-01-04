@@ -46,6 +46,7 @@ export function ChatMessage({
   const [toolsExpanded, setToolsExpanded] = useState(true); // Default expanded to show progress
   const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(new Set());
   const [copiedToolId, setCopiedToolId] = useState<string | null>(null);
+  const [copiedMessage, setCopiedMessage] = useState(false);
   const [systemMessageExpanded, setSystemMessageExpanded] = useState(false);
   const [toonParseError, setToonParseError] = useState(false);
 
@@ -172,6 +173,18 @@ export function ChatMessage({
       console.error('Failed to copy:', err);
     }
   }, []);
+
+  // Copy message content to clipboard (raw markdown)
+  const copyMessageContent = useCallback(async () => {
+    if (!message.content) return;
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopiedMessage(true);
+      setTimeout(() => setCopiedMessage(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy message:', err);
+    }
+  }, [message.content]);
 
   // Get tool status icon with appropriate styling
   const getToolStatusIcon = (status?: string) => {
@@ -667,6 +680,31 @@ export function ChatMessage({
         {/* ===== LEGACY RAG SOURCES ===== */}
         {!isUser && !isSystem && showSources && !oracleMsg && message.sources && (
           <SourceList sources={message.sources as import('@/types/rag').SourceReference[]} onSourceClick={onSourceClick} />
+        )}
+
+        {/* ===== COPY MESSAGE BUTTON (Assistant only) ===== */}
+        {!isUser && !isSystem && message.content && !isStreaming && (
+          <div className="flex justify-end mt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground opacity-60 hover:opacity-100 transition-opacity"
+              onClick={copyMessageContent}
+              title={copiedMessage ? 'Copied!' : 'Copy message'}
+            >
+              {copiedMessage ? (
+                <>
+                  <Check className="h-3.5 w-3.5 text-green-500 mr-1" />
+                  <span className="text-green-500">Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3.5 w-3.5 mr-1" />
+                  <span>Copy</span>
+                </>
+              )}
+            </Button>
+          </div>
         )}
       </div>
     </div>

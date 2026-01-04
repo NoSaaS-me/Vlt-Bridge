@@ -1,0 +1,21 @@
+[subscriber]
+id = "source_stale"
+name = "Source Stale Notifications"
+description = "Notifies agent when a previously read file has changed"
+version = "1.0.0"
+
+[events]
+types = ["source.stale"]
+severity_filter = "warning"
+
+[batching]
+window_ms = 2000
+max_size = 5
+dedupe_key = "type:payload.path"
+dedupe_window_ms = 10000
+
+[output]
+priority = "normal"
+inject_at = "after_tool"
+template = "source_stale.toon.j2"
+core = true

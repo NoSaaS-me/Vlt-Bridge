@@ -243,6 +243,33 @@ DDL_STATEMENTS: tuple[str, ...] = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_context_trees_user_project ON context_trees(user_id, project_id)",
     "CREATE INDEX IF NOT EXISTS idx_context_trees_last_activity ON context_trees(last_activity)",
+    # Cross-session notifications (014-ans-enhancements Feature 3)
+    """
+    CREATE TABLE IF NOT EXISTS cross_session_notifications (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        tree_id TEXT,
+        event_type TEXT NOT NULL,
+        source TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        formatted_content TEXT,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        inject_at TEXT NOT NULL DEFAULT 'turn_start',
+        created_at TEXT NOT NULL,
+        expires_at TEXT,
+        delivered_at TEXT,
+        acknowledged_at TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        category TEXT,
+        dedupe_key TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_cross_session_user_project ON cross_session_notifications(user_id, project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cross_session_status ON cross_session_notifications(status)",
+    "CREATE INDEX IF NOT EXISTS idx_cross_session_tree ON cross_session_notifications(tree_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cross_session_expires ON cross_session_notifications(expires_at)",
 )
 
 # Migration statements for existing databases

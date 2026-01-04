@@ -1033,7 +1033,10 @@ export function Settings() {
 
           <TabsContent value="notifications" className="space-y-6 mt-6">
             {/* Notification Subscribers */}
-            <NotificationSettingsComponent isDemoMode={isDemoMode} />
+            <NotificationSettingsComponent
+              isDemoMode={isDemoMode}
+              canTestNotifications={user?.user_id === 'demo-user'}
+            />
 
             {/* System Logs */}
             <SystemLogs />

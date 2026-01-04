@@ -1,0 +1,22 @@
+[subscriber]
+id = "self_notify"
+name = "Self Notification"
+description = "Delivers agent self-notifications and reminders to future context"
+version = "1.0.0"
+
+[events]
+types = ["agent.self.notify", "agent.self.remind"]
+severity_filter = "debug"
+
+[batching]
+# No batching - each notification delivered individually
+window_ms = 0
+max_size = 1
+dedupe_key = ""
+dedupe_window_ms = 0
+
+[output]
+priority = "normal"
+inject_at = "turn_start"
+template = "self_notify.toon.j2"
+core = false

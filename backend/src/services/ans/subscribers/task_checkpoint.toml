@@ -1,0 +1,21 @@
+[subscriber]
+id = "task_checkpoint"
+name = "Task Checkpoint Notifications"
+description = "Periodic progress updates and checkpoints during task execution"
+version = "1.0.0"
+
+[events]
+types = ["task.checkpoint"]
+severity_filter = "info"
+
+[batching]
+window_ms = 5000
+max_size = 1
+dedupe_key = "type"
+dedupe_window_ms = 30000
+
+[output]
+priority = "low"
+inject_at = "turn_start"
+template = "task_checkpoint.toon.j2"
+core = false

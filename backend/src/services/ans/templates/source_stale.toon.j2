@@ -1,0 +1,9 @@
+{% if events|length == 1 %}
+{% set e = events[0] %}
+source_stale: {{ e.payload.path }} changed since last read - re-read if needed
+{% else %}
+source_stale[{{ events|length }}]{path,message}:
+{% for e in events %}
+  {{ e.payload.path }},{{ e.payload.message | default("changed") }}
+{% endfor %}
+{% endif %}

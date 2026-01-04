@@ -10,9 +10,11 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Bell, Lock } from 'lucide-react';
-import { getSubscribers, toggleSubscriber } from '@/services/notifications';
+import { Bell, Lock, FlaskConical, Check } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { getSubscribers, toggleSubscriber, testSubscriber } from '@/services/notifications'
 import type { SubscriberInfo } from '@/types/notifications';
+import { useToast } from '@/hooks/useToast';
 
 /**
  * Priority grouping for subscribers
@@ -66,13 +68,17 @@ function getPriorityBadge(priority: Priority): { label: string; variant: 'defaul
 
 interface NotificationSettingsProps {
   isDemoMode?: boolean;
+  canTestNotifications?: boolean;
 }
 
-export function NotificationSettings({ isDemoMode = false }: NotificationSettingsProps) {
+export function NotificationSettings({ isDemoMode = false, canTestNotifications = false }: NotificationSettingsProps) {
   const [subscribers, setSubscribers] = useState<SubscriberInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
+  const [testingIds, setTestingIds] = useState<Set<string>>(new Set());
+  const [testedIds, setTestedIds] = useState<Set<string>>(new Set());
+  const toast = useToast();
 
   useEffect(() => {
     loadSubscribers();
@@ -119,6 +125,50 @@ export function NotificationSettings({ isDemoMode = false }: NotificationSetting
       setError(`Failed to toggle subscriber: ${subscriberId}`);
     } finally {
       setTogglingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(subscriberId);
+        return next;
+      });
+    }
+  };
+
+  const handleTest = async (subscriberId: string) => {
+    // Prevent double-testing
+    if (testingIds.has(subscriberId)) {
+      return;
+    }
+
+    setTestingIds((prev) => new Set(prev).add(subscriberId));
+    setError(null);
+
+    try {
+      const result = await testSubscriber(subscriberId);
+      // Show "Sent!" feedback
+      setTestedIds((prev) => new Set(prev).add(subscriberId));
+
+      // Show toast with timing info
+      const injectAtLabels: Record<string, string> = {
+        'turn_start': 'at next turn start',
+        'after_tool': 'after next tool execution',
+        'immediate': 'on critical events',
+        'turn_end': 'at turn end',
+      };
+      const timing = injectAtLabels[result.inject_at] || result.inject_at;
+      toast.info(`Test event emitted. Notification will appear ${timing}.`);
+
+      // Clear the "Sent!" after 2 seconds
+      setTimeout(() => {
+        setTestedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(subscriberId);
+          return next;
+        });
+      }, 2000);
+    } catch (err) {
+      console.error('Error testing subscriber:', err);
+      setError(`Failed to test subscriber: ${subscriberId}`);
+    } finally {
+      setTestingIds((prev) => {
         const next = new Set(prev);
         next.delete(subscriberId);
         return next;
@@ -215,6 +265,10 @@ export function NotificationSettings({ isDemoMode = false }: NotificationSetting
                       isToggling={togglingIds.has(subscriber.id)}
                       onToggle={handleToggle}
                       isDemoMode={isDemoMode}
+                      canTestNotifications={canTestNotifications}
+                      isTesting={testingIds.has(subscriber.id)}
+                      isTested={testedIds.has(subscriber.id)}
+                      onTest={handleTest}
                     />
                   ))}
                 </div>
@@ -237,9 +291,13 @@ interface SubscriberRowProps {
   isToggling: boolean;
   onToggle: (id: string, newEnabled: boolean) => void;
   isDemoMode: boolean;
+  canTestNotifications: boolean;
+  isTesting: boolean;
+  isTested: boolean;
+  onTest: (id: string) => void;
 }
 
-function SubscriberRow({ subscriber, isToggling, onToggle, isDemoMode }: SubscriberRowProps) {
+function SubscriberRow({ subscriber, isToggling, onToggle, isDemoMode, canTestNotifications, isTesting, isTested, onTest }: SubscriberRowProps) {
   const isDisabled = subscriber.is_core || isToggling || isDemoMode;
 
   return (
@@ -287,7 +345,41 @@ function SubscriberRow({ subscriber, isToggling, onToggle, isDemoMode }: Subscri
         </div>
       </div>
 
-      <div className="ml-4">
+      <div className="ml-4 flex items-center gap-2">
+        {/* Test button - only shown for demo users (user_id === 'demo-user') */}
+        {canTestNotifications && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onTest(subscriber.id)}
+                  disabled={isTesting}
+                  className="h-8 px-2"
+                  aria-label={`Test ${subscriber.name}`}
+                >
+                  {isTested ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-green-500 mr-1" />
+                      <span className="text-xs text-green-500">Sent!</span>
+                    </>
+                  ) : isTesting ? (
+                    <FlaskConical className="h-3.5 w-3.5 animate-pulse" />
+                  ) : (
+                    <>
+                      <FlaskConical className="h-3.5 w-3.5 mr-1" />
+                      <span className="text-xs">Test</span>
+                    </>
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Emit a test event for this subscriber</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>

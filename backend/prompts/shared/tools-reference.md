@@ -563,7 +563,66 @@ Tools for external information gathering.
 
 ## Meta Tools
 
-Tools for agent coordination.
+Tools for agent coordination and self-awareness.
+
+### notify_self
+
+**Purpose**: Send a notification to your future self. The notification will appear in your context at a specified time.
+
+**When to Use**:
+- Recording important discoveries for later reference
+- Setting reminders for follow-up actions
+- Preserving context that might be lost across turns
+- Creating checkpoints during long tasks
+- Warning yourself about risks or concerns
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `message` | string | Yes | The notification content |
+| `priority` | string | No | "low", "normal" (default), "high", "critical" |
+| `category` | string | No | "discovery", "warning", "checkpoint", "reminder", "context" (default) |
+| `deliver_at` | string | No | "immediate", "next_turn" (default), "after_tool" |
+| `persist_cross_session` | boolean | No | Survive session restarts (default false) |
+
+**Examples**:
+```json
+// Record an important finding
+{
+  "message": "Found auth bug: login.py:45 doesn't validate expired tokens",
+  "category": "discovery",
+  "priority": "high"
+}
+
+// Set a reminder for follow-up
+{
+  "message": "Check if the test suite passes after these changes",
+  "category": "reminder",
+  "deliver_at": "after_tool"
+}
+
+// Preserve context for next session
+{
+  "message": "Last session: refactoring auth module, completed 3/5 files",
+  "category": "checkpoint",
+  "persist_cross_session": true
+}
+
+// Record user preference
+{
+  "message": "User prefers concise responses with code examples",
+  "category": "context"
+}
+```
+
+**Best Practices**:
+- Use `discovery` for findings that change understanding
+- Use `reminder` for deferred actions
+- Use `checkpoint` for progress milestones
+- Use `persist_cross_session` sparingly for truly important context
+- Keep messages concise but self-contained
+
+---
 
 ### delegate_librarian
 
@@ -672,3 +731,5 @@ Tools for agent coordination.
 | "What's the current Y?" | web_search | vault_search |
 | "Document X" | vault_write | - |
 | "Remember X" | thread_push | vault_write |
+| "Remind me to X" | notify_self | thread_push |
+| "Note for later: X" | notify_self | vault_write |

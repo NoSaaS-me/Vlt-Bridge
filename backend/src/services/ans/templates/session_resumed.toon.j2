@@ -1,0 +1,10 @@
+{% if events|length == 1 %}
+{% set e = events[0] %}
+session_resumed: {{ e.payload.nodes_loaded }} exchanges loaded{% if e.payload.last_question %} - last: "{{ e.payload.last_question }}"{% endif %}
+
+{% else %}
+session_resumed[{{ events|length }}]{nodes,last_question}:
+{% for e in events %}
+  {{ e.payload.nodes_loaded }},{{ e.payload.last_question | default("") }}
+{% endfor %}
+{% endif %}

@@ -1,0 +1,21 @@
+[subscriber]
+id = "context_limit"
+name = "Context Limit Notifications"
+description = "Notifies agent when approaching the model's context window limit"
+version = "1.0.0"
+
+[events]
+types = ["context.approaching_limit"]
+severity_filter = "warning"
+
+[batching]
+window_ms = 5000
+max_size = 1
+dedupe_key = "type"
+dedupe_window_ms = 60000
+
+[output]
+priority = "high"
+inject_at = "turn_start"
+template = "context_limit.toon.j2"
+core = true

@@ -5,6 +5,25 @@ from .bus import EventBus, get_event_bus
 from .subscriber import Subscriber, SubscriberConfig, Priority, InjectionPoint
 from .accumulator import NotificationAccumulator, Notification
 from .toon_formatter import ToonFormatter
+from .persistence import (
+    CrossSessionNotification,
+    CrossSessionPersistenceService,
+    NotificationStatus,
+    get_persistence_service,
+)
+from .deferred import (
+    DeliveryTrigger,
+    DeliveryContext,
+    DeferredNotification,
+    DeferredDeliveryQueue,
+    ConditionPredicate,
+    context_above_threshold,
+    tool_completed,
+    message_count_above,
+    token_usage_above,
+    get_deferred_queue,
+    reset_deferred_queue,
+)
 
 __all__ = [
     "Event",
@@ -19,4 +38,21 @@ __all__ = [
     "NotificationAccumulator",
     "Notification",
     "ToonFormatter",
+    # Cross-session persistence (014-ans-enhancements Feature 3)
+    "CrossSessionNotification",
+    "CrossSessionPersistenceService",
+    "NotificationStatus",
+    "get_persistence_service",
+    # Deferred delivery (014-ans-enhancements Feature 4)
+    "DeliveryTrigger",
+    "DeliveryContext",
+    "DeferredNotification",
+    "DeferredDeliveryQueue",
+    "ConditionPredicate",
+    "context_above_threshold",
+    "tool_completed",
+    "message_count_above",
+    "token_usage_above",
+    "get_deferred_queue",
+    "reset_deferred_queue",
 ]

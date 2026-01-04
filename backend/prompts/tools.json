@@ -429,6 +429,48 @@
       },
       "agent_scope": ["oracle"],
       "category": "meta"
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "notify_self",
+        "description": "Send a notification to your future self. Use this to record important discoveries, warnings, or context that should persist across turns.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "The notification message content."
+            },
+            "priority": {
+              "type": "string",
+              "enum": ["low", "normal", "high", "critical"],
+              "default": "normal",
+              "description": "Priority level of the notification."
+            },
+            "category": {
+              "type": "string",
+              "enum": ["discovery", "warning", "checkpoint", "reminder", "context"],
+              "default": "context",
+              "description": "Category of the notification for formatting."
+            },
+            "deliver_at": {
+              "type": "string",
+              "enum": ["immediate", "next_turn", "after_tool"],
+              "default": "next_turn",
+              "description": "When to deliver the notification."
+            },
+            "persist_cross_session": {
+              "type": "boolean",
+              "default": false,
+              "description": "Whether to persist across session restarts."
+            }
+          },
+          "required": ["message"]
+        }
+      },
+      "agent_scope": ["oracle"],
+      "category": "meta"
     }
   ],
   "agent_definitions": {
@@ -440,7 +482,7 @@
         "search_code", "find_definition", "find_references", "get_repo_map",
         "vault_read", "vault_write", "vault_search", "vault_list",
         "thread_push", "thread_read", "thread_seek", "thread_list",
-        "web_search", "web_fetch", "delegate_librarian"
+        "web_search", "web_fetch", "delegate_librarian", "notify_self"
       ],
       "max_turns": 15
     },

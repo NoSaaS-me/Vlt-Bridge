@@ -59,3 +59,28 @@ export async function updateNotificationSettings(
     body: JSON.stringify(settings),
   });
 }
+
+/**
+ * Response from testing a notification subscriber
+ */
+export interface TestSubscriberResponse {
+  subscriber_id: string;
+  event_type: string;
+  inject_at: 'turn_start' | 'after_tool' | 'immediate' | 'turn_end';
+  message: string;
+}
+
+/**
+ * Test a notification subscriber by emitting a test event.
+ * Only available for demo users.
+ * @param id The subscriber ID to test
+ * @returns Information about the test event that was emitted
+ */
+export async function testSubscriber(id: string): Promise<TestSubscriberResponse> {
+  return apiFetch<TestSubscriberResponse>(
+    `/api/notifications/subscribers/${encodeURIComponent(id)}/test`,
+    {
+      method: 'POST',
+    }
+  );
+}

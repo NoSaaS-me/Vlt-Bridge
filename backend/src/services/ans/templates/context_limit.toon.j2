@@ -1,0 +1,9 @@
+{% if events|length == 1 %}
+{% set e = events[0] %}
+context_warn: {{ e.payload.percent }}% used ({{ e.payload.remaining_tokens }} tokens remaining) - consider summarizing or concluding
+{% else %}
+context_warns[{{ events|length }}]{percent,remaining,message}:
+{% for e in events %}
+  {{ e.payload.percent }}%,{{ e.payload.remaining_tokens }},{{ e.payload.message | default("") }}
+{% endfor %}
+{% endif %}

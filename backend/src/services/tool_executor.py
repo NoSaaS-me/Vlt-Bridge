@@ -36,9 +36,10 @@ from .thread_service import ThreadService
 from .user_settings import UserSettingsService, get_user_settings_service
 from .vault import VaultService
 
-# ANS imports for timeout event emission
+# ANS imports for timeout event emission and persistence
 from .ans.bus import get_event_bus
 from .ans.event import Event, EventType, Severity
+from .ans.persistence import CrossSessionNotification, get_persistence_service
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,8 @@ class ToolExecutor:
         # Subagents can run for extended periods (e.g., summarizing many files, web research)
         # 20 minutes allows for large vault operations and web research without premature timeout
         "delegate_librarian": 1200.0,  # 20 minutes for large summarizations and web research
+        # Self-notification - fast local operation
+        "notify_self": 5.0,
     }
 
     def __init__(
@@ -150,10 +153,16 @@ class ToolExecutor:
             "web_fetch": self._web_fetch,
             # Meta tools
             "delegate_librarian": self._delegate_librarian,
+            "notify_self": self._notify_self,
         }
 
         # Cache for tool schemas
         self._schema_cache: Optional[Dict[str, Any]] = None
+
+        # File mtime tracking for staleness detection (014-ans-enhancements)
+        # Maps (user_id, path) -> (content_hash, mtime_when_read)
+        # Used to detect when a file has changed since the agent last read it
+        self._file_read_times: Dict[tuple, tuple] = {}
 
     def get_timeout(
         self,
@@ -534,6 +543,90 @@ class ToolExecutor:
         }
         return suggestions.get(category, suggestions["unknown_error"])
 
+    def _check_file_staleness(
+        self,
+        user_id: str,
+        path: str,
+        project_id: str,
+        current_content: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Check if a file has changed since it was last read by the agent.
+
+        This enables the SOURCE_STALE event to notify the agent when a file
+        it previously read has been modified, indicating that its understanding
+        may be outdated.
+
+        Args:
+            user_id: User ID for file scoping
+            path: Path to the file being read
+            project_id: Project ID for file scoping
+            current_content: The content just read from the file
+
+        Returns:
+            Dict with staleness info if file changed, None otherwise.
+            Contains: path, previous_hash, current_hash, message
+        """
+        import hashlib
+        import os
+        from pathlib import Path as FilePath
+
+        cache_key = (user_id, project_id, path)
+
+        # Get current file mtime
+        try:
+            # Construct the file path the same way VaultService does
+            vault_base = os.environ.get("VAULT_BASE_DIR", "./data/vaults")
+            file_path = FilePath(vault_base) / user_id / project_id / path
+            if not file_path.suffix:
+                file_path = file_path.with_suffix(".md")
+            current_mtime = file_path.stat().st_mtime if file_path.exists() else None
+        except Exception:
+            current_mtime = None
+
+        # Hash the current content for comparison
+        current_hash = hashlib.md5(current_content.encode()).hexdigest()[:8]
+
+        if cache_key in self._file_read_times:
+            previous_hash, previous_mtime = self._file_read_times[cache_key]
+
+            # Check if file has changed (by hash or mtime)
+            file_changed = (
+                previous_hash != current_hash
+                or (previous_mtime and current_mtime and previous_mtime != current_mtime)
+            )
+
+            if file_changed:
+                # Update the cache with new values
+                self._file_read_times[cache_key] = (current_hash, current_mtime)
+
+                logger.info(f"[SOURCE_STALE] File {path} changed since last read")
+
+                # Emit SOURCE_STALE event
+                get_event_bus().emit(Event(
+                    type=EventType.SOURCE_STALE,
+                    source="tool_executor",
+                    severity=Severity.WARNING,
+                    payload={
+                        "path": path,
+                        "project_id": project_id,
+                        "previous_hash": previous_hash,
+                        "current_hash": current_hash,
+                        "message": f"File '{path}' has changed since last read - content may be outdated",
+                    }
+                ))
+
+                return {
+                    "path": path,
+                    "previous_hash": previous_hash,
+                    "current_hash": current_hash,
+                    "message": f"File changed since last read",
+                }
+        else:
+            # First time reading this file - just record it
+            self._file_read_times[cache_key] = (current_hash, current_mtime)
+
+        return None
+
     def _load_tool_schemas(self) -> Dict[str, Any]:
         """
         Load tool schemas from JSON file.
@@ -877,14 +970,23 @@ class ToolExecutor:
         path: str,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Read a markdown note from the vault."""
+        """Read a markdown note from the vault.
+
+        Tracks file content hash to detect changes between reads.
+        Emits SOURCE_STALE event if file changed since last read by this agent.
+        """
         project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
         logger.debug(f"[VAULT_READ] user_id={user_id}, project_id={project_id}, path={path}")
         note = self.vault.read_note(user_id, path, project_id=project_id)
+
+        # Check for staleness - emits SOURCE_STALE event if file changed (014-ans-enhancements)
+        content = note.get("body", "")
+        self._check_file_staleness(user_id, path, project_id, content)
+
         return {
             "path": path,
             "title": note.get("title", ""),
-            "content": note.get("body", ""),
+            "content": content,
             "metadata": note.get("metadata", {}),
         }
 
@@ -1856,6 +1958,147 @@ class ToolExecutor:
         except Exception as e:
             logger.exception(f"LibrarianAgent organization failed: {e}")
             return {"error": f"Organization failed: {str(e)}", "success": False}
+
+    async def _notify_self(
+        self,
+        user_id: str,
+        message: str,
+        priority: str = "normal",
+        category: str = "context",
+        deliver_at: str = "next_turn",
+        persist_cross_session: bool = False,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Send a notification to the agent's future self.
+
+        This tool allows the Oracle agent to emit notifications that will appear
+        in its future context, enabling it to leave "breadcrumbs" for itself -
+        recording important discoveries, warnings, or context that should persist
+        across tool calls and turns.
+
+        Args:
+            user_id: User ID for scoped operations
+            message: The notification message content
+            priority: Priority level ("low", "normal", "high", "critical")
+            category: Category for formatting ("discovery", "warning", "checkpoint", "reminder", "context")
+            deliver_at: When to deliver ("immediate", "next_turn", "after_tool")
+            persist_cross_session: Whether to persist across session restarts
+            **kwargs: Additional arguments
+
+        Returns:
+            Dict with status and notification details
+        """
+        # Validate priority
+        valid_priorities = {"low", "normal", "high", "critical"}
+        if priority not in valid_priorities:
+            priority = "normal"
+
+        # Validate category
+        valid_categories = {"discovery", "warning", "checkpoint", "reminder", "context"}
+        if category not in valid_categories:
+            category = "context"
+
+        # Validate deliver_at
+        valid_deliver_at = {"immediate", "next_turn", "after_tool"}
+        if deliver_at not in valid_deliver_at:
+            deliver_at = "next_turn"
+
+        # Map deliver_at to injection point
+        inject_at_map = {
+            "immediate": "immediate",
+            "next_turn": "turn_start",
+            "after_tool": "after_tool",
+        }
+        inject_at = inject_at_map.get(deliver_at, "turn_start")
+
+        # Map priority to severity
+        severity_map = {
+            "low": Severity.DEBUG,
+            "normal": Severity.INFO,
+            "high": Severity.WARNING,
+            "critical": Severity.ERROR,
+        }
+        severity = severity_map.get(priority, Severity.INFO)
+
+        # Determine event type based on category
+        # Use AGENT_SELF_REMIND for reminder category, AGENT_SELF_NOTIFY for others
+        if category == "reminder":
+            event_type = EventType.AGENT_SELF_REMIND
+        else:
+            event_type = EventType.AGENT_SELF_NOTIFY
+
+        # Create and emit the event
+        event = Event(
+            type=event_type,
+            source="notify_self",
+            severity=severity,
+            payload={
+                "message": message,
+                "priority": priority,
+                "category": category,
+                "deliver_at": deliver_at,
+                "inject_at": inject_at,
+                "persist_cross_session": persist_cross_session,
+                "user_id": user_id,
+            },
+        )
+
+        get_event_bus().emit(event)
+
+        logger.info(
+            f"Self-notification emitted: category={category}, priority={priority}, "
+            f"deliver_at={deliver_at}, message={message[:50]}...",
+            extra={"user_id": user_id},
+        )
+
+        # Handle cross-session persistence if requested
+        persistence_id = None
+        if persist_cross_session:
+            try:
+                project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
+                tree_id = kwargs.get("tree_id")  # Optional context tree association
+
+                # Create and store cross-session notification
+                cross_session = CrossSessionNotification(
+                    user_id=user_id,
+                    project_id=project_id,
+                    tree_id=tree_id,
+                    event_type=str(event_type),
+                    source="notify_self",
+                    severity=severity.value,
+                    payload={
+                        "message": message,
+                        "category": category,
+                    },
+                    formatted_content=f"[{category.upper()}] {message}",
+                    priority=priority,
+                    inject_at=inject_at,
+                    category=category,
+                )
+
+                persistence_service = get_persistence_service()
+                stored = persistence_service.store(cross_session)
+                persistence_id = stored.id
+
+                logger.info(
+                    f"Cross-session notification stored: id={persistence_id}, "
+                    f"user={user_id}, project={project_id}",
+                )
+            except Exception as e:
+                logger.error(f"Failed to persist cross-session notification: {e}")
+
+        return {
+            "status": "ok",
+            "event_id": str(event.id),
+            "category": category,
+            "priority": priority,
+            "deliver_at": deliver_at,
+            "inject_at": inject_at,
+            "persist_cross_session": persist_cross_session,
+            "persistence_id": persistence_id,
+            "message": f"Notification scheduled for delivery at {deliver_at}",
+        }
 
 
 # Singleton instance for dependency injection

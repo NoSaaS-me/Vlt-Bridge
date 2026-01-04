@@ -43,6 +43,8 @@ from .ans.event import Event, EventType, Severity
 from .ans.accumulator import NotificationAccumulator
 from .ans.subscriber import SubscriberLoader
 from .ans.toon_formatter import get_toon_formatter
+from .ans.persistence import CrossSessionPersistenceService, get_persistence_service
+from .ans.deferred import reset_deferred_queue, get_deferred_queue
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +452,13 @@ class OracleAgent:
         self._max_context_tokens = DEFAULT_CONTEXT_SIZE  # Model's max context
         self._last_context_update_tokens = 0  # Last sent update (avoid spam)
 
+        # Context limit warning (014-ans-enhancements)
+        self._context_limit_warning_emitted = False
+        self.CONTEXT_WARNING_THRESHOLD = 0.70  # 70% of model context window
+
+        # Cross-session persistence (014-ans-enhancements Feature 3)
+        self._persistence_service = get_persistence_service()
+
     def cancel(self) -> None:
         """Cancel all running operations.
 
@@ -583,6 +592,7 @@ class OracleAgent:
         self._token_exceeded_emitted = False
         self._total_tokens_used = 0
         self._max_tokens_budget = max_tokens
+        self._context_limit_warning_emitted = False  # Reset context limit flag
 
     def _check_iteration_budget(self, turn: int) -> None:
         """Check iteration budget and emit warning event at 70% threshold.
@@ -684,6 +694,44 @@ class OracleAgent:
             }
         ))
 
+    def _check_context_limit(self) -> None:
+        """Check context window usage and emit warning at 70% threshold.
+
+        This proactively notifies the agent when it's approaching the model's
+        context window limit, allowing it to adjust strategy (e.g., summarize,
+        compress history, or wrap up the task).
+
+        Only emits once per query session to avoid notification spam.
+        """
+        if self._context_limit_warning_emitted:
+            return
+
+        if self._max_context_tokens <= 0:
+            return
+
+        usage_percent = self._context_tokens / self._max_context_tokens
+        if usage_percent >= self.CONTEXT_WARNING_THRESHOLD:
+            self._context_limit_warning_emitted = True
+            percent = int(usage_percent * 100)
+            remaining_tokens = self._max_context_tokens - self._context_tokens
+
+            logger.warning(
+                f"Context window approaching limit: {self._context_tokens}/{self._max_context_tokens} ({percent}%)"
+            )
+
+            self._event_bus.emit(Event(
+                type=EventType.CONTEXT_APPROACHING_LIMIT,
+                source="oracle_agent",
+                severity=Severity.WARNING,
+                payload={
+                    "current_tokens": self._context_tokens,
+                    "max_tokens": self._max_context_tokens,
+                    "percent": percent,
+                    "remaining_tokens": remaining_tokens,
+                    "message": f"Context window at {percent}% ({remaining_tokens} tokens remaining)",
+                }
+            ))
+
     async def query(
         self,
         question: str,
@@ -712,6 +760,7 @@ class OracleAgent:
         self.reset_cancellation()
         self._reset_loop_detection()
         self._reset_budget_tracking(max_tokens)
+        reset_deferred_queue()  # Reset deferred delivery queue for new query
         self.user_id = user_id
         self._collected_sources = []
         self._collected_tool_calls = []
@@ -782,6 +831,36 @@ class OracleAgent:
         except Exception as e:
             logger.error(f"Failed to load legacy context: {e}")
             self._context = None
+
+        # Load and inject cross-session notifications (014-ans-enhancements Feature 3)
+        cross_session_notifications: List[str] = []
+        try:
+            pending_notifications = self._persistence_service.get_pending(
+                user_id=user_id,
+                project_id=effective_project_id,
+                tree_id=self._current_tree_root_id,
+            )
+
+            for notification in pending_notifications:
+                # Use formatted content if available, otherwise create basic format
+                if notification.formatted_content:
+                    content = notification.formatted_content
+                else:
+                    content = f"[{notification.severity.upper()}] {notification.event_type}: {json.dumps(notification.payload)}"
+
+                cross_session_notifications.append(content)
+
+                # Mark as delivered
+                self._persistence_service.mark_delivered(notification.id)
+
+            if cross_session_notifications:
+                logger.info(
+                    f"Loaded {len(cross_session_notifications)} cross-session notifications "
+                    f"for user {user_id} project {effective_project_id}"
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to load cross-session notifications: {e}")
 
         # Get services
         tool_executor = _get_tool_executor()
@@ -868,6 +947,30 @@ class OracleAgent:
                     f"added {len(messages) - 1} context messages "
                     f"(including {system_messages_loaded} system messages)"
                 )
+
+                # Emit SESSION_RESUMED event if we loaded meaningful context (014-ans-enhancements)
+                # Count nodes with actual Q&A content (not just empty root nodes)
+                content_nodes = [n for n in path_nodes if n.question or n.answer]
+                if content_nodes:
+                    # Find the last question for context in the notification
+                    last_question = None
+                    for node in reversed(content_nodes):
+                        if node.question:
+                            last_question = node.question[:100]  # Truncate for notification
+                            break
+
+                    self._event_bus.emit(Event(
+                        type=EventType.SESSION_RESUMED,
+                        source="oracle_agent",
+                        severity=Severity.INFO,
+                        payload={
+                            "tree_id": self._current_tree_root_id,
+                            "nodes_loaded": len(content_nodes),
+                            "last_question": last_question,
+                            "message": f"Resumed session with {len(content_nodes)} previous exchanges",
+                        }
+                    ))
+
             except Exception as e:
                 logger.error(f"Failed to load tree history: {e}")
 
@@ -886,6 +989,16 @@ class OracleAgent:
                     messages.append({"role": "user", "content": exchange.content})
                 elif exchange.role == ExchangeRole.ASSISTANT:
                     messages.append({"role": "assistant", "content": exchange.content})
+
+        # Inject cross-session notifications as system messages (014-ans-enhancements Feature 3)
+        if cross_session_notifications:
+            for notification_content in cross_session_notifications:
+                messages.append({
+                    "role": "system",
+                    "content": f"<cross_session_notification>\n{notification_content}\n</cross_session_notification>",
+                })
+                # Also collect for persistence in the current exchange
+                self._collected_system_messages.append(notification_content)
 
         # Add current question
         messages.append({"role": "user", "content": question})
@@ -939,7 +1052,7 @@ class OracleAgent:
                 self._check_iteration_budget(turn)
 
                 # Drain and yield turn_start notifications (T049 - budget warnings)
-                async for notification_chunk in self._drain_and_yield_turn_start_notifications():
+                async for notification_chunk in self._drain_and_yield_turn_start_notifications(messages):
                     yield notification_chunk
 
                 logger.debug(f"Agent turn {turn + 1}/{self.MAX_TURNS}")
@@ -979,7 +1092,7 @@ class OracleAgent:
             self._emit_iteration_exceeded()
 
             # Drain and yield immediate notifications for exceeded events (T050)
-            async for notification_chunk in self._drain_and_yield_immediate_notifications():
+            async for notification_chunk in self._drain_and_yield_immediate_notifications(messages):
                 yield notification_chunk
 
             # Log and yield accumulated content before error
@@ -1391,6 +1504,7 @@ class OracleAgent:
 
                 # Update context token count with assistant response
                 self._context_tokens += estimate_tokens(content_buffer)
+                self._check_context_limit()  # Proactive context warning (014-ans-enhancements)
 
                 # Save the exchange to persistent context
                 context_id = self._save_exchange(
@@ -1500,6 +1614,7 @@ class OracleAgent:
 
                 # Update context token count with assistant response
                 self._context_tokens += estimate_tokens(content)
+                self._check_context_limit()  # Proactive context warning (014-ans-enhancements)
 
                 # Save the exchange to persistent context
                 usage = data.get("usage", {})
@@ -1577,6 +1692,11 @@ class OracleAgent:
             loop_content = f"!loop: {loop_info['pattern']} repeated {loop_info['count']}x - {loop_info['suggestion']}"
             # Collect for persistence (T040)
             self._collected_system_messages.append(loop_content)
+            # CRITICAL FIX: Inject into messages so LLM sees the notification
+            messages.append({
+                "role": "system",
+                "content": f"<system_notification>\n{loop_content}\n</system_notification>",
+            })
             yield OracleStreamChunk(
                 type="system",
                 content=loop_content,
@@ -1790,6 +1910,7 @@ class OracleAgent:
 
                 # Update context tokens and emit update if significant change
                 self._context_tokens += estimate_tokens(result.result) + 10  # +10 for message overhead
+                self._check_context_limit()  # Proactive context warning (014-ans-enhancements)
                 if self._should_emit_context_update(self._context_tokens):
                     yield self._create_context_update_chunk()
             else:
@@ -1845,29 +1966,42 @@ class OracleAgent:
 
                 # Update context tokens for error result
                 self._context_tokens += estimate_tokens(error_content) + 10
+                self._check_context_limit()  # Proactive context warning (014-ans-enhancements)
 
         # Drain notifications after tool execution (T030-T033)
-        async for notification_chunk in self._drain_and_yield_notifications():
+        # Get list of tool names that were executed for deferred delivery
+        executed_tool_names = [name for _, name, _, _ in parsed_calls]
+        async for notification_chunk in self._drain_and_yield_notifications(messages, executed_tool_names):
             yield notification_chunk
 
     async def _drain_and_yield_notifications(
         self,
+        messages: List[Dict[str, Any]],
+        tool_names: Optional[List[str]] = None,
     ) -> AsyncGenerator[OracleStreamChunk, None]:
         """Drain notifications from the accumulator and yield as system chunks.
 
         This processes events that have been accumulated during tool execution
         and formats them into TOON-formatted system messages for the agent.
 
+        Args:
+            messages: Conversation messages list (mutated to add system notifications
+                     so the LLM can see them in the next turn).
+            tool_names: List of tool names that were just executed (for deferred delivery)
+
         Yields:
             OracleStreamChunk objects with type="system" containing formatted notifications.
         """
+        # Drain pending events ONCE before iterating subscribers
+        # (draining inside the loop would empty the list on first iteration)
+        pending = self._event_bus.drain_pending()
+
         # Process events through subscribers to create notifications
         for subscriber in self._subscriber_loader.get_all_subscribers():
             if not subscriber.enabled:
                 continue
 
-            # Check pending events in the event bus
-            pending = self._event_bus.drain_pending()
+            # Check each pending event against this subscriber
             for event in pending:
                 if subscriber.matches_event(event.type):
                     notification = self._accumulator.accumulate(event, subscriber)
@@ -1880,6 +2014,13 @@ class OracleAgent:
 
         # Drain after_tool notifications
         notifications = self._accumulator.drain_after_tool()
+
+        # Also drain deferred after_tool notifications for each executed tool
+        if tool_names:
+            for tool_name in tool_names:
+                deferred_notifications = self._accumulator.drain_deferred_after_tool(tool_name)
+                notifications.extend(deferred_notifications)
+
         for notification in notifications:
             # Format content if not already done
             if not notification.content:
@@ -1893,6 +2034,11 @@ class OracleAgent:
             if notification.content:
                 # Collect for persistence (T040)
                 self._collected_system_messages.append(notification.content)
+                # CRITICAL FIX: Inject into messages so LLM sees the notification
+                messages.append({
+                    "role": "system",
+                    "content": f"<system_notification>\n{notification.content}\n</system_notification>",
+                })
                 yield OracleStreamChunk(
                     type="system",
                     content=notification.content,
@@ -1900,22 +2046,30 @@ class OracleAgent:
 
     async def _drain_and_yield_turn_start_notifications(
         self,
+        messages: List[Dict[str, Any]],
     ) -> AsyncGenerator[OracleStreamChunk, None]:
         """Drain turn_start notifications and yield as system chunks.
 
         This is called at the start of each agent turn to inject budget
         warnings and other turn_start priority notifications (T049).
 
+        Args:
+            messages: Conversation messages list (mutated to add system notifications
+                     so the LLM can see them in the next turn).
+
         Yields:
             OracleStreamChunk objects with type="system" containing formatted notifications.
         """
+        # Drain pending events ONCE before iterating subscribers
+        # (draining inside the loop would empty the list on first iteration)
+        pending = self._event_bus.drain_pending()
+
         # Process events through subscribers to create notifications
         for subscriber in self._subscriber_loader.get_all_subscribers():
             if not subscriber.enabled:
                 continue
 
-            # Check pending events in the event bus
-            pending = self._event_bus.drain_pending()
+            # Check each pending event against this subscriber
             for event in pending:
                 if subscriber.matches_event(event.type):
                     notification = self._accumulator.accumulate(event, subscriber)
@@ -1928,6 +2082,11 @@ class OracleAgent:
 
         # Drain turn_start notifications
         notifications = self._accumulator.drain_turn_start()
+
+        # Also drain deferred turn_start notifications
+        deferred_notifications = self._accumulator.drain_deferred_turn_start()
+        notifications.extend(deferred_notifications)
+
         for notification in notifications:
             # Format content if not already done
             if not notification.content:
@@ -1941,6 +2100,11 @@ class OracleAgent:
             if notification.content:
                 # Collect for persistence
                 self._collected_system_messages.append(notification.content)
+                # CRITICAL FIX: Inject into messages so LLM sees the notification
+                messages.append({
+                    "role": "system",
+                    "content": f"<system_notification>\n{notification.content}\n</system_notification>",
+                })
                 yield OracleStreamChunk(
                     type="system",
                     content=notification.content,
@@ -1948,22 +2112,30 @@ class OracleAgent:
 
     async def _drain_and_yield_immediate_notifications(
         self,
+        messages: List[Dict[str, Any]],
     ) -> AsyncGenerator[OracleStreamChunk, None]:
         """Drain immediate (critical) notifications and yield as system chunks.
 
         This is called when critical events occur (like budget exceeded)
         to immediately inject notifications (T050).
 
+        Args:
+            messages: Conversation messages list (mutated to add system notifications
+                     so the LLM can see them in the next turn).
+
         Yields:
             OracleStreamChunk objects with type="system" containing formatted notifications.
         """
+        # Drain pending events ONCE before iterating subscribers
+        # (draining inside the loop would empty the list on first iteration)
+        pending = self._event_bus.drain_pending()
+
         # Process events through subscribers to create notifications
         for subscriber in self._subscriber_loader.get_all_subscribers():
             if not subscriber.enabled:
                 continue
 
-            # Check pending events in the event bus
-            pending = self._event_bus.drain_pending()
+            # Check each pending event against this subscriber
             for event in pending:
                 if subscriber.matches_event(event.type):
                     notification = self._accumulator.accumulate(event, subscriber)
@@ -1989,6 +2161,11 @@ class OracleAgent:
             if notification.content:
                 # Collect for persistence
                 self._collected_system_messages.append(notification.content)
+                # CRITICAL FIX: Inject into messages so LLM sees the notification
+                messages.append({
+                    "role": "system",
+                    "content": f"<system_notification>\n{notification.content}\n</system_notification>",
+                })
                 yield OracleStreamChunk(
                     type="system",
                     content=notification.content,

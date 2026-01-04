@@ -1,0 +1,21 @@
+[subscriber]
+id = "session_resumed"
+name = "Session Resumed Notifications"
+description = "Notifies agent when a previous session context has been loaded"
+version = "1.0.0"
+
+[events]
+types = ["session.resumed"]
+severity_filter = "info"
+
+[batching]
+window_ms = 1000
+max_size = 1
+dedupe_key = "type:payload.tree_id"
+dedupe_window_ms = 30000
+
+[output]
+priority = "normal"
+inject_at = "turn_start"
+template = "session_resumed.toon.j2"
+core = false

@@ -77,6 +77,14 @@ class EventType:
     AGENT_TURN_START = "agent.turn.start"
     AGENT_TURN_END = "agent.turn.end"
     AGENT_LOOP_DETECTED = "agent.loop.detected"
+    AGENT_SELF_NOTIFY = "agent.self.notify"
+    AGENT_SELF_REMIND = "agent.self.remind"
+
+    # Proactive context events (014-ans-enhancements)
+    CONTEXT_APPROACHING_LIMIT = "context.approaching_limit"
+    SESSION_RESUMED = "session.resumed"
+    SOURCE_STALE = "source.stale"
+    TASK_CHECKPOINT = "task.checkpoint"
 
     # Future events (placeholders)
     SUBAGENT_COMPLETE = "subagent.complete"
