@@ -790,10 +790,10 @@ class OracleAgent:
         # Fetch vault file list to include in system prompt
         vault_files: List[str] = []
         try:
-            notes = tool_executor.vault.list_notes(user_id)
+            notes = tool_executor.vault.list_notes(user_id, project_id=effective_project_id)
             # Extract paths and limit to 100 files to avoid overwhelming the prompt
             vault_files = [note.get("path", "") for note in notes[:100]]
-            logger.debug(f"Loaded {len(vault_files)} vault files for system prompt")
+            logger.debug(f"Loaded {len(vault_files)} vault files for project {effective_project_id}")
         except Exception as e:
             logger.warning(f"Failed to load vault files for system prompt: {e}")
 

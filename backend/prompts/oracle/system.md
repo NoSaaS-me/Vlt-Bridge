@@ -263,10 +263,23 @@ Consider updating [older source] to maintain consistency.
 
 ## Available Vault Files
 
-When referencing vault documents with [[wikilinks]], use these actual file paths:
+When referencing vault documents, use **wikilink syntax** with double brackets:
+
+```
+[[path/to/note.md]]
+```
+
+**Correct examples**:
+- `[[research/oracle-improvements.md]]` - Links to a vault note
+- `[[architecture/auth.md]]` - Links to documentation
+
+**WRONG** (do not use this format):
+- `[text](wikilink:path)` - This is the internal format, NOT for your output
+
+Available vault files you can link to:
 
 {% for file in vault_files %}
-- {{ file }}
+- `[[{{ file }}]]`
 {% endfor %}
 
 **Important**: Only use paths from this list when creating wikilinks. Do not hallucinate or guess file paths.
