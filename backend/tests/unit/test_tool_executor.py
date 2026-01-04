@@ -797,6 +797,166 @@ class TestToolExecutorParallel:
         assert data_0["title"] == "Test"
 
 
+class TestThinkTool:
+    """Tests for the think tool handler (reasoning support)."""
+
+    @pytest.fixture
+    def think_executor(self, mock_services) -> ToolExecutor:
+        """Create a ToolExecutor for think tool testing."""
+        return ToolExecutor(**mock_services)
+
+    @pytest.mark.asyncio
+    async def test_think_returns_recorded_thought(
+        self, think_executor: ToolExecutor
+    ) -> None:
+        """Think tool should echo back the thought."""
+        result = await think_executor.execute(
+            "think",
+            {"thought": "I should search for authentication code first"},
+            "test-user",
+        )
+
+        data = json.loads(result)
+        assert data["recorded"] is True
+        assert data["thought"] == "I should search for authentication code first"
+        assert "note" in data
+
+    @pytest.mark.asyncio
+    async def test_think_with_empty_thought(
+        self, think_executor: ToolExecutor
+    ) -> None:
+        """Think tool should handle empty thought."""
+        result = await think_executor.execute(
+            "think",
+            {"thought": ""},
+            "test-user",
+        )
+
+        data = json.loads(result)
+        assert data["recorded"] is True
+        assert data["thought"] == ""
+
+    def test_think_in_tools_registry(self, think_executor: ToolExecutor) -> None:
+        """Think tool should be in the tools registry."""
+        assert "think" in think_executor._tools
+
+    def test_think_timeout_configured(self) -> None:
+        """Think tool should have a short timeout."""
+        assert ToolExecutor.TOOL_TIMEOUTS.get("think") == 5.0
+
+    @pytest.mark.asyncio
+    async def test_think_via_execute(self, think_executor: ToolExecutor) -> None:
+        """Think tool should work through execute method."""
+        result = await think_executor.execute(
+            "think",
+            {"thought": "Planning my approach"},
+            "test-user",
+        )
+
+        data = json.loads(result)
+        assert data["recorded"] is True
+        assert data["thought"] == "Planning my approach"
+
+    @pytest.mark.asyncio
+    async def test_think_with_long_thought(
+        self, think_executor: ToolExecutor
+    ) -> None:
+        """Think tool should handle long thoughts."""
+        long_thought = "Let me analyze this step by step. " * 100  # ~3500 chars
+        result = await think_executor.execute(
+            "think",
+            {"thought": long_thought},
+            "test-user",
+        )
+
+        data = json.loads(result)
+        assert data["recorded"] is True
+        assert data["thought"] == long_thought
+
+    @pytest.mark.asyncio
+    async def test_think_with_special_characters(
+        self, think_executor: ToolExecutor
+    ) -> None:
+        """Think tool should handle special characters in thought."""
+        special_thought = "What about {json: \"values\"}? And <xml>tags</xml>?"
+        result = await think_executor.execute(
+            "think",
+            {"thought": special_thought},
+            "test-user",
+        )
+
+        data = json.loads(result)
+        assert data["recorded"] is True
+        assert data["thought"] == special_thought
+
+    @pytest.mark.asyncio
+    async def test_think_with_unicode(
+        self, think_executor: ToolExecutor
+    ) -> None:
+        """Think tool should handle unicode characters."""
+        unicode_thought = "Let me think... 🤔 This involves émojis and accénts"
+        result = await think_executor.execute(
+            "think",
+            {"thought": unicode_thought},
+            "test-user",
+        )
+
+        data = json.loads(result)
+        assert data["recorded"] is True
+        assert data["thought"] == unicode_thought
+
+    @pytest.mark.asyncio
+    async def test_think_in_batch_execution(
+        self, think_executor: ToolExecutor, mock_services
+    ) -> None:
+        """Think tool should work in batch execution."""
+        mock_services["vault_service"].read_note.return_value = {
+            "title": "Test",
+            "body": "Content",
+            "metadata": {},
+        }
+
+        tool_calls = [
+            {"name": "think", "arguments": {"thought": "First I will read the note"}},
+            {"name": "vault_read", "arguments": {"path": "test.md"}},
+            {"name": "think", "arguments": {"thought": "Now I will analyze it"}},
+        ]
+
+        results = await think_executor.execute_batch(tool_calls, "test-user")
+
+        assert len(results) == 3
+
+        # First think
+        data_0 = json.loads(results[0])
+        assert data_0["recorded"] is True
+        assert data_0["thought"] == "First I will read the note"
+
+        # Vault read
+        data_1 = json.loads(results[1])
+        assert data_1["title"] == "Test"
+
+        # Second think
+        data_2 = json.loads(results[2])
+        assert data_2["recorded"] is True
+        assert data_2["thought"] == "Now I will analyze it"
+
+    @pytest.mark.asyncio
+    async def test_think_is_instant(self, think_executor: ToolExecutor) -> None:
+        """Think tool should complete nearly instantly."""
+        import time
+
+        start = time.time()
+        await think_executor.execute(
+            "think",
+            {"thought": "A quick thought"},
+            "test-user",
+        )
+        elapsed = time.time() - start
+
+        # Think should complete in under 50ms
+        assert elapsed < 0.05, f"Think took too long: {elapsed:.3f}s"
+
+
 class TestToolExecutorTimeout:
     """Tests for tool execution timeout handling (009-oracle-agent T028).
 

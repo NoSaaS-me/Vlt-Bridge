@@ -255,6 +255,20 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE user_settings ADD COLUMN chat_center_mode INTEGER NOT NULL DEFAULT 0",
     # Add default_project_id column to user_settings (010-multi-project)
     "ALTER TABLE user_settings ADD COLUMN default_project_id TEXT DEFAULT 'default'",
+    # Add AgentConfig columns (012-oracle-turn-control)
+    "ALTER TABLE user_settings ADD COLUMN max_iterations INTEGER DEFAULT 15",
+    "ALTER TABLE user_settings ADD COLUMN soft_warning_percent INTEGER DEFAULT 70",
+    "ALTER TABLE user_settings ADD COLUMN token_budget INTEGER DEFAULT 50000",
+    "ALTER TABLE user_settings ADD COLUMN token_warning_percent INTEGER DEFAULT 80",
+    "ALTER TABLE user_settings ADD COLUMN timeout_seconds INTEGER DEFAULT 120",
+    "ALTER TABLE user_settings ADD COLUMN max_tool_calls_per_turn INTEGER DEFAULT 100",
+    "ALTER TABLE user_settings ADD COLUMN max_parallel_tools INTEGER DEFAULT 3",
+    # Add reasoning_effort column (009-oracle-agent reasoning control)
+    "ALTER TABLE user_settings ADD COLUMN reasoning_effort TEXT DEFAULT 'medium'",
+    # Fix max_tool_calls_per_turn: migrate old default (5) to new default (100)
+    # This updates any rows that have the old low default value
+    # The old frontend slider was capped at 20, so migrate any value <= 20
+    "UPDATE user_settings SET max_tool_calls_per_turn = 100 WHERE max_tool_calls_per_turn IS NULL OR max_tool_calls_per_turn <= 20",
 )
 
 

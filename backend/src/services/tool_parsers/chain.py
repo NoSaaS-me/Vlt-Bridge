@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Tuple
 
 from .anthropic import AnthropicXMLParser
 from .deepseek import DeepSeekXMLParser
+from .dsml_reasoning import DSMLReasoningParser
 from .generic import GenericXMLParser
 from .standard import StandardXMLParser
 
@@ -20,10 +21,11 @@ class ToolCallParserChain:
     """Chains multiple parsers together, trying each in priority order.
 
     The chain tries parsers from most specific to most generic:
-    1. DeepSeek (most distinctive markers)
-    2. Standard (common format)
-    3. Anthropic (may overlap with standard)
-    4. Generic (fallback, most permissive)
+    1. DSMLReasoning (ASCII pipe DSML format in reasoning field)
+    2. DeepSeek (Unicode fullwidth DSML markers)
+    3. Standard (common format)
+    4. Anthropic (may overlap with standard)
+    5. Generic (fallback, most permissive)
 
     When a parser successfully identifies content it can handle (via can_parse),
     it is used to extract tool calls. The chain stops at the first successful parse.
@@ -32,7 +34,8 @@ class ToolCallParserChain:
     def __init__(self):
         """Initialize the parser chain with all available parsers."""
         self.parsers = [
-            DeepSeekXMLParser(),      # Most specific - check first
+            DSMLReasoningParser(),     # ASCII pipe DSML - check first (DeepSeek reasoning field)
+            DeepSeekXMLParser(),       # Unicode fullwidth DSML markers
             StandardXMLParser(),       # Common format
             AnthropicXMLParser(),      # Standalone invokes
             GenericXMLParser(),        # Fallback - most permissive

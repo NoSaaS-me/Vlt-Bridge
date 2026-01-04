@@ -11,6 +11,13 @@ class ModelProvider(str, Enum):
     GOOGLE = "google"
 
 
+class ReasoningEffort(str, Enum):
+    """Level of reasoning effort for models that support it."""
+    LOW = "low"        # Quick reasoning, fewer tokens
+    MEDIUM = "medium"  # Balanced (default)
+    HIGH = "high"      # Thorough reasoning, more tokens
+
+
 class ModelSettings(BaseModel):
     """User's model preferences for oracle and subagent."""
     oracle_model: str = Field(
@@ -32,6 +39,10 @@ class ModelSettings(BaseModel):
     thinking_enabled: bool = Field(
         default=False,
         description="Enable extended thinking mode (adds :thinking suffix for supported models)"
+    )
+    reasoning_effort: ReasoningEffort = Field(
+        default=ReasoningEffort.MEDIUM,
+        description="Level of reasoning effort for extended thinking (low/medium/high)"
     )
     chat_center_mode: bool = Field(
         default=False,
@@ -56,6 +67,61 @@ class ModelSettings(BaseModel):
     openrouter_api_key_set: bool = Field(
         default=False,
         description="Whether an OpenRouter API key has been configured (key itself is not returned)"
+    )
+    # AgentConfig fields for turn control
+    max_iterations: int = Field(
+        default=15,
+        ge=1,
+        le=50,
+        description="Maximum agent turns per query"
+    )
+    soft_warning_percent: int = Field(
+        default=70,
+        ge=50,
+        le=90,
+        description="Percentage of max iterations to trigger warning"
+    )
+    token_budget: int = Field(
+        default=50000,
+        ge=1000,
+        le=200000,
+        description="Maximum tokens per session"
+    )
+    token_warning_percent: int = Field(
+        default=80,
+        ge=50,
+        le=95,
+        description="Percentage of token budget to trigger warning"
+    )
+    timeout_seconds: int = Field(
+        default=120,
+        ge=10,
+        le=600,
+        description="Overall query timeout in seconds"
+    )
+    max_tool_calls_per_turn: int = Field(
+        default=100,
+        ge=1,
+        le=200,
+        description="Maximum tool calls per agent turn"
+    )
+    max_parallel_tools: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum concurrent tool executions"
+    )
+    tool_timeout_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=120,
+        description="Per-tool execution timeout in seconds"
+    )
+    loop_detection_window_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=600,
+        description="Time window in seconds for loop detection (5 min default)"
     )
 
 
@@ -91,6 +157,10 @@ class ModelSettingsUpdateRequest(BaseModel):
     subagent_model: Optional[str] = None
     subagent_provider: Optional[ModelProvider] = None
     thinking_enabled: Optional[bool] = None
+    reasoning_effort: Optional[ReasoningEffort] = Field(
+        default=None,
+        description="Level of reasoning effort (low/medium/high)"
+    )
     chat_center_mode: Optional[bool] = None
     librarian_timeout: Optional[int] = Field(
         default=None,
@@ -107,4 +177,175 @@ class ModelSettingsUpdateRequest(BaseModel):
     openrouter_api_key: Optional[str] = Field(
         default=None,
         description="OpenRouter API key (set to empty string to clear)"
+    )
+    # AgentConfig fields for turn control
+    max_iterations: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+        description="Maximum agent turns per query (1-50)"
+    )
+    soft_warning_percent: Optional[int] = Field(
+        default=None,
+        ge=50,
+        le=90,
+        description="Percentage of max iterations to trigger warning (50-90)"
+    )
+    token_budget: Optional[int] = Field(
+        default=None,
+        ge=1000,
+        le=200000,
+        description="Maximum tokens per session (1000-200000)"
+    )
+    token_warning_percent: Optional[int] = Field(
+        default=None,
+        ge=50,
+        le=95,
+        description="Percentage of token budget to trigger warning (50-95)"
+    )
+    timeout_seconds: Optional[int] = Field(
+        default=None,
+        ge=10,
+        le=600,
+        description="Overall query timeout in seconds (10-600)"
+    )
+    max_tool_calls_per_turn: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=200,
+        description="Maximum tool calls per agent turn (1-200)"
+    )
+    max_parallel_tools: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Maximum concurrent tool executions (1-10)"
+    )
+    tool_timeout_seconds: Optional[int] = Field(
+        default=None,
+        ge=5,
+        le=120,
+        description="Per-tool execution timeout in seconds (5-120)"
+    )
+    loop_detection_window_seconds: Optional[int] = Field(
+        default=None,
+        ge=60,
+        le=600,
+        description="Time window in seconds for loop detection (60-600)"
+    )
+
+
+class AgentConfig(BaseModel):
+    """Agent configuration for turn control."""
+    max_iterations: int = Field(
+        default=15,
+        ge=1,
+        le=50,
+        description="Maximum agent turns per query"
+    )
+    loop_detection_window_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=600,
+        description="Seconds of continuous identical actions before terminating (default: 300 = 5 minutes)"
+    )
+    soft_warning_percent: int = Field(
+        default=70,
+        ge=50,
+        le=90,
+        description="Percentage of max iterations to trigger warning"
+    )
+    token_budget: int = Field(
+        default=50000,
+        ge=1000,
+        le=200000,
+        description="Maximum tokens per session"
+    )
+    token_warning_percent: int = Field(
+        default=80,
+        ge=50,
+        le=95,
+        description="Percentage of token budget to trigger warning"
+    )
+    timeout_seconds: int = Field(
+        default=120,
+        ge=10,
+        le=600,
+        description="Overall query timeout in seconds"
+    )
+    max_tool_calls_per_turn: int = Field(
+        default=100,
+        ge=1,
+        le=200,
+        description="Maximum tool calls per agent turn"
+    )
+    max_parallel_tools: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum concurrent tool executions"
+    )
+    tool_timeout_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=120,
+        description="Per-tool execution timeout in seconds"
+    )
+
+
+class AgentConfigUpdate(BaseModel):
+    """Partial update for agent configuration."""
+    max_iterations: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+        description="Maximum agent turns per query (1-50)"
+    )
+    soft_warning_percent: Optional[int] = Field(
+        default=None,
+        ge=50,
+        le=90,
+        description="Percentage of max iterations to trigger warning (50-90)"
+    )
+    token_budget: Optional[int] = Field(
+        default=None,
+        ge=1000,
+        le=200000,
+        description="Maximum tokens per session (1000-200000)"
+    )
+    token_warning_percent: Optional[int] = Field(
+        default=None,
+        ge=50,
+        le=95,
+        description="Percentage of token budget to trigger warning (50-95)"
+    )
+    timeout_seconds: Optional[int] = Field(
+        default=None,
+        ge=10,
+        le=600,
+        description="Overall query timeout in seconds (10-600)"
+    )
+    max_tool_calls_per_turn: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=200,
+        description="Maximum tool calls per agent turn (1-200)"
+    )
+    max_parallel_tools: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Maximum concurrent tool executions (1-10)"
+    )
+    tool_timeout_seconds: Optional[int] = Field(
+        default=None,
+        ge=5,
+        le=120,
+        description="Per-tool execution timeout in seconds (5-120)"
+    )
+    loop_detection_window_seconds: Optional[int] = Field(
+        default=None,
+        ge=60,
+        le=600,
+        description="Time window in seconds for loop detection (60-600)"
     )

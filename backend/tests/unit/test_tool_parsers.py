@@ -5,11 +5,12 @@ Tests each parser independently and the chain behavior.
 
 import pytest
 
-from src.services.tool_parsers import ToolCallParserChain
-from src.services.tool_parsers.anthropic import AnthropicXMLParser
-from src.services.tool_parsers.deepseek import DeepSeekXMLParser
-from src.services.tool_parsers.generic import GenericXMLParser
-from src.services.tool_parsers.standard import StandardXMLParser
+from backend.src.services.tool_parsers import ToolCallParserChain, DSMLReasoningParser
+from backend.src.services.tool_parsers.anthropic import AnthropicXMLParser
+from backend.src.services.tool_parsers.deepseek import DeepSeekXMLParser
+from backend.src.services.tool_parsers.dsml_reasoning import DSMLReasoningParser
+from backend.src.services.tool_parsers.generic import GenericXMLParser
+from backend.src.services.tool_parsers.standard import StandardXMLParser
 
 
 class TestStandardXMLParser:
@@ -388,3 +389,112 @@ class TestEdgeCases:
 
         # Should not have more than 2 consecutive newlines
         assert "\n\n\n" not in cleaned
+
+
+class TestDSMLReasoningParser:
+    """Test the DSML reasoning field parser for DeepSeek.
+
+    DeepSeek sometimes outputs tool calls in the reasoning field using
+    ASCII pipe format |DSML| instead of proper function calling.
+    """
+
+    def test_can_parse_ascii_pipe_dsml(self):
+        """Should detect ASCII pipe DSML markers."""
+        parser = DSMLReasoningParser()
+        content = """
+        |DSML|function_calls>
+        |DSML|invoke name="search">
+        </|DSML|invoke>
+        </|DSML|function_calls>
+        """
+        assert parser.can_parse(content) is True
+
+    def test_can_parse_mixed_markers(self):
+        """Should detect mixed Unicode and ASCII markers."""
+        parser = DSMLReasoningParser()
+        content = "Some text with ｜DSML｜ markers"
+        assert parser.can_parse(content) is True
+
+    def test_cannot_parse_without_dsml_markers(self):
+        """Should not detect content without DSML markers."""
+        parser = DSMLReasoningParser()
+        content = "Just some regular reasoning text"
+        assert parser.can_parse(content) is False
+
+    def test_parse_well_formed_dsml(self):
+        """Should parse well-formed DSML tool calls."""
+        parser = DSMLReasoningParser()
+        content = """
+        |DSML|function_calls>
+        |DSML|invoke name="vault_search">
+        |DSML|parameter name="query">system prompt oracle agent</|DSML|parameter>
+        |DSML|parameter name="limit">10</|DSML|parameter>
+        </|DSML|invoke>
+        </|DSML|function_calls>
+        """
+
+        calls, _ = parser.parse(content)
+
+        assert len(calls) == 1
+        assert calls[0].name == "vault_search"
+        assert calls[0].arguments["query"] == "system prompt oracle agent"
+        assert calls[0].arguments["limit"] == 10
+
+    def test_parse_malformed_dsml(self):
+        """Should parse malformed DSML from reasoning field."""
+        parser = DSMLReasoningParser()
+        # This matches the format from the user's logs
+        content = """
+        </|DSML|function_calls>
+        |DSML|invoke name="vault_search"
+        </|DSML|parameter name="limit">10
+        """
+
+        calls, _ = parser.parse(content)
+
+        # Should find at least the tool name
+        assert len(calls) >= 1
+        assert calls[0].name == "vault_search"
+
+    def test_parse_multiple_parameters(self):
+        """Should parse multiple parameters correctly."""
+        parser = DSMLReasoningParser()
+        content = """
+        |DSML|invoke name="search_code">
+        |DSML|parameter name="query">authentication</|DSML|parameter>
+        |DSML|parameter name="limit">5</|DSML|parameter>
+        |DSML|parameter name="include_context">true</|DSML|parameter>
+        </|DSML|invoke>
+        """
+
+        calls, _ = parser.parse(content)
+
+        assert len(calls) == 1
+        assert calls[0].arguments["query"] == "authentication"
+        assert calls[0].arguments["limit"] == 5
+        assert calls[0].arguments["include_context"] is True
+
+    def test_chain_includes_dsml_parser(self):
+        """Parser chain should include DSML reasoning parser."""
+        chain = ToolCallParserChain()
+
+        # ASCII pipe DSML format should be parsed
+        content = """
+        |DSML|function_calls>
+        |DSML|invoke name="test_tool">
+        |DSML|parameter name="arg">value</|DSML|parameter>
+        </|DSML|invoke>
+        </|DSML|function_calls>
+        """
+
+        calls, _ = chain.parse(content)
+
+        assert len(calls) == 1
+        assert calls[0]["function"]["name"] == "test_tool"
+
+    def test_dsml_parser_priority(self):
+        """DSML reasoning parser should have priority in chain."""
+        chain = ToolCallParserChain()
+
+        # The first parser in the chain should be DSMLReasoningParser
+        assert isinstance(chain.parsers[0], DSMLReasoningParser)

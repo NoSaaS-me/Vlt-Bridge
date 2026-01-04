@@ -1,5 +1,6 @@
 export type SourceType = 'vault' | 'code' | 'threads';
-export type StreamEventType = 'status' | 'thinking' | 'content' | 'source' | 'tool_call' | 'tool_result' | 'done' | 'error';
+export type StreamEventType = 'status' | 'thinking' | 'content' | 'source' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'system';
+export type SystemMessageType = 'limit_warning' | 'limit_reached' | 'no_progress' | 'error_limit' | 'tool_limit';
 
 /**
  * Oracle API request payload
@@ -48,6 +49,8 @@ export interface OracleStreamChunk {
   };
   tool_call_id?: string;     // for tool_result events - associates result with tool call
   tool_result?: string;      // for tool_result events
+  system_type?: SystemMessageType;  // for system events - type of system message
+  system_message?: string;   // for system events - human-readable message
 }
 
 /**
@@ -75,7 +78,7 @@ export interface ToolCallInfo {
  * Oracle conversation message (extends ChatMessage)
  */
 export interface OracleMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: string;
   thinking?: string;         // Optional thinking/reasoning content
@@ -83,6 +86,7 @@ export interface OracleMessage {
   tool_calls?: ToolCallInfo[]; // Tool calls made during response
   model?: string;
   is_error?: boolean;
+  system_type?: SystemMessageType;  // For system messages - type determines visual treatment
 }
 
 /**
@@ -94,4 +98,32 @@ export interface OracleSettings {
   show_thinking?: boolean;
   show_sources?: boolean;
   max_results?: number;
+}
+
+/**
+ * Agent configuration for turn control
+ */
+export interface AgentConfig {
+  max_iterations: number;
+  soft_warning_percent: number;
+  token_budget: number;
+  token_warning_percent: number;
+  timeout_seconds: number;
+  max_tool_calls_per_turn: number;
+  max_parallel_tools: number;
+  loop_detection_window_seconds: number;  // Time window for loop detection (default 300s = 5 min)
+}
+
+/**
+ * Partial update for agent configuration
+ */
+export interface AgentConfigUpdate {
+  max_iterations?: number;
+  soft_warning_percent?: number;
+  token_budget?: number;
+  token_warning_percent?: number;
+  timeout_seconds?: number;
+  max_tool_calls_per_turn?: number;
+  max_parallel_tools?: number;
+  loop_detection_window_seconds?: number;
 }

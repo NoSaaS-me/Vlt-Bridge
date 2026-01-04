@@ -8,11 +8,12 @@ FastAPI endpoints. They require:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
 from pathlib import Path
-from typing import AsyncGenerator, Dict, Any, List
+from typing import AsyncGenerator, Dict, Any, List, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -535,10 +536,605 @@ class TestOracleAgentMaxTurns:
                     ):
                         chunks.append(chunk)
 
-                    # Should have error about max turns
-                    error_chunks = [c for c in chunks if c.type == "error"]
-                    assert len(error_chunks) >= 1
-                    assert "Maximum" in error_chunks[-1].error
+                    # Should have system chunk about max turns/iterations limit
+                    # Note: The decision tree now emits system chunks with type="limit_reached"
+                    # instead of error chunks when limits are reached
+                    system_chunks = [c for c in chunks if c.type == "system"]
+                    limit_chunks = [c for c in system_chunks if c.system_type == "limit_reached"]
+
+                    # Either we get a system limit_reached chunk or a done chunk with termination reason
+                    done_chunks = [c for c in chunks if c.type == "done"]
+                    has_limit_indicator = (
+                        len(limit_chunks) >= 1 or
+                        (done_chunks and done_chunks[-1].metadata and "termination_reason" in done_chunks[-1].metadata)
+                    )
+                    assert has_limit_indicator, f"Expected limit indication in chunks: {[c.type for c in chunks]}"
 
                 finally:
                     agent.MAX_TURNS = original_max
+
+
+class TestOracleManyToolCalls:
+    """Tests for scenarios with many (10+) tool calls.
+
+    These tests are designed to identify the halt point around the 7th tool call.
+    Key areas to profile:
+    - SSE buffer behavior
+    - httpx streaming timeout
+    - asyncio.gather batch processing
+    - Semaphore acquisition timing
+    """
+
+    @pytest.mark.asyncio
+    async def test_ten_sequential_tool_calls_complete(self) -> None:
+        """Agent should handle 10+ sequential tool calls without halting.
+
+        This test simulates a scenario where the LLM requests tool calls
+        in multiple turns, totaling 10+ tool calls across all turns.
+        """
+        call_count = 0
+
+        def get_response(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_response = MagicMock()
+
+            # First 3 turns: return tool calls (simulating multi-turn gathering)
+            # Each turn returns 3-4 tool calls
+            if call_count <= 3:
+                tool_calls = []
+                for i in range(3 + (call_count - 1)):  # 3, 4, 5 tools per turn
+                    tool_calls.append({
+                        "id": f"call_{call_count}_{i}",
+                        "function": {
+                            "name": "vault_search",
+                            "arguments": json.dumps({"query": f"test query {call_count}_{i}"}),
+                        },
+                    })
+                mock_response.json.return_value = {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": tool_calls,
+                        },
+                        "finish_reason": "tool_calls",
+                    }],
+                    "usage": {"total_tokens": 1000 * call_count},
+                }
+            else:
+                # Final turn: return completion
+                mock_response.json.return_value = {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "Found results from all 12 tool calls.",
+                        },
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {"total_tokens": 5000},
+                }
+            mock_response.raise_for_status = MagicMock()
+            return mock_response
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = get_response
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client
+
+            tool_execution_count = 0
+
+            async def mock_execute(name, arguments, user_id):
+                nonlocal tool_execution_count
+                tool_execution_count += 1
+                # Simulate some async work
+                await asyncio.sleep(0.01)
+                return json.dumps({
+                    "query": arguments.get("query", "unknown"),
+                    "results": [{"path": f"result_{tool_execution_count}.md"}],
+                    "count": 1,
+                })
+
+            with patch(
+                "backend.src.services.oracle_agent._get_tool_executor"
+            ) as mock_te:
+                mock_executor = MagicMock()
+                mock_executor.get_tool_schemas.return_value = [{
+                    "type": "function",
+                    "function": {
+                        "name": "vault_search",
+                        "description": "Search vault",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }]
+                mock_executor.execute = mock_execute
+                mock_te.return_value = mock_executor
+
+                agent = OracleAgent(api_key="test-key")
+                chunks: List[OracleStreamChunk] = []
+
+                async for chunk in agent.query(
+                    question="Search for many things",
+                    user_id="test-user",
+                    stream=False,
+                ):
+                    chunks.append(chunk)
+                    # Log each chunk for profiling
+                    print(f"[TEST] Chunk {len(chunks)}: type={chunk.type}")
+
+                # Verify completion
+                chunk_types = [c.type for c in chunks]
+                assert "done" in chunk_types, f"Expected 'done' chunk, got types: {chunk_types}"
+
+                # Verify all tools executed (3 + 4 + 5 = 12 tools)
+                tool_result_chunks = [c for c in chunks if c.type == "tool_result"]
+                tool_call_chunks = [c for c in chunks if c.type == "tool_call"]
+
+                print(f"[TEST] Tool calls: {len(tool_call_chunks)}, Tool results: {len(tool_result_chunks)}")
+                print(f"[TEST] Total tool executions: {tool_execution_count}")
+
+                # Should have 12 tool calls total (3 + 4 + 5)
+                assert len(tool_call_chunks) == 12, f"Expected 12 tool calls, got {len(tool_call_chunks)}"
+                assert len(tool_result_chunks) == 12, f"Expected 12 results, got {len(tool_result_chunks)}"
+                assert tool_execution_count == 12, f"Expected 12 executions, got {tool_execution_count}"
+
+    @pytest.mark.asyncio
+    async def test_parallel_batch_execution_timing(self) -> None:
+        """Profile the timing of parallel tool execution batches.
+
+        This test tracks semaphore acquisition and batch completion timing
+        to identify potential bottlenecks around the 7th tool call.
+        """
+        import time
+
+        # Track execution timing
+        execution_times: List[Dict[str, Any]] = []
+
+        async def mock_execute(name, arguments, user_id):
+            start = time.perf_counter()
+            # Simulate variable execution times
+            tool_idx = len(execution_times)
+            delay = 0.05 + (0.01 * (tool_idx % 3))  # 50-70ms per tool
+            await asyncio.sleep(delay)
+            elapsed = time.perf_counter() - start
+            execution_times.append({
+                "tool_idx": tool_idx,
+                "name": name,
+                "delay": delay,
+                "elapsed": elapsed,
+                "timestamp": time.perf_counter(),
+            })
+            return json.dumps({"result": f"tool_{tool_idx}"})
+
+        # Create response with 10 parallel tool calls
+        tool_calls = []
+        for i in range(10):
+            tool_calls.append({
+                "id": f"call_{i}",
+                "function": {
+                    "name": f"search_code",
+                    "arguments": json.dumps({"query": f"query_{i}"}),
+                },
+            })
+
+        call_count = 0
+
+        def get_response(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_response = MagicMock()
+
+            if call_count == 1:
+                mock_response.json.return_value = {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": tool_calls,
+                        },
+                        "finish_reason": "tool_calls",
+                    }],
+                    "usage": {"total_tokens": 1000},
+                }
+            else:
+                mock_response.json.return_value = {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "Completed 10 tool calls.",
+                        },
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {"total_tokens": 2000},
+                }
+            mock_response.raise_for_status = MagicMock()
+            return mock_response
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = get_response
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client
+
+            with patch(
+                "backend.src.services.oracle_agent._get_tool_executor"
+            ) as mock_te:
+                mock_executor = MagicMock()
+                mock_executor.get_tool_schemas.return_value = [{
+                    "type": "function",
+                    "function": {
+                        "name": "search_code",
+                        "description": "Search code",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }]
+                mock_executor.execute = mock_execute
+                mock_te.return_value = mock_executor
+
+                agent = OracleAgent(api_key="test-key")
+                chunks: List[OracleStreamChunk] = []
+
+                start_time = time.perf_counter()
+                async for chunk in agent.query(
+                    question="Run 10 parallel searches",
+                    user_id="test-user",
+                    stream=False,
+                ):
+                    chunks.append(chunk)
+                total_time = time.perf_counter() - start_time
+
+                # Analyze execution timing
+                print(f"\n[TIMING] Total query time: {total_time:.3f}s")
+                print(f"[TIMING] Tool executions: {len(execution_times)}")
+
+                # Check for batching (with max_parallel=3, should have ~4 batches)
+                if execution_times:
+                    timestamps = [e["timestamp"] for e in execution_times]
+                    min_ts = min(timestamps)
+
+                    # Group by batch (tools starting within 100ms of each other)
+                    batches: List[List[int]] = []
+                    current_batch: List[int] = []
+                    last_ts = None
+
+                    for i, ts in enumerate(timestamps):
+                        if last_ts is None or (ts - last_ts) < 0.15:  # 150ms batch window
+                            current_batch.append(i)
+                        else:
+                            if current_batch:
+                                batches.append(current_batch)
+                            current_batch = [i]
+                        last_ts = ts
+                    if current_batch:
+                        batches.append(current_batch)
+
+                    print(f"[TIMING] Detected {len(batches)} execution batches")
+                    for batch_idx, batch in enumerate(batches):
+                        print(f"  Batch {batch_idx + 1}: tools {batch} ({len(batch)} tools)")
+
+                # Verify completion
+                assert len(execution_times) == 10, f"Expected 10 executions, got {len(execution_times)}"
+
+                done_chunks = [c for c in chunks if c.type == "done"]
+                assert len(done_chunks) == 1, f"Expected 1 done chunk, got {len(done_chunks)}"
+
+    @pytest.mark.asyncio
+    async def test_sse_buffer_behavior_with_many_tools(self) -> None:
+        """Test SSE streaming behavior with many tool results.
+
+        This test simulates streaming mode to check if SSE buffers cause issues.
+        """
+        import time
+
+        async def mock_aiter_lines_with_tools():
+            """Simulate SSE stream with 10 tool calls."""
+            # First: role delta
+            yield 'data: {"id":"gen-1","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}'
+
+            # Then: 10 parallel tool calls in one message
+            for i in range(10):
+                tool_call_delta = {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{
+                            "index": i,
+                            "id": f"call_{i}" if i == 0 else None,
+                            "type": "function" if i == 0 else None,
+                            "function": {
+                                "name": f"vault_search" if i == 0 else None,
+                                "arguments": json.dumps({"query": f"q{i}"}),
+                            },
+                        }]
+                    },
+                    "finish_reason": None,
+                }
+                yield f'data: {json.dumps({"id": "gen-1", "choices": [tool_call_delta]})}'
+
+            # Finish with tool_calls
+            yield 'data: {"id":"gen-1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}'
+            yield "data: [DONE]"
+
+        async def mock_aiter_lines_final():
+            """Final response after tool execution."""
+            lines = [
+                'data: {"id":"gen-2","choices":[{"index":0,"delta":{"role":"assistant","content":"Results from 10 tools."},"finish_reason":null}]}',
+                'data: {"id":"gen-2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+            for line in lines:
+                yield line
+
+        call_count = 0
+
+        async def mock_post(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_response = AsyncMock()
+            mock_response.raise_for_status = MagicMock()
+            if call_count == 1:
+                mock_response.aiter_lines = mock_aiter_lines_with_tools
+            else:
+                mock_response.aiter_lines = mock_aiter_lines_final
+            return mock_response
+
+        tool_count = 0
+
+        async def mock_execute(name, arguments, user_id):
+            nonlocal tool_count
+            tool_count += 1
+            await asyncio.sleep(0.01)  # Small delay
+            return json.dumps({"count": 1})
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post = mock_post
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client
+
+            with patch(
+                "backend.src.services.oracle_agent._get_tool_executor"
+            ) as mock_te:
+                mock_executor = MagicMock()
+                mock_executor.get_tool_schemas.return_value = []
+                mock_executor.execute = mock_execute
+                mock_te.return_value = mock_executor
+
+                agent = OracleAgent(api_key="test-key")
+                chunks: List[OracleStreamChunk] = []
+                chunk_times: List[Tuple[float, str]] = []
+
+                start = time.perf_counter()
+                async for chunk in agent.query(
+                    question="Stream 10 tools",
+                    user_id="test-user",
+                    stream=True,
+                ):
+                    chunks.append(chunk)
+                    chunk_times.append((time.perf_counter() - start, chunk.type))
+
+                # Analyze chunk timing
+                print(f"\n[SSE] Total chunks: {len(chunks)}")
+                print(f"[SSE] Tool executions: {tool_count}")
+
+                # Check for gaps in chunk delivery
+                for i, (t, typ) in enumerate(chunk_times):
+                    if i > 0:
+                        gap = t - chunk_times[i-1][0]
+                        if gap > 0.5:  # More than 500ms gap
+                            print(f"[SSE] WARNING: Large gap ({gap:.3f}s) before chunk {i} ({typ})")
+
+                # Verify no chunks were lost
+                tool_result_chunks = [c for c in chunks if c.type == "tool_result"]
+                print(f"[SSE] Tool result chunks: {len(tool_result_chunks)}")
+
+                # Note: Streaming tool calls are parsed differently - the test
+                # may show fewer tool calls if they're batched in the SSE stream
+
+
+class TestOracleHeartbeat:
+    """Tests for SSE keep-alive heartbeat during long tool execution."""
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_emitted_for_slow_tools(self) -> None:
+        """Heartbeat status chunks are emitted when tools take longer than 5 seconds.
+
+        This test verifies that the SSE keep-alive mechanism works correctly
+        by simulating slow tool execution (>5 seconds per tool).
+        """
+        import time
+
+        async def mock_execute(name, arguments, user_id):
+            # Simulate a slow tool that takes 6 seconds (longer than HEARTBEAT_INTERVAL)
+            await asyncio.sleep(6.0)
+            return json.dumps({"result": "slow_tool_complete"})
+
+        # Create response with a single slow tool call
+        tool_call_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_slow_1",
+                        "function": {
+                            "name": "search_code",
+                            "arguments": '{"query": "test"}',
+                        },
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+
+        final_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Found the results.",
+                },
+                "finish_reason": "stop",
+            }],
+            "usage": {"total_tokens": 100},
+        }
+
+        call_count = 0
+
+        def get_response(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_response = MagicMock()
+            if call_count == 1:
+                mock_response.json.return_value = tool_call_response
+            else:
+                mock_response.json.return_value = final_response
+            mock_response.raise_for_status = MagicMock()
+            return mock_response
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = get_response
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client
+
+            with patch(
+                "backend.src.services.oracle_agent._get_tool_executor"
+            ) as mock_te:
+                mock_executor = MagicMock()
+                mock_executor.get_tool_schemas.return_value = [{
+                    "type": "function",
+                    "function": {
+                        "name": "search_code",
+                        "description": "Search code",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }]
+                mock_executor.execute = mock_execute
+                mock_te.return_value = mock_executor
+
+                agent = OracleAgent(api_key="test-key")
+                chunks: List[OracleStreamChunk] = []
+
+                start_time = time.perf_counter()
+                async for chunk in agent.query(
+                    question="Search for something slow",
+                    user_id="test-user",
+                    stream=False,
+                ):
+                    chunks.append(chunk)
+                total_time = time.perf_counter() - start_time
+
+                # Verify we got at least one status (heartbeat) chunk
+                status_chunks = [c for c in chunks if c.type == "status"]
+                print(f"\n[HEARTBEAT] Total time: {total_time:.3f}s")
+                print(f"[HEARTBEAT] Status chunks: {len(status_chunks)}")
+                for sc in status_chunks:
+                    print(f"  - {sc.message}")
+
+                # With a 6-second tool and 5-second heartbeat interval,
+                # we should get at least 1 status chunk
+                assert len(status_chunks) >= 1, (
+                    f"Expected at least 1 status (heartbeat) chunk for 6-second tool, "
+                    f"got {len(status_chunks)}. Chunk types: {[c.type for c in chunks]}"
+                )
+
+                # Verify the status message contains expected info
+                assert status_chunks[0].message is not None
+                assert "Still processing" in status_chunks[0].message
+                assert "search_code" in status_chunks[0].message
+
+                # Verify we still completed successfully
+                done_chunks = [c for c in chunks if c.type == "done"]
+                assert len(done_chunks) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_heartbeat_for_fast_tools(self) -> None:
+        """No heartbeat status chunks are emitted when tools complete quickly.
+
+        This test verifies that fast tools (<5 seconds) don't trigger
+        unnecessary heartbeat emissions.
+        """
+        async def mock_execute(name, arguments, user_id):
+            # Fast tool that completes in 100ms
+            await asyncio.sleep(0.1)
+            return json.dumps({"result": "fast_tool_complete"})
+
+        # Create response with a fast tool call
+        tool_call_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_fast_1",
+                        "function": {
+                            "name": "vault_list",
+                            "arguments": "{}",
+                        },
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+
+        final_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Listed the files.",
+                },
+                "finish_reason": "stop",
+            }],
+            "usage": {"total_tokens": 50},
+        }
+
+        call_count = 0
+
+        def get_response(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_response = MagicMock()
+            if call_count == 1:
+                mock_response.json.return_value = tool_call_response
+            else:
+                mock_response.json.return_value = final_response
+            mock_response.raise_for_status = MagicMock()
+            return mock_response
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = get_response
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client
+
+            with patch(
+                "backend.src.services.oracle_agent._get_tool_executor"
+            ) as mock_te:
+                mock_executor = MagicMock()
+                mock_executor.get_tool_schemas.return_value = []
+                mock_executor.execute = mock_execute
+                mock_te.return_value = mock_executor
+
+                agent = OracleAgent(api_key="test-key")
+                chunks: List[OracleStreamChunk] = []
+
+                async for chunk in agent.query(
+                    question="List files quickly",
+                    user_id="test-user",
+                    stream=False,
+                ):
+                    chunks.append(chunk)
+
+                # Verify we got NO status (heartbeat) chunks
+                status_chunks = [c for c in chunks if c.type == "status"]
+                print(f"\n[HEARTBEAT] Status chunks for fast tool: {len(status_chunks)}")
+
+                assert len(status_chunks) == 0, (
+                    f"Expected 0 status chunks for fast tool, got {len(status_chunks)}. "
+                    f"Messages: {[c.message for c in status_chunks]}"
+                )
+
+                # Verify we completed successfully
+                done_chunks = [c for c in chunks if c.type == "done"]
+                assert len(done_chunks) == 1

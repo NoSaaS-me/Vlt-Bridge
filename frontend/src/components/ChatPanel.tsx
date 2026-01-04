@@ -25,7 +25,7 @@ import {
   pruneTree,
   setActiveTree,
 } from '@/services/context';
-import type { OracleMessage, SlashCommand, OracleStreamChunk, SourceType, ToolCallInfo } from '@/types/oracle';
+import type { OracleMessage, SlashCommand, OracleStreamChunk, SourceType, ToolCallInfo, SystemMessageType } from '@/types/oracle';
 import type { ModelSettings } from '@/types/models';
 import type { ContextTreeData, ContextNode } from '@/types/context';
 import { useToast } from '@/hooks/useToast';
@@ -668,6 +668,22 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
                 );
                 return prev; // No state change
               }
+            } else if (chunk.type === 'system') {
+              // System message from turn control (limit warnings, errors, etc.)
+              // Create a new system message in the conversation instead of updating assistant message
+              if (chunk.system_message) {
+                const systemMsgId = `msg-${++messageCounterRef.current}-${Date.now()}`;
+                const systemMsg: OracleMessageWithId = {
+                  _id: systemMsgId,
+                  role: 'system',
+                  content: chunk.system_message,
+                  timestamp: new Date().toISOString(),
+                  system_type: chunk.system_type as SystemMessageType,
+                };
+                // Insert system message before the current assistant message
+                return [...prev.slice(0, lastIndex), systemMsg, lastMsg];
+              }
+              return prev; // No message to add
             } else if (chunk.type === 'done') {
               // Mark all running tools as completed
               const newToolCalls = lastMsg.tool_calls?.map(tc =>

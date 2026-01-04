@@ -83,6 +83,8 @@ class ToolExecutor:
         # Subagents can run for extended periods (e.g., summarizing many files, web research)
         # 20 minutes allows for large vault operations and web research without premature timeout
         "delegate_librarian": 1200.0,  # 20 minutes for large summarizations and web research
+        # Reasoning tools - no-op, instant
+        "think": 5.0,  # Reasoning tool - instant
     }
 
     def __init__(
@@ -146,6 +148,8 @@ class ToolExecutor:
             "web_fetch": self._web_fetch,
             # Meta tools
             "delegate_librarian": self._delegate_librarian,
+            # Reasoning tools
+            "think": self._think,
         }
 
         # Cache for tool schemas
@@ -1838,6 +1842,37 @@ class ToolExecutor:
         except Exception as e:
             logger.exception(f"LibrarianAgent organization failed: {e}")
             return {"error": f"Organization failed: {str(e)}", "success": False}
+
+    # =========================================================================
+    # Reasoning Tool Implementations
+    # =========================================================================
+
+    async def _think(
+        self,
+        user_id: str,
+        thought: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """No-op tool that records reasoning for model context.
+
+        This tool is used for explicit chain-of-thought reasoning between
+        tool calls. The thought is echoed back so it appears in the
+        conversation history, allowing the model to reference previous
+        reasoning on subsequent API calls.
+
+        Args:
+            user_id: User ID (unused but required for signature consistency)
+            thought: The reasoning/analysis to record
+
+        Returns:
+            Dict with the recorded thought
+        """
+        logger.debug(f"[THINK] Recording thought: {thought[:100]}...")
+        return {
+            "recorded": True,
+            "thought": thought,
+            "note": "Use this reasoning in your next steps",
+        }
 
 
 # Singleton instance for dependency injection

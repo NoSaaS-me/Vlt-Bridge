@@ -118,7 +118,7 @@ A new "System" participant appears in the chat UI when system-level notification
   - `tokenBudget`: Maximum tokens per session (default: 50,000)
   - `tokenWarningPercent`: Percentage at which to warn (default: 80)
   - `timeoutSeconds`: Overall query timeout (default: 120)
-  - `maxToolCallsPerTurn`: Limit tool calls per turn (default: 5)
+  - `maxToolCallsPerTurn`: Limit tool calls per turn (default: 100)
   - `maxParallelTools`: Concurrency limit (default: 3)
 
 - **FR-002**: System MUST persist AgentConfig per user across sessions

@@ -12,7 +12,8 @@ Main Components:
 Supported Formats:
 - Standard XML: <function_calls><invoke>...</invoke></function_calls>
 - Anthropic: Standalone <invoke> elements
-- DeepSeek: <｜DSML｜function_calls> with special markers
+- DeepSeek Unicode: <｜DSML｜function_calls> with special markers
+- DeepSeek ASCII: |DSML| format in reasoning field
 - Generic: Fallback for any XML-like format
 
 Usage:
@@ -20,13 +21,22 @@ Usage:
 
     chain = ToolCallParserChain()
     tool_calls, cleaned_content = chain.parse(model_output)
+
+For parsing reasoning field specifically:
+    from .tool_parsers import DSMLReasoningParser
+
+    parser = DSMLReasoningParser()
+    if parser.can_parse(reasoning_content):
+        calls, _ = parser.parse(reasoning_content)
 """
 
 from .base import ParsedToolCall, ToolCallParser
 from .chain import ToolCallParserChain
+from .dsml_reasoning import DSMLReasoningParser
 
 __all__ = [
     "ParsedToolCall",
     "ToolCallParser",
     "ToolCallParserChain",
+    "DSMLReasoningParser",
 ]

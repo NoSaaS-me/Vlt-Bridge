@@ -351,3 +351,34 @@ export async function listThreads(projectId?: string): Promise<ThreadListRespons
 export async function getThread(threadId: string): Promise<Thread> {
   return apiFetch<Thread>(`/api/threads/${encodeURIComponent(threadId)}`);
 }
+
+/**
+ * Agent configuration API functions
+ */
+import type { AgentConfig, AgentConfigUpdate } from '@/types/oracle';
+
+/**
+ * Get agent configuration for turn control
+ */
+export async function getAgentConfig(): Promise<AgentConfig> {
+  return apiFetch<AgentConfig>('/api/settings/agent-config');
+}
+
+/**
+ * Update agent configuration
+ */
+export async function updateAgentConfig(config: AgentConfigUpdate): Promise<AgentConfig> {
+  return apiFetch<AgentConfig>('/api/settings/agent-config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+/**
+ * Reset agent configuration to defaults
+ */
+export async function resetAgentConfig(): Promise<AgentConfig> {
+  return apiFetch<AgentConfig>('/api/settings/agent-config/reset', {
+    method: 'POST',
+  });
+}

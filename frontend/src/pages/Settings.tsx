@@ -2,6 +2,7 @@
  * T109, T120: Settings page with user profile, API token, and index health
  * Extended with AI model selection for Oracle and Subagents
  * T046-T054: Added CodeRAG index status panel with progress monitoring
+ * T021-T023: Added Agent Configuration panel with auto-save
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -17,14 +18,16 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
+import { AgentConfigPanel } from '@/components/AgentConfigPanel';
 import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
-import { getIndexHealth, rebuildIndex, type RebuildResponse } from '@/services/api';
+import { getIndexHealth, rebuildIndex, getAgentConfig, updateAgentConfig, resetAgentConfig, type RebuildResponse } from '@/services/api';
 import { getModels, getModelSettings, saveModelSettings } from '@/services/models';
 import { getContextSettings, updateContextSettings } from '@/services/context';
 import type { User } from '@/types/user';
 import type { IndexHealth } from '@/types/search';
-import type { ModelInfo, ModelSettings } from '@/types/models';
+import type { ModelInfo, ModelSettings, ReasoningEffort } from '@/types/models';
 import type { ContextSettings } from '@/types/context';
+import type { AgentConfig } from '@/types/oracle';
 import type { CodeRAGStatusResponse } from '@/types/coderag';
 import { getCodeRAGStatus, initCodeRAG } from '@/services/coderag';
 import { SystemLogs } from '@/components/SystemLogs';
@@ -57,6 +60,12 @@ export function Settings() {
   const [coderagStatus, setCoderagStatus] = useState<CodeRAGStatusResponse | null>(null);
   const [isReindexing, setIsReindexing] = useState(false);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Agent config state (T021-T023)
+  const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
+  const [isSavingAgentConfig, setIsSavingAgentConfig] = useState(false);
+  const [agentConfigSaved, setAgentConfigSaved] = useState(false);
+  const agentConfigDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     loadData();
@@ -157,6 +166,7 @@ export function Settings() {
           subagent_model: 'google/gemini-2.0-flash-exp:free',
           subagent_provider: 'openrouter',
           thinking_enabled: false,
+          reasoning_effort: 'medium',
           chat_center_mode: false,
           librarian_timeout: 1200,
           openrouter_api_key: null,
@@ -173,6 +183,24 @@ export function Settings() {
         // Set defaults if API fails
         setContextSettings({
           max_context_nodes: 30,
+        });
+      }
+
+      // T021: Load agent config
+      try {
+        const config = await getAgentConfig();
+        setAgentConfig(config);
+      } catch (err) {
+        console.debug('Agent config not available:', err);
+        // Set defaults if API fails
+        setAgentConfig({
+          max_iterations: 15,
+          soft_warning_percent: 70,
+          token_budget: 50000,
+          token_warning_percent: 80,
+          timeout_seconds: 120,
+          max_tool_calls_per_turn: 100,
+          max_parallel_tools: 3,
         });
       }
 
@@ -285,6 +313,70 @@ export function Settings() {
       setIsSavingContext(false);
     }
   };
+
+  // T023: Auto-save agent config with debounce (800ms)
+  const handleAgentConfigChange = useCallback((newConfig: AgentConfig) => {
+    setAgentConfig(newConfig);
+
+    // Clear existing debounce timer
+    if (agentConfigDebounceRef.current) {
+      clearTimeout(agentConfigDebounceRef.current);
+    }
+
+    // Don't save in demo mode
+    if (isDemoMode) return;
+
+    // Set new debounce timer
+    agentConfigDebounceRef.current = setTimeout(async () => {
+      setIsSavingAgentConfig(true);
+      setAgentConfigSaved(false);
+      setError(null);
+
+      try {
+        await updateAgentConfig(newConfig);
+        setAgentConfigSaved(true);
+        setTimeout(() => setAgentConfigSaved(false), 2000);
+      } catch (err) {
+        setError('Failed to save agent configuration');
+        console.error('Error saving agent config:', err);
+      } finally {
+        setIsSavingAgentConfig(false);
+      }
+    }, 800);
+  }, [isDemoMode]);
+
+  // T023: Reset agent config to defaults
+  const handleResetAgentConfig = async () => {
+    if (isDemoMode) {
+      setError('Demo mode is read-only. Sign in to reset agent configuration.');
+      return;
+    }
+
+    setIsSavingAgentConfig(true);
+    setError(null);
+    setAgentConfigSaved(false);
+
+    try {
+      const defaultConfig = await resetAgentConfig();
+      setAgentConfig(defaultConfig);
+      setAgentConfigSaved(true);
+      setTimeout(() => setAgentConfigSaved(false), 2000);
+    } catch (err) {
+      setError('Failed to reset agent configuration');
+      console.error('Error resetting agent config:', err);
+    } finally {
+      setIsSavingAgentConfig(false);
+    }
+  };
+
+  // Cleanup agent config debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (agentConfigDebounceRef.current) {
+        clearTimeout(agentConfigDebounceRef.current);
+      }
+    };
+  }, []);
 
   // T052: Handle CodeRAG re-indexing
   const handleReindex = async () => {
@@ -820,6 +912,46 @@ export function Settings() {
                 </div>
               </div>
 
+              {/* Reasoning Effort - shown when thinking is enabled */}
+              {modelSettings.thinking_enabled && (
+                <div className="space-y-2 pl-4 border-l-2 border-muted">
+                  <label className="text-sm font-medium">Reasoning Effort</label>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    How thoroughly the model should reason (affects token usage and response time)
+                  </p>
+                  <Select
+                    value={modelSettings.reasoning_effort}
+                    onValueChange={(value: 'low' | 'medium' | 'high') =>
+                      setModelSettings({ ...modelSettings, reasoning_effort: value })
+                    }
+                  >
+                    <SelectTrigger className="w-48">
+                      <SelectValue placeholder="Select effort level" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">
+                        <div className="flex items-center gap-2">
+                          <span>Low</span>
+                          <span className="text-xs text-muted-foreground">- Quick reasoning</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="medium">
+                        <div className="flex items-center gap-2">
+                          <span>Medium</span>
+                          <span className="text-xs text-muted-foreground">- Balanced</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="high">
+                        <div className="flex items-center gap-2">
+                          <span>High</span>
+                          <span className="text-xs text-muted-foreground">- Thorough</span>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
               <Separator />
 
               {/* Chat Center Mode */}
@@ -1012,6 +1144,33 @@ export function Settings() {
           <SettingsSectionSkeleton
             title="Context Tree Settings"
             description="Configure Oracle conversation tree behavior"
+          />
+        )}
+
+        {/* T021-T023: Agent Configuration */}
+        {agentConfig ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Agent Configuration</CardTitle>
+              <CardDescription>
+                Configure Oracle agent turn control and resource limits
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AgentConfigPanel
+                agentConfig={agentConfig}
+                setAgentConfig={handleAgentConfigChange}
+                isSaving={isSavingAgentConfig}
+                saved={agentConfigSaved}
+                onReset={handleResetAgentConfig}
+                isDemoMode={isDemoMode}
+              />
+            </CardContent>
+          </Card>
+        ) : (
+          <SettingsSectionSkeleton
+            title="Agent Configuration"
+            description="Configure Oracle agent turn control and resource limits"
           />
         )}
 

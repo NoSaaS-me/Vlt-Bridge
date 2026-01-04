@@ -429,6 +429,25 @@
       },
       "agent_scope": ["oracle"],
       "category": "meta"
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "think",
+        "description": "Record your reasoning before taking action. Use this tool to think through problems step by step, analyze tool results, plan multi-step approaches, or work through complex decisions. The thought will be recorded and visible on subsequent tool calls, allowing you to build up your analysis incrementally. This tool is FREE - use it liberally.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "thought": {
+              "type": "string",
+              "description": "Your reasoning, analysis, or plan"
+            }
+          },
+          "required": ["thought"]
+        }
+      },
+      "agent_scope": ["oracle"],
+      "category": "reasoning"
     }
   ],
   "agent_definitions": {
@@ -437,6 +456,7 @@
       "description": "Main AI project manager agent",
       "system_prompt_path": "oracle/system.md",
       "tools": [
+        "think",
         "search_code", "find_definition", "find_references", "get_repo_map",
         "vault_read", "vault_write", "vault_search", "vault_list",
         "thread_push", "thread_read", "thread_seek", "thread_list",

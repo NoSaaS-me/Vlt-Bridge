@@ -557,6 +557,95 @@ class ContextTreeService:
         finally:
             conn.close()
 
+    def update_node_content(
+        self,
+        user_id: str,
+        node_id: str,
+        answer: Optional[str] = None,
+        tool_calls: Optional[List[ToolCall]] = None,
+        tokens_used: Optional[int] = None,
+    ) -> Optional[ContextNode]:
+        """Update a node's content (answer, tool_calls, tokens).
+
+        This is used for incremental saves during multi-turn exchanges,
+        allowing partial progress to be persisted before the exchange completes.
+
+        Args:
+            user_id: User identifier
+            node_id: Node ID
+            answer: New/updated answer content (None to keep current)
+            tool_calls: Updated tool calls list (None to keep current)
+            tokens_used: Updated token count (None to keep current)
+
+        Returns:
+            Updated ContextNode or None if not found
+        """
+        node = self.get_node(user_id, node_id)
+        if not node:
+            return None
+
+        conn = self.db.connect()
+        try:
+            updates = []
+            params = []
+
+            if answer is not None:
+                updates.append("answer = ?")
+                params.append(answer)
+
+            if tool_calls is not None:
+                tool_calls_json = json.dumps([
+                    {
+                        "id": tc.id,
+                        "name": tc.name,
+                        "arguments": tc.arguments,
+                        "result": tc.result,
+                        "status": tc.status.value,
+                        "duration_ms": tc.duration_ms,
+                    }
+                    for tc in tool_calls
+                ])
+                updates.append("tool_calls_json = ?")
+                params.append(tool_calls_json)
+
+            if tokens_used is not None:
+                updates.append("tokens_used = ?")
+                params.append(tokens_used)
+
+            if not updates:
+                return node
+
+            params.extend([user_id, node_id])
+
+            conn.execute(
+                f"UPDATE context_nodes SET {', '.join(updates)} WHERE user_id = ? AND id = ?",
+                params
+            )
+
+            # Also update tree's last_activity
+            conn.execute(
+                """
+                UPDATE context_trees
+                SET last_activity = ?
+                WHERE root_id = (SELECT root_id FROM context_nodes WHERE id = ?)
+                """,
+                (datetime.now(timezone.utc).isoformat(), node_id)
+            )
+
+            conn.commit()
+
+            logger.debug(f"Updated node {node_id} content (answer={answer is not None}, tools={tool_calls is not None})")
+            return self.get_node(user_id, node_id)
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Failed to update node content {node_id}: {e}")
+            raise ContextTreeServiceError(
+                f"Failed to update node content: {str(e)}",
+                {"node_id": node_id}
+            )
+        finally:
+            conn.close()
+
     def checkout_node(
         self,
         user_id: str,

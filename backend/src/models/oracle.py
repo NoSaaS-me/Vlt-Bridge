@@ -33,9 +33,11 @@ class OracleRequest(BaseModel):
 
 class OracleStreamChunk(BaseModel):
     """Server-sent event chunk for streaming responses."""
-    type: Literal["thinking", "content", "source", "tool_call", "tool_result", "done", "error"] = Field(
+    type: Literal["thinking", "content", "source", "tool_call", "tool_result", "done", "error", "system", "status"] = Field(
         ..., description="Chunk type"
     )
+    # Status message for heartbeat/progress updates (status chunks only)
+    message: Optional[str] = Field(None, description="Status message for heartbeat/keep-alive chunks")
     content: Optional[str] = Field(None, description="Text content for thinking/content chunks")
     source: Optional[SourceReference] = Field(None, description="Source citation for source chunks")
     tool_call: Optional[Dict[str, Any]] = Field(None, description="Tool call info (tool_call chunks)")
@@ -46,6 +48,11 @@ class OracleStreamChunk(BaseModel):
     context_id: Optional[str] = Field(None, description="Context ID for conversation persistence (done chunk)")
     error: Optional[str] = Field(None, description="Error message (error chunk only)")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    # System notification fields (system chunks only)
+    system_type: Optional[Literal["limit_warning", "limit_reached", "no_progress", "error_limit", "tool_limit"]] = Field(
+        None, description="Type of system notification (system chunk only)"
+    )
+    system_message: Optional[str] = Field(None, description="Human-readable system message (system chunk only)")
 
 
 class OracleResponse(BaseModel):

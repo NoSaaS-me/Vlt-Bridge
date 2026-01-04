@@ -1,7 +1,7 @@
 import type { ChatMessage as ChatMessageType } from '@/types/rag';
 import type { OracleMessage } from '@/types/oracle';
 import { cn } from '@/lib/utils';
-import { User, Bot, FilePlus, Edit, RefreshCw, ChevronDown, ChevronUp, Brain, FileCode, BookOpen, MessageSquare, Wrench, CheckCircle, Loader2, AlertCircle, Clock, Copy, Check } from 'lucide-react';
+import { User, Bot, FilePlus, Edit, RefreshCw, ChevronDown, ChevronUp, Brain, FileCode, BookOpen, MessageSquare, Wrench, CheckCircle, Loader2, AlertCircle, Clock, Copy, Check, Info, AlertTriangle, XCircle, Repeat } from 'lucide-react';
 import { SourceList } from './SourceList';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -39,11 +39,13 @@ export function ChatMessage({
   isStreaming = false,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
+  const isSystem = message.role === 'system';
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const [toolsExpanded, setToolsExpanded] = useState(true); // Default expanded to show progress
   const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(new Set());
   const [copiedToolId, setCopiedToolId] = useState<string | null>(null);
+  const [showAllTools, setShowAllTools] = useState(false); // For collapsing many tool calls
 
   // Create markdown components for rendering with wikilink support
   const markdownComponents = useMemo(() => createWikilinkComponent(onSourceClick), [onSourceClick]);
@@ -198,25 +200,42 @@ export function ChatMessage({
 
   // Count running/completed tools
   const toolStats = useMemo(() => {
-    if (!oracleMsg?.tool_calls) return { running: 0, completed: 0, total: 0 };
+    if (!oracleMsg?.tool_calls) return { running: 0, completed: 0, error: 0, pending: 0, total: 0 };
     const running = oracleMsg.tool_calls.filter(tc => tc.status === 'running').length;
     const completed = oracleMsg.tool_calls.filter(tc => tc.status === 'completed').length;
-    return { running, completed, total: oracleMsg.tool_calls.length };
+    const error = oracleMsg.tool_calls.filter(tc => tc.status === 'error').length;
+    const pending = oracleMsg.tool_calls.filter(tc => !tc.status || tc.status === 'pending').length;
+    return { running, completed, error, pending, total: oracleMsg.tool_calls.length };
   }, [oracleMsg?.tool_calls]);
 
+  // Virtual scrolling / collapsible for many tool calls
+  const MAX_VISIBLE_TOOLS = 5;
+  const visibleTools = useMemo(() => {
+    if (!oracleMsg?.tool_calls) return [];
+    if (showAllTools) return oracleMsg.tool_calls;
+    return oracleMsg.tool_calls.slice(0, MAX_VISIBLE_TOOLS);
+  }, [oracleMsg?.tool_calls, showAllTools]);
+
+  const hiddenToolCount = (oracleMsg?.tool_calls?.length || 0) - MAX_VISIBLE_TOOLS;
+
   return (
-    <div className={cn("flex gap-3 p-4", isUser ? "bg-transparent" : "bg-muted/30")}>
+    <div className={cn(
+      "flex gap-3 p-4",
+      isUser ? "bg-transparent" : isSystem ? "bg-amber-500/5" : "bg-muted/30"
+    )}>
       {/* Avatar */}
       <div className={cn(
         "h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 mt-1",
-        isUser ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
+        isUser ? "bg-primary text-primary-foreground"
+          : isSystem ? "bg-amber-500/20 text-amber-600 dark:text-amber-400"
+          : "bg-secondary text-secondary-foreground"
       )}>
-        {isUser ? <User className="h-5 w-5" /> : <Bot className="h-5 w-5" />}
+        {isUser ? <User className="h-5 w-5" /> : isSystem ? <Info className="h-5 w-5" /> : <Bot className="h-5 w-5" />}
       </div>
 
       <div className="flex-1 space-y-3 overflow-hidden min-w-0">
         {/* ===== THINKING SECTION ===== */}
-        {!isUser && oracleMsg && hasThinking && showThinking && (
+        {!isUser && !isSystem && oracleMsg && hasThinking && showThinking && (
           <div className={cn(
             "border rounded-lg overflow-hidden transition-all duration-200",
             isThinkingActive
@@ -278,7 +297,7 @@ export function ChatMessage({
         )}
 
         {/* ===== TOOL CALLS SECTION ===== */}
-        {!isUser && hasToolCalls && (
+        {!isUser && !isSystem && hasToolCalls && (
           <div className="border border-border rounded-lg overflow-hidden bg-muted/10">
             <button
               onClick={() => setToolsExpanded(!toolsExpanded)}
@@ -311,7 +330,39 @@ export function ChatMessage({
             </button>
             {toolsExpanded && oracleMsg?.tool_calls && (
               <div className="border-t border-border">
-                {oracleMsg.tool_calls.map((tool) => (
+                {/* Tool call summary when collapsed (hidden tools) */}
+                {!showAllTools && hiddenToolCount > 0 && (
+                  <div className="px-3 py-2 bg-muted/20 border-b border-border/50 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>Showing {MAX_VISIBLE_TOOLS} of {toolStats.total} tools</span>
+                      <span className="text-muted-foreground/60">|</span>
+                      <span className="flex items-center gap-1">
+                        <CheckCircle className="h-3 w-3 text-green-500" />
+                        {toolStats.completed}
+                      </span>
+                      {toolStats.error > 0 && (
+                        <span className="flex items-center gap-1">
+                          <AlertCircle className="h-3 w-3 text-red-500" />
+                          {toolStats.error}
+                        </span>
+                      )}
+                      {toolStats.running > 0 && (
+                        <span className="flex items-center gap-1">
+                          <Loader2 className="h-3 w-3 text-blue-500 animate-spin" />
+                          {toolStats.running}
+                        </span>
+                      )}
+                      {toolStats.pending > 0 && (
+                        <span className="flex items-center gap-1">
+                          <Clock className="h-3 w-3 text-muted-foreground" />
+                          {toolStats.pending}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {visibleTools.map((tool) => (
                   <div
                     key={tool.id}
                     className={cn(
@@ -398,6 +449,29 @@ export function ChatMessage({
                     )}
                   </div>
                 ))}
+
+                {/* Show more/less buttons */}
+                {hiddenToolCount > 0 && (
+                  <div className="px-3 py-2 border-t border-border/50 bg-muted/10">
+                    {!showAllTools ? (
+                      <button
+                        onClick={() => setShowAllTools(true)}
+                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                        <span>Show {hiddenToolCount} more tool call{hiddenToolCount > 1 ? 's' : ''}...</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setShowAllTools(false)}
+                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <ChevronUp className="h-4 w-4" />
+                        <span>Show less</span>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -433,8 +507,34 @@ export function ChatMessage({
           )}
         </div>
 
+        {/* ===== SYSTEM MESSAGE TYPE BADGE ===== */}
+        {isSystem && oracleMsg?.system_type && (
+          <div className="flex items-center gap-2 mt-1">
+            <Badge
+              variant={
+                oracleMsg.system_type === 'limit_reached' || oracleMsg.system_type === 'error_limit'
+                  ? 'destructive'
+                  : oracleMsg.system_type === 'limit_warning'
+                    ? 'secondary'
+                    : 'outline'
+              }
+              className={cn(
+                "text-xs gap-1",
+                oracleMsg.system_type === 'limit_warning' && "bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30",
+                oracleMsg.system_type === 'no_progress' && "bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/30"
+              )}
+            >
+              {oracleMsg.system_type === 'limit_warning' && <AlertTriangle className="h-3 w-3" />}
+              {oracleMsg.system_type === 'limit_reached' && <XCircle className="h-3 w-3" />}
+              {oracleMsg.system_type === 'no_progress' && <Repeat className="h-3 w-3" />}
+              {oracleMsg.system_type === 'error_limit' && <AlertCircle className="h-3 w-3" />}
+              {oracleMsg.system_type.replace(/_/g, ' ')}
+            </Badge>
+          </div>
+        )}
+
         {/* ===== MODEL BADGE ===== */}
-        {!isUser && oracleMsg?.model && (
+        {!isUser && !isSystem && oracleMsg?.model && (
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="text-xs font-normal">
               {oracleMsg.model}
@@ -443,7 +543,7 @@ export function ChatMessage({
         )}
 
         {/* ===== NOTES WRITTEN (RAG legacy) ===== */}
-        {!isUser && 'notes_written' in message && message.notes_written && message.notes_written.length > 0 && (
+        {!isUser && !isSystem && 'notes_written' in message && message.notes_written && message.notes_written.length > 0 && (
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2">
               {message.notes_written.map((note, i) => (
@@ -473,7 +573,7 @@ export function ChatMessage({
         )}
 
         {/* ===== ORACLE SOURCES ===== */}
-        {!isUser && showSources && oracleMsg?.sources && oracleMsg.sources.length > 0 && (
+        {!isUser && !isSystem && showSources && oracleMsg?.sources && oracleMsg.sources.length > 0 && (
           <div className="space-y-2">
             <div className="text-xs font-medium text-muted-foreground">Sources</div>
             <div className="flex flex-wrap gap-2">
@@ -503,7 +603,7 @@ export function ChatMessage({
         )}
 
         {/* ===== LEGACY RAG SOURCES ===== */}
-        {!isUser && showSources && !oracleMsg && message.sources && (
+        {!isUser && !isSystem && showSources && !oracleMsg && message.sources && (
           <SourceList sources={message.sources as import('@/types/rag').SourceReference[]} onSourceClick={onSourceClick} />
         )}
       </div>

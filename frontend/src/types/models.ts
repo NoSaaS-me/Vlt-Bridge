@@ -5,6 +5,8 @@
 
 export type ModelProvider = 'openrouter' | 'google';
 
+export type ReasoningEffort = 'low' | 'medium' | 'high';
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -21,10 +23,23 @@ export interface ModelSettings {
   subagent_model: string;
   subagent_provider: ModelProvider;
   thinking_enabled: boolean;
+  reasoning_effort: ReasoningEffort;
   chat_center_mode: boolean;
   librarian_timeout: number;
   openrouter_api_key?: string | null;
   openrouter_api_key_set: boolean;
+}
+
+export interface ModelSettingsUpdateRequest {
+  oracle_model?: string;
+  oracle_provider?: ModelProvider;
+  subagent_model?: string;
+  subagent_provider?: ModelProvider;
+  thinking_enabled?: boolean;
+  reasoning_effort?: ReasoningEffort;
+  chat_center_mode?: boolean;
+  librarian_timeout?: number;
+  openrouter_api_key?: string | null;
 }
 
 export interface ModelsResponse {

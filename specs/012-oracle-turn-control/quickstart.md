@@ -84,6 +84,101 @@ class DecisionTree(Protocol):
 - [ ] Partial content saved on termination
 - [ ] Frontend handles all system chunk types
 
+## Testing Scenarios
+
+### 1. Max Iterations Limit
+
+Test that the agent stops at the configured max_iterations limit.
+
+**Setup:**
+1. Go to Settings > Agent Configuration
+2. Set `max_iterations` to 3 (minimum for testing)
+3. Set `soft_warning_percent` to 70
+
+**Test:**
+1. Ask a complex question that requires multiple tool calls: "Find all Python files in the vault and summarize their contents"
+2. Observe warning system message at ~2 turns (70% of 3)
+3. Agent should terminate after 3 turns with "limit_reached" system message
+4. Check backend logs for: `[TERMINATION:max_iterations]`
+
+### 2. Token Budget Warning
+
+Test that token budget warnings appear correctly.
+
+**Setup:**
+1. Go to Settings > Agent Configuration
+2. Set `token_budget` to 5000 (low value for testing)
+3. Set `token_warning_percent` to 80
+
+**Test:**
+1. Ask a question that generates verbose output: "List all vault notes with their full content"
+2. Observe warning system message when approaching 4000 tokens (80%)
+3. Check backend logs for token usage estimates
+4. Note: Token counting is approximate (4 chars per token estimate)
+
+### 3. Timeout
+
+Test that queries timeout correctly.
+
+**Setup:**
+1. Go to Settings > Agent Configuration
+2. Set `timeout_seconds` to 30 (short for testing)
+
+**Test:**
+1. Ask a question that might take time: "Search the entire codebase for security issues"
+2. If query runs longer than 30s, observe timeout system message
+3. Check backend logs for: `[TERMINATION:timeout]`
+
+### 4. System Messages in Chat
+
+Verify system messages appear correctly in the UI.
+
+**Test:**
+1. Configure low limits as above
+2. Trigger any limit (iterations, tokens, timeout)
+3. Verify system message appears in chat panel with correct styling
+4. Message should include the limit type and current value
+
+### 5. No-Progress Detection
+
+Test detection of repeated identical actions (harder to trigger manually).
+
+**Programmatic Test:**
+```python
+# Run via pytest
+pytest tests/unit/test_decision_tree.py::test_no_progress_detection -v
+```
+
+The no-progress detector triggers when:
+- Same tool with same arguments is called 3 consecutive times
+- Compares stringified JSON of arguments (key order matters)
+
+### 6. Settings Persistence
+
+Verify AgentConfig settings persist across sessions.
+
+**Test:**
+1. Change any AgentConfig setting in Settings page
+2. Refresh the browser
+3. Go back to Settings page
+4. Verify setting persisted (check SQLite user_settings table)
+
+### Log Inspection
+
+All termination events are logged with a consistent format for debugging:
+- `[TERMINATION:max_iterations]` - Hit iteration limit
+- `[TERMINATION:token_budget]` - Exceeded token budget
+- `[TERMINATION:timeout]` - Query timed out
+- `[TERMINATION:no_progress]` - 3 identical consecutive actions
+- `[TERMINATION:error_limit]` - 3 consecutive errors
+- `[TERMINATION:cancelled]` - User cancelled query
+
+View logs with:
+```bash
+cd backend
+tail -f /tmp/vlt-oracle.log | grep TERMINATION
+```
+
 ## Common Pitfalls
 
 1. **Token counting is approximate** - Don't expect exact enforcement
