@@ -62,6 +62,7 @@ generate_jwt_token.py
 
 # Documentation
 docs/fastmcp/
+!docs/plugin-api/
 
 # AI notes (personal workspace)
 ai-notes/
