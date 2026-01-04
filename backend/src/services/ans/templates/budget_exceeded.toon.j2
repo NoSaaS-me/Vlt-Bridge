@@ -1,0 +1,8 @@
+{% if events|length == 1 %}
+{% set e = events[0] %}
+!exceeded: {{ e.payload.budget_type }} limit reached - {{ e.payload.message }}
+{% else %}
+{% for e in events %}
+!exceeded: {{ e.payload.budget_type }} limit reached - {{ e.payload.message }}
+{% endfor %}
+{% endif %}

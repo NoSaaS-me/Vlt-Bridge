@@ -115,6 +115,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         max_context_nodes INTEGER NOT NULL DEFAULT 30,
         openrouter_api_key TEXT,
         default_project_id TEXT DEFAULT 'default',
+        disabled_subscribers_json TEXT DEFAULT '[]',
         created TEXT NOT NULL,
         updated TEXT NOT NULL
     )
@@ -209,6 +210,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         tool_calls_json TEXT DEFAULT '[]',
         tokens_used INTEGER DEFAULT 0,
         model_used TEXT,
+        system_messages_json TEXT DEFAULT '[]',
 
         -- Metadata
         label TEXT,
@@ -255,6 +257,10 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE user_settings ADD COLUMN chat_center_mode INTEGER NOT NULL DEFAULT 0",
     # Add default_project_id column to user_settings (010-multi-project)
     "ALTER TABLE user_settings ADD COLUMN default_project_id TEXT DEFAULT 'default'",
+    # Add disabled_subscribers_json column to user_settings (013-agent-notification-system T006)
+    "ALTER TABLE user_settings ADD COLUMN disabled_subscribers_json TEXT DEFAULT '[]'",
+    # Add system_messages_json column to context_nodes (013-agent-notification-system T007)
+    "ALTER TABLE context_nodes ADD COLUMN system_messages_json TEXT DEFAULT '[]'",
 )
 
 

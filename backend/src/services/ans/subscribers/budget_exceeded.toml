@@ -1,0 +1,22 @@
+[subscriber]
+id = "budget_exceeded"
+name = "Budget Exceeded Notifications"
+description = "Notifies agent when token or iteration budget limits are reached"
+version = "1.0.0"
+
+[events]
+types = ["budget.token.exceeded", "budget.iteration.exceeded"]
+severity_filter = "error"
+
+[batching]
+# No batching - immediate delivery for critical budget events
+window_ms = 0
+max_size = 1
+dedupe_key = "type:payload.budget_type"
+dedupe_window_ms = 0
+
+[output]
+priority = "critical"
+inject_at = "immediate"
+template = "budget_exceeded.toon.j2"
+core = true

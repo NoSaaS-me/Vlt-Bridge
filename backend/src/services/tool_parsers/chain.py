@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Tuple
 from .anthropic import AnthropicXMLParser
 from .deepseek import DeepSeekXMLParser
 from .generic import GenericXMLParser
+from .inline import InlineToolParser
 from .standard import StandardXMLParser
 
 logger = logging.getLogger(__name__)
@@ -20,10 +21,11 @@ class ToolCallParserChain:
     """Chains multiple parsers together, trying each in priority order.
 
     The chain tries parsers from most specific to most generic:
-    1. DeepSeek (most distinctive markers)
-    2. Standard (common format)
-    3. Anthropic (may overlap with standard)
-    4. Generic (fallback, most permissive)
+    1. InlineToolParser (tool_name{json} format - check first as it's common with DeepSeek)
+    2. DeepSeek (most distinctive XML markers)
+    3. Standard (common XML format)
+    4. Anthropic (may overlap with standard)
+    5. Generic (fallback, most permissive)
 
     When a parser successfully identifies content it can handle (via can_parse),
     it is used to extract tool calls. The chain stops at the first successful parse.
@@ -32,8 +34,9 @@ class ToolCallParserChain:
     def __init__(self):
         """Initialize the parser chain with all available parsers."""
         self.parsers = [
-            DeepSeekXMLParser(),      # Most specific - check first
-            StandardXMLParser(),       # Common format
+            InlineToolParser(),        # tool_name{json} format - common with DeepSeek V3
+            DeepSeekXMLParser(),       # DeepSeek XML format
+            StandardXMLParser(),       # Common XML format
             AnthropicXMLParser(),      # Standalone invokes
             GenericXMLParser(),        # Fallback - most permissive
         ]

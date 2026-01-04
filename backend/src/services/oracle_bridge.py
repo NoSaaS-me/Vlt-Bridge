@@ -341,8 +341,24 @@ class OracleBridge:
             args.append("--explain")
 
         if model:
-            # Apply thinking suffix if requested
-            actual_model = f"{model}:thinking" if thinking else model
+            # Apply thinking suffix if requested AND model supports it
+            actual_model = model
+            if thinking:
+                model_lower = model.lower()
+                supports_thinking = (
+                    "-r1" in model_lower
+                    or "/r1" in model_lower
+                    or "/o1" in model_lower
+                    or "/o3" in model_lower
+                    or "claude-3.7-sonnet" in model_lower
+                    or ("qwen" in model_lower and "thinking" in model_lower)
+                )
+                if supports_thinking:
+                    actual_model = f"{model}:thinking"
+                else:
+                    logger.warning(
+                        f"Thinking mode requested but model '{model}' does not support :thinking suffix."
+                    )
             args.extend(["--model", actual_model])
 
         args.extend(["--max-tokens", str(max_tokens)])

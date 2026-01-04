@@ -1,0 +1,9 @@
+{% if events|length == 1 %}
+{% set e = events[0] %}
+!loop: {{ e.payload.pattern }} repeated {{ e.payload.count }}x - {{ e.payload.suggestion }}
+{% else %}
+!loops[{{ events|length }}]{pattern,count,suggestion}:
+{% for e in events %}
+  {{ e.payload.pattern }},{{ e.payload.count }},{{ e.payload.suggestion }}
+{% endfor %}
+{% endif %}

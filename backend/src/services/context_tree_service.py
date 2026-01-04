@@ -23,6 +23,9 @@ from ..models.oracle_context import (
 )
 from .database import DatabaseService
 
+# Type alias for system messages (list of strings or message objects)
+SystemMessages = List[str]
+
 logger = logging.getLogger(__name__)
 
 
@@ -325,7 +328,7 @@ class ContextTreeService:
                 """
                 SELECT id, root_id, parent_id, user_id, project_id, created_at,
                        question, answer, tool_calls_json, tokens_used, model_used,
-                       label, is_checkpoint, is_root
+                       label, is_checkpoint, is_root, system_messages_json
                 FROM context_nodes
                 WHERE user_id = ? AND root_id = ?
                 ORDER BY created_at ASC
@@ -362,7 +365,7 @@ class ContextTreeService:
                 """
                 SELECT id, root_id, parent_id, user_id, project_id, created_at,
                        question, answer, tool_calls_json, tokens_used, model_used,
-                       label, is_checkpoint, is_root
+                       label, is_checkpoint, is_root, system_messages_json
                 FROM context_nodes
                 WHERE user_id = ? AND id = ?
                 """,
@@ -391,6 +394,7 @@ class ContextTreeService:
         model_used: Optional[str] = None,
         label: Optional[str] = None,
         is_checkpoint: bool = False,
+        system_messages: Optional[SystemMessages] = None,
     ) -> ContextNode:
         """Create a new node in the tree.
 
@@ -405,6 +409,7 @@ class ContextTreeService:
             model_used: Model that generated the answer
             label: Optional node label
             is_checkpoint: Whether this node is protected from pruning
+            system_messages: List of system messages to store with this node
 
         Returns:
             Newly created ContextNode
@@ -424,6 +429,9 @@ class ContextTreeService:
             }
             for tc in (tool_calls or [])
         ])
+
+        # Serialize system messages
+        system_messages_json = json.dumps(system_messages or [])
 
         conn = self.db.connect()
         try:
@@ -446,13 +454,13 @@ class ContextTreeService:
                 INSERT INTO context_nodes (
                     id, root_id, parent_id, user_id, project_id, created_at,
                     question, answer, tool_calls_json, tokens_used, model_used,
-                    label, is_checkpoint, is_root
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    label, is_checkpoint, is_root, system_messages_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
                 (
                     node_id, root_id, parent_id, user_id, project_id, now.isoformat(),
                     question, answer, tool_calls_json, tokens_used, model_used,
-                    label, int(is_checkpoint)
+                    label, int(is_checkpoint), system_messages_json
                 )
             )
 
@@ -469,7 +477,7 @@ class ContextTreeService:
             )
             conn.commit()
 
-            logger.debug(f"Created node {node_id} in tree {root_id}")
+            logger.debug(f"Created node {node_id} in tree {root_id} with {len(system_messages or [])} system messages")
 
             return ContextNode(
                 id=node_id,
@@ -487,6 +495,7 @@ class ContextTreeService:
                 is_checkpoint=is_checkpoint,
                 is_root=False,
                 child_count=0,
+                system_messages=system_messages or [],
             )
         except ContextTreeServiceError:
             conn.rollback()
@@ -829,6 +838,15 @@ class ContextTreeService:
         except (json.JSONDecodeError, KeyError):
             tool_calls = []
 
+        # Parse system messages JSON
+        system_messages_json = row["system_messages_json"] if "system_messages_json" in row.keys() else "[]"
+        try:
+            system_messages = json.loads(system_messages_json or "[]")
+            if not isinstance(system_messages, list):
+                system_messages = []
+        except json.JSONDecodeError:
+            system_messages = []
+
         return ContextNode(
             id=row["id"],
             root_id=row["root_id"],
@@ -845,6 +863,7 @@ class ContextTreeService:
             is_checkpoint=bool(row["is_checkpoint"]),
             is_root=bool(row["is_root"]),
             child_count=0,  # Could be computed if needed
+            system_messages=system_messages,
         )
 
 

@@ -1,5 +1,5 @@
 export type SourceType = 'vault' | 'code' | 'threads';
-export type StreamEventType = 'status' | 'thinking' | 'content' | 'source' | 'tool_call' | 'tool_result' | 'done' | 'error';
+export type StreamEventType = 'status' | 'thinking' | 'content' | 'source' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'system' | 'context_update';
 
 /**
  * Oracle API request payload
@@ -48,6 +48,9 @@ export interface OracleStreamChunk {
   };
   tool_call_id?: string;     // for tool_result events - associates result with tool call
   tool_result?: string;      // for tool_result events
+  // Context window tracking (for context_update and done events)
+  context_tokens?: number;   // Current tokens used in context window
+  max_context_tokens?: number; // Maximum context window size for the model
 }
 
 /**
@@ -75,7 +78,7 @@ export interface ToolCallInfo {
  * Oracle conversation message (extends ChatMessage)
  */
 export interface OracleMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: string;
   thinking?: string;         // Optional thinking/reasoning content

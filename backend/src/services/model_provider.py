@@ -169,6 +169,12 @@ class ModelProviderService:
         """
         Apply or remove :thinking suffix from model ID.
 
+        Only applies :thinking suffix to models that actually support it:
+        - Models with -r1, /r1 (DeepSeek R1, etc.)
+        - Models with /o1, /o3 (OpenAI reasoning models)
+        - Claude 3.7 Sonnet (anthropic/claude-3.7-sonnet)
+        - Qwen thinking variants
+
         Args:
             model_id: Base model ID
             enabled: Whether thinking mode is enabled
@@ -179,7 +185,23 @@ class ModelProviderService:
         base_id = model_id.replace(":thinking", "")
 
         if enabled and not model_id.endswith(":thinking"):
-            return f"{base_id}:thinking"
+            # Check if model supports thinking mode
+            model_lower = base_id.lower()
+            supports_thinking = (
+                "-r1" in model_lower
+                or "/r1" in model_lower
+                or "/o1" in model_lower
+                or "/o3" in model_lower
+                or "claude-3.7-sonnet" in model_lower
+                or ("qwen" in model_lower and "thinking" in model_lower)
+            )
+            if supports_thinking:
+                return f"{base_id}:thinking"
+            else:
+                logger.warning(
+                    f"Thinking mode requested but model '{model_id}' does not support :thinking suffix."
+                )
+                return base_id
         elif not enabled and model_id.endswith(":thinking"):
             return base_id
 

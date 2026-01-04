@@ -38,7 +38,7 @@ const slugCache = new Map<string, number>();
  * T044: Performance optimization - Track inflight requests for deduplication
  * Prevents multiple simultaneous requests for the same link
  */
-const inflightRequests = new Map<string, Promise<NotePreview | null>>();
+const inflightRequests = new Map<string, Promise<NotePreview | null | undefined>>();
 
 /**
  * T044: Performance optimization - Limit concurrent fetches
@@ -114,7 +114,7 @@ function WikilinkPreview({
   const [isLongPressed, setIsLongPressed] = useState(false);
 
   // T043: Long-press detection state
-  const longPressTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const longPressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialPointerRef = React.useRef<{ x: number; y: number } | null>(null);
 
   // T044: Abort controller for canceling stale requests

@@ -28,6 +28,7 @@ class ExchangeRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
+    SYSTEM = "system"
 
 
 class ToolCallStatus(str, Enum):
@@ -92,6 +93,11 @@ class ContextNode(BaseModel):
     )
     tokens_used: int = Field(0, description="Total tokens consumed for this exchange")
     model_used: Optional[str] = Field(None, description="Model used for this exchange")
+
+    # System messages (notifications from ANS)
+    system_messages: List[str] = Field(
+        default_factory=list, description="System messages/notifications for this exchange"
+    )
 
     # Tree metadata
     label: Optional[str] = Field(

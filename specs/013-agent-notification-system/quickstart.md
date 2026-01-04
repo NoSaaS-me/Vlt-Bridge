@@ -19,7 +19,7 @@ This guide helps developers get started with implementing and extending the Agen
 
 ```python
 # backend/src/services/tool_executor.py
-# Look for timeout handling around line 240-261
+# Look for timeout handling around line 244-270
 
 # Add temporary debug log:
 logger.info(f"[ANS-DEBUG] Tool timeout: {tool_name}")
@@ -29,7 +29,7 @@ logger.info(f"[ANS-DEBUG] Tool timeout: {tool_name}")
 
 ```python
 # backend/src/services/oracle_agent.py
-# Look for budget checks around line 491-499
+# Look for budget checks around line 350-380 (_check_token_budget method)
 
 # Add temporary debug log:
 logger.info(f"[ANS-DEBUG] Budget check: {percentage}%")
@@ -80,9 +80,14 @@ my_events[{{ events|length }}]{ts,message}:
 ### Step 3: Emit Events
 
 ```python
-# In your service code
-from services.ans.bus import get_event_bus
-from services.ans.event import Event, Severity
+# In your service code (within backend/src/services/)
+# Use relative imports if inside the services package:
+from .ans.bus import get_event_bus
+from .ans.event import Event, Severity
+
+# Or use absolute imports from outside:
+from src.services.ans.bus import get_event_bus
+from src.services.ans.event import Event, Severity
 
 bus = get_event_bus()
 bus.emit(Event(
@@ -136,42 +141,49 @@ events = [{"name": "foo"}, {"name": "bar"}]
 print(template.render(events=events))
 ```
 
-## Frontend: Adding System Message Support
+## Frontend: System Message Support (Already Implemented)
 
-### 1. Update Types
+The frontend already has full system message support. This section documents the implementation.
+
+### 1. Types (Already Updated)
 
 ```typescript
 // frontend/src/types/oracle.ts
 export interface OracleMessage {
-  role: 'user' | 'assistant' | 'system';  // Add 'system'
+  role: 'user' | 'assistant' | 'system';  // 'system' included
   // ...existing fields
 }
 ```
 
-### 2. Handle SSE Chunk
+### 2. SSE Chunk Handling (ChatPanel.tsx line ~693)
 
 ```typescript
 // frontend/src/components/ChatPanel.tsx
-// In streamOracle callback, add case:
+// In the streamOracle callback:
 
-case 'system':
-  setMessages(prev => [...prev, {
-    _id: `sys_${Date.now()}`,
+} else if (chunk.type === 'system') {
+  const systemMsg: OracleMessageWithId = {
+    _id: `sys_${Date.now()}_${Math.random().toString(36).substring(7)}`,
     role: 'system',
-    content: chunk.content,
+    content: chunk.content || '',
     timestamp: new Date().toISOString(),
-  }]);
-  break;
+  };
+  // Insert system message before the current assistant message
+  return [...prev.slice(0, lastIndex), systemMsg, lastMsg];
+}
 ```
 
-### 3. Style System Messages
+### 3. System Message Styling (ChatMessage.tsx)
 
 ```typescript
 // frontend/src/components/ChatMessage.tsx
 const isSystem = message.role === 'system';
 
-// Use yellow/amber for system messages
-// See plan.md for full styling details
+// Features implemented:
+// - Yellow/amber background and left border
+// - AlertCircle icon with "System" label
+// - Collapsible content for verbose messages (>200 chars or >3 lines)
+// - TOON parsing with graceful fallback on error
 ```
 
 ## API Endpoints

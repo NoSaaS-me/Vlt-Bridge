@@ -1,0 +1,21 @@
+[subscriber]
+id = "budget_warning"
+name = "Budget Warning Notifications"
+description = "Notifies agent when approaching token or iteration budget limits"
+version = "1.0.0"
+
+[events]
+types = ["budget.token.warning", "budget.iteration.warning"]
+severity_filter = "warning"
+
+[batching]
+window_ms = 1000
+max_size = 3
+dedupe_key = "type:payload.budget_type"
+dedupe_window_ms = 10000
+
+[output]
+priority = "high"
+inject_at = "turn_start"
+template = "budget_warning.toon.j2"
+core = true

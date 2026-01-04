@@ -36,6 +36,10 @@ from .thread_service import ThreadService
 from .user_settings import UserSettingsService, get_user_settings_service
 from .vault import VaultService
 
+# ANS imports for timeout event emission
+from .ans.bus import get_event_bus
+from .ans.event import Event, EventType, Severity
+
 logger = logging.getLogger(__name__)
 
 
@@ -248,6 +252,20 @@ class ToolExecutor:
                     "args_keys": list(arguments.keys()),
                 },
             )
+
+            # Emit tool.call.timeout event (T028)
+            get_event_bus().emit(Event(
+                type=EventType.TOOL_CALL_TIMEOUT,
+                source="tool_executor",
+                severity=Severity.WARNING,
+                payload={
+                    "tool_name": name,
+                    "error_type": "timeout",
+                    "error_message": f"Timed out after {actual_timeout}s",
+                    "timeout_seconds": actual_timeout,
+                }
+            ))
+
             # Return a descriptive error that helps agents understand what happened
             return json.dumps({
                 "error": f"Tool '{name}' timed out after {actual_timeout} seconds. "

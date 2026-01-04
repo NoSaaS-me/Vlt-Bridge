@@ -24,13 +24,13 @@
 
 **Purpose**: Project initialization, dependencies, and ANS package structure
 
-- [ ] T001 Add python-toon dependency to backend/pyproject.toml
-- [ ] T002 [P] Create ANS package structure: backend/src/services/ans/__init__.py
-- [ ] T003 [P] Create subscribers directory: backend/src/services/ans/subscribers/
-- [ ] T004 [P] Create templates directory: backend/src/services/ans/templates/
-- [ ] T005 [P] Add shadcn/ui tabs component to frontend via `npx shadcn@latest add tabs`
-- [ ] T006 Run database migration to add disabled_subscribers_json column to user_settings in backend/src/services/database.py
-- [ ] T007 Run database migration to add system_messages_json column to context_nodes in backend/src/services/database.py
+- [x] T001 Add python-toon dependency to backend/pyproject.toml
+- [x] T002 [P] Create ANS package structure: backend/src/services/ans/__init__.py
+- [x] T003 [P] Create subscribers directory: backend/src/services/ans/subscribers/
+- [x] T004 [P] Create templates directory: backend/src/services/ans/templates/
+- [x] T005 [P] Add shadcn/ui tabs component to frontend via `npx shadcn@latest add tabs`
+- [x] T006 Run database migration to add disabled_subscribers_json column to user_settings in backend/src/services/database.py
+- [x] T007 Run database migration to add system_messages_json column to context_nodes in backend/src/services/database.py
 
 ---
 
@@ -42,35 +42,35 @@
 
 ### Event System Foundation
 
-- [ ] T008 [P] Create Event dataclass with Severity enum in backend/src/services/ans/event.py
-- [ ] T009 [P] Create EventType constants (tool.*, budget.*, agent.*) in backend/src/services/ans/event.py
-- [ ] T010 Implement EventBus (pub/sub) in backend/src/services/ans/bus.py
-- [ ] T011 Create unit tests for EventBus in backend/tests/unit/test_ans_bus.py
+- [x] T008 [P] Create Event dataclass with Severity enum in backend/src/services/ans/event.py
+- [x] T009 [P] Create EventType constants (tool.*, budget.*, agent.*) in backend/src/services/ans/event.py
+- [x] T010 Implement EventBus (pub/sub) in backend/src/services/ans/bus.py
+- [x] T011 Create unit tests for EventBus in backend/tests/unit/test_ans_bus.py
 
 ### Subscriber System Foundation
 
-- [ ] T012 [P] Create Subscriber dataclass and SubscriberConfig model in backend/src/services/ans/subscriber.py
-- [ ] T013 [P] Create Priority and InjectionPoint enums in backend/src/services/ans/subscriber.py
-- [ ] T014 Implement SubscriberLoader (TOML discovery from subscribers/ directory) in backend/src/services/ans/subscriber.py
+- [x] T012 [P] Create Subscriber dataclass and SubscriberConfig model in backend/src/services/ans/subscriber.py
+- [x] T013 [P] Create Priority and InjectionPoint enums in backend/src/services/ans/subscriber.py
+- [x] T014 Implement SubscriberLoader (TOML discovery from subscribers/ directory) in backend/src/services/ans/subscriber.py
 - [ ] T015 Create unit tests for SubscriberLoader in backend/tests/unit/test_ans_subscriber.py
 
 ### Notification Generation Foundation
 
-- [ ] T016 [P] Create Notification dataclass in backend/src/services/ans/accumulator.py
-- [ ] T017 Implement NotificationAccumulator (batching, deduplication) in backend/src/services/ans/accumulator.py
-- [ ] T018 Create unit tests for NotificationAccumulator in backend/tests/unit/test_ans_accumulator.py
-- [ ] T019 Implement ToonFormatter (Jinja2 + TOON) in backend/src/services/ans/toon_formatter.py
-- [ ] T020 Create unit tests for ToonFormatter in backend/tests/unit/test_toon_formatter.py
+- [x] T016 [P] Create Notification dataclass in backend/src/services/ans/accumulator.py
+- [x] T017 Implement NotificationAccumulator (batching, deduplication) in backend/src/services/ans/accumulator.py
+- [x] T018 Create unit tests for NotificationAccumulator in backend/tests/unit/test_ans_accumulator.py
+- [x] T019 Implement ToonFormatter (Jinja2 + TOON) in backend/src/services/ans/toon_formatter.py
+- [x] T020 Create unit tests for ToonFormatter in backend/tests/unit/test_toon_formatter.py
 
 ### Stream Extension
 
-- [ ] T021 Add StreamEventType.SYSTEM to enum in backend/src/models/oracle.py
-- [ ] T022 [P] Add ExchangeRole.SYSTEM to enum in backend/src/models/oracle_context.py
+- [x] T021 Add StreamEventType.SYSTEM to enum in backend/src/models/oracle.py
+- [x] T022 [P] Add ExchangeRole.SYSTEM to enum in backend/src/models/oracle_context.py
 
 ### Frontend Types Foundation
 
-- [ ] T023 [P] Add 'system' to OracleMessage role union in frontend/src/types/oracle.ts
-- [ ] T024 [P] Add 'system' to Role type in frontend/src/types/rag.ts
+- [x] T023 [P] Add 'system' to OracleMessage role union in frontend/src/types/oracle.ts
+- [x] T024 [P] Add 'system' to Role type in frontend/src/types/rag.ts
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -84,24 +84,24 @@
 
 ### Subscriber Configuration for US1
 
-- [ ] T025 [P] [US1] Create tool_failure.toml subscriber config in backend/src/services/ans/subscribers/tool_failure.toml
-- [ ] T026 [P] [US1] Create tool_failure.toon.j2 template in backend/src/services/ans/templates/tool_failure.toon.j2
+- [x] T025 [P] [US1] Create tool_failure.toml subscriber config in backend/src/services/ans/subscribers/tool_failure.toml
+- [x] T026 [P] [US1] Create tool_failure.toon.j2 template in backend/src/services/ans/templates/tool_failure.toon.j2
 
 ### Event Emission for US1
 
-- [ ] T027 [US1] Emit tool.call.failure event from oracle_agent.py at line ~1043-1051 in backend/src/services/oracle_agent.py
-- [ ] T028 [US1] Emit tool.call.timeout event from tool_executor.py at line ~240-261 in backend/src/services/tool_executor.py
-- [ ] T029 [P] [US1] Emit tool.call.success event from oracle_agent.py at line ~964 (for future use) in backend/src/services/oracle_agent.py
+- [x] T027 [US1] Emit tool.call.failure event from oracle_agent.py at line ~1043-1051 in backend/src/services/oracle_agent.py
+- [x] T028 [US1] Emit tool.call.timeout event from tool_executor.py at line ~240-261 in backend/src/services/tool_executor.py
+- [x] T029 [P] [US1] Emit tool.call.success event from oracle_agent.py at line ~964 (for future use) in backend/src/services/oracle_agent.py
 
 ### Notification Injection for US1
 
-- [ ] T030 [US1] Initialize ANS accumulator in OracleAgent constructor in backend/src/services/oracle_agent.py
-- [ ] T031 [US1] Inject notifications at "after_tool" point in run_turn_loop() at line ~964 in backend/src/services/oracle_agent.py
-- [ ] T032 [US1] Yield OracleStreamChunk(type="system", content=...) for notifications in backend/src/services/oracle_agent.py
+- [x] T030 [US1] Initialize ANS accumulator in OracleAgent constructor in backend/src/services/oracle_agent.py
+- [x] T031 [US1] Inject notifications at "after_tool" point in run_turn_loop() at line ~964 in backend/src/services/oracle_agent.py
+- [x] T032 [US1] Yield OracleStreamChunk(type="system", content=...) for notifications in backend/src/services/oracle_agent.py
 
 ### Integration Test for US1
 
-- [ ] T033 [US1] Create integration test: tool failure → notification → SSE chunk in backend/tests/unit/test_ans_integration.py
+- [x] T033 [US1] Create integration test: tool failure → notification → SSE chunk in backend/tests/unit/test_ans_integration.py
 
 **Checkpoint**: Tool failure notifications working end-to-end
 
@@ -115,20 +115,20 @@
 
 ### Frontend SSE Handling for US2
 
-- [ ] T034 [US2] Handle 'system' chunk type in streamOracle callback in frontend/src/components/ChatPanel.tsx
-- [ ] T035 [US2] Create system message with role='system' when chunk received in frontend/src/components/ChatPanel.tsx
+- [x] T034 [US2] Handle 'system' chunk type in streamOracle callback in frontend/src/components/ChatPanel.tsx
+- [x] T035 [US2] Create system message with role='system' when chunk received in frontend/src/components/ChatPanel.tsx
 
 ### System Message Styling for US2
 
-- [ ] T036 [US2] Add isSystem check (message.role === 'system') in frontend/src/components/ChatMessage.tsx
-- [ ] T037 [US2] Add system message avatar styling (yellow/amber with AlertCircle icon) in frontend/src/components/ChatMessage.tsx
-- [ ] T038 [US2] Add system message container styling (yellow border-l-2, background) in frontend/src/components/ChatMessage.tsx
-- [ ] T039 [P] [US2] Import AlertCircle icon from lucide-react in frontend/src/components/ChatMessage.tsx
+- [x] T036 [US2] Add isSystem check (message.role === 'system') in frontend/src/components/ChatMessage.tsx
+- [x] T037 [US2] Add system message avatar styling (yellow/amber with AlertCircle icon) in frontend/src/components/ChatMessage.tsx
+- [x] T038 [US2] Add system message container styling (yellow border-l-2, background) in frontend/src/components/ChatMessage.tsx
+- [x] T039 [P] [US2] Import AlertCircle icon from lucide-react in frontend/src/components/ChatMessage.tsx
 
 ### Persistence for US2
 
-- [ ] T040 [US2] Store system messages in context_nodes.system_messages_json on save in backend/src/services/context_tree_service.py
-- [ ] T041 [US2] Load system messages from context_nodes when building history in backend/src/services/oracle_agent.py
+- [x] T040 [US2] Store system messages in context_nodes.system_messages_json on save in backend/src/services/context_tree_service.py
+- [x] T041 [US2] Load system messages from context_nodes when building history in backend/src/services/oracle_agent.py
 
 **Checkpoint**: System messages display correctly with distinct styling
 
@@ -142,21 +142,21 @@
 
 ### Subscriber Configuration for US3
 
-- [ ] T042 [P] [US3] Create budget_warning.toml subscriber config in backend/src/services/ans/subscribers/budget_warning.toml
-- [ ] T043 [P] [US3] Create budget_warning.toon.j2 template in backend/src/services/ans/templates/budget_warning.toon.j2
-- [ ] T044 [P] [US3] Create budget_exceeded.toml subscriber config in backend/src/services/ans/subscribers/budget_exceeded.toml
-- [ ] T045 [P] [US3] Create budget_exceeded.toon.j2 template in backend/src/services/ans/templates/budget_exceeded.toon.j2
+- [x] T042 [P] [US3] Create budget_warning.toml subscriber config in backend/src/services/ans/subscribers/budget_warning.toml
+- [x] T043 [P] [US3] Create budget_warning.toon.j2 template in backend/src/services/ans/templates/budget_warning.toon.j2
+- [x] T044 [P] [US3] Create budget_exceeded.toml subscriber config in backend/src/services/ans/subscribers/budget_exceeded.toml
+- [x] T045 [P] [US3] Create budget_exceeded.toon.j2 template in backend/src/services/ans/templates/budget_exceeded.toon.j2
 
 ### Event Emission for US3
 
-- [ ] T046 [US3] Emit budget.token.warning event when 80% threshold crossed in oracle_agent.py at line ~491-499 in backend/src/services/oracle_agent.py
-- [ ] T047 [US3] Emit budget.iteration.warning event when 70% threshold crossed in backend/src/services/oracle_agent.py
-- [ ] T048 [US3] Emit budget.token.exceeded and budget.iteration.exceeded events on limit hit in backend/src/services/oracle_agent.py
+- [x] T046 [US3] Emit budget.token.warning event when 80% threshold crossed in oracle_agent.py at line ~491-499 in backend/src/services/oracle_agent.py
+- [x] T047 [US3] Emit budget.iteration.warning event when 70% threshold crossed in backend/src/services/oracle_agent.py
+- [x] T048 [US3] Emit budget.token.exceeded and budget.iteration.exceeded events on limit hit in backend/src/services/oracle_agent.py
 
 ### Injection Point for US3
 
-- [ ] T049 [US3] Inject notifications at "turn_start" point for budget warnings in backend/src/services/oracle_agent.py
-- [ ] T050 [US3] Inject notifications at "immediate" point for budget exceeded (critical) in backend/src/services/oracle_agent.py
+- [x] T049 [US3] Inject notifications at "turn_start" point for budget warnings in backend/src/services/oracle_agent.py
+- [x] T050 [US3] Inject notifications at "immediate" point for budget exceeded (critical) in backend/src/services/oracle_agent.py
 
 **Checkpoint**: Budget warnings appear before agent continues, exceeded notifications immediate
 
@@ -170,13 +170,13 @@
 
 ### Subscriber Configuration for US4
 
-- [ ] T051 [P] [US4] Create loop_detected.toml subscriber config in backend/src/services/ans/subscribers/loop_detected.toml
-- [ ] T052 [P] [US4] Create loop_detected.toon.j2 template in backend/src/services/ans/templates/loop_detected.toon.j2
+- [x] T051 [P] [US4] Create loop_detected.toml subscriber config in backend/src/services/ans/subscribers/loop_detected.toml
+- [x] T052 [P] [US4] Create loop_detected.toon.j2 template in backend/src/services/ans/templates/loop_detected.toon.j2
 
 ### Event Emission for US4
 
-- [ ] T053 [US4] Emit agent.loop.detected event when loop detection triggers in oracle_agent.py in backend/src/services/oracle_agent.py
-- [ ] T054 [US4] Include pattern description and repetition count in event payload in backend/src/services/oracle_agent.py
+- [x] T053 [US4] Emit agent.loop.detected event when loop detection triggers in oracle_agent.py in backend/src/services/oracle_agent.py
+- [x] T054 [US4] Include pattern description and repetition count in event payload in backend/src/services/oracle_agent.py
 
 **Checkpoint**: Loop detection notifications working
 
@@ -190,29 +190,29 @@
 
 ### Backend API for US5
 
-- [ ] T055 [P] [US5] Create NotificationSettings Pydantic model in backend/src/models/notifications.py
-- [ ] T056 [P] [US5] Create SubscriberInfo response model in backend/src/models/notifications.py
-- [ ] T057 [US5] Implement GET /api/notifications/subscribers endpoint in backend/src/api/routes/notifications.py
-- [ ] T058 [US5] Implement POST /api/notifications/subscribers/{id}/toggle endpoint in backend/src/api/routes/notifications.py
-- [ ] T059 [US5] Implement GET /api/settings/notifications endpoint in backend/src/api/routes/models.py
-- [ ] T060 [US5] Implement PUT /api/settings/notifications endpoint in backend/src/api/routes/models.py
-- [ ] T061 [US5] Add disabled_subscribers to UserSettingsService in backend/src/services/user_settings.py
+- [x] T055 [P] [US5] Create NotificationSettings Pydantic model in backend/src/models/notifications.py
+- [x] T056 [P] [US5] Create SubscriberInfo response model in backend/src/models/notifications.py
+- [x] T057 [US5] Implement GET /api/notifications/subscribers endpoint in backend/src/api/routes/notifications.py
+- [x] T058 [US5] Implement POST /api/notifications/subscribers/{id}/toggle endpoint in backend/src/api/routes/notifications.py
+- [x] T059 [US5] Implement GET /api/settings/notifications endpoint in backend/src/api/routes/models.py
+- [x] T060 [US5] Implement PUT /api/settings/notifications endpoint in backend/src/api/routes/models.py
+- [x] T061 [US5] Add disabled_subscribers to UserSettingsService in backend/src/services/user_settings.py
 
 ### Frontend Types for US5
 
-- [ ] T062 [P] [US5] Create SubscriberInfo and NotificationSettings types in frontend/src/types/notifications.ts
-- [ ] T063 [P] [US5] Create notifications API client in frontend/src/services/notifications.ts
+- [x] T062 [P] [US5] Create SubscriberInfo and NotificationSettings types in frontend/src/types/notifications.ts
+- [x] T063 [P] [US5] Create notifications API client in frontend/src/services/notifications.ts
 
 ### Frontend Settings UI for US5
 
-- [ ] T064 [US5] Create NotificationSettings component with subscriber toggles in frontend/src/components/NotificationSettings.tsx
-- [ ] T065 [US5] Add Tabs wrapper to Settings.tsx with Account, Models, Context, Notifications tabs in frontend/src/pages/Settings.tsx
-- [ ] T066 [US5] Render NotificationSettings in Notifications tab in frontend/src/pages/Settings.tsx
-- [ ] T067 [US5] Display core subscribers as always-enabled with tooltip explanation in frontend/src/components/NotificationSettings.tsx
+- [x] T064 [US5] Create NotificationSettings component with subscriber toggles in frontend/src/components/NotificationSettings.tsx
+- [x] T065 [US5] Add Tabs wrapper to Settings.tsx with Account, Models, Context, Notifications tabs in frontend/src/pages/Settings.tsx
+- [x] T066 [US5] Render NotificationSettings in Notifications tab in frontend/src/pages/Settings.tsx
+- [x] T067 [US5] Display core subscribers as always-enabled with tooltip explanation in frontend/src/components/NotificationSettings.tsx
 
 ### Integration for US5
 
-- [ ] T068 [US5] Check disabled_subscribers before generating notification in accumulator in backend/src/services/ans/accumulator.py
+- [x] T068 [US5] Check disabled_subscribers before generating notification in accumulator in backend/src/services/ans/accumulator.py
 
 **Checkpoint**: Subscribers can be toggled on/off via Settings UI
 
@@ -226,16 +226,16 @@
 
 ### Discovery Implementation for US6
 
-- [ ] T069 [US6] Implement glob-based discovery of *.toml files in subscribers/ directory in backend/src/services/ans/subscriber.py
-- [ ] T070 [US6] Validate TOML against subscriber schema on load in backend/src/services/ans/subscriber.py
-- [ ] T071 [US6] Log warning and skip invalid config files in backend/src/services/ans/subscriber.py
-- [ ] T072 [US6] Verify Jinja2 template exists for each subscriber on load in backend/src/services/ans/subscriber.py
+- [x] T069 [US6] Implement glob-based discovery of *.toml files in subscribers/ directory in backend/src/services/ans/subscriber.py
+- [x] T070 [US6] Validate TOML against subscriber schema on load in backend/src/services/ans/subscriber.py
+- [x] T071 [US6] Log warning and skip invalid config files in backend/src/services/ans/subscriber.py
+- [x] T072 [US6] Verify Jinja2 template exists for each subscriber on load in backend/src/services/ans/subscriber.py
 
 ### Unit Tests for US6
 
-- [ ] T073 [US6] Test valid subscriber discovery in backend/tests/unit/test_ans_subscriber.py
-- [ ] T074 [US6] Test invalid subscriber handling (graceful skip) in backend/tests/unit/test_ans_subscriber.py
-- [ ] T075 [US6] Test missing template handling in backend/tests/unit/test_ans_subscriber.py
+- [x] T073 [US6] Test valid subscriber discovery in backend/tests/unit/test_ans_subscriber.py
+- [x] T074 [US6] Test invalid subscriber handling (graceful skip) in backend/tests/unit/test_ans_subscriber.py
+- [x] T075 [US6] Test missing template handling in backend/tests/unit/test_ans_subscriber.py
 
 **Checkpoint**: File-based subscriber discovery working
 
@@ -247,23 +247,23 @@
 
 ### Error Handling
 
-- [ ] T076 Implement template rendering fallback (generic error message) in backend/src/services/ans/toon_formatter.py
-- [ ] T077 Implement event queue overflow handling (drop oldest low-priority) in backend/src/services/ans/bus.py
-- [ ] T078 [P] Add TOON parsing error handling in UI (show raw content) in frontend/src/components/ChatMessage.tsx
+- [x] T076 Implement template rendering fallback (generic error message) in backend/src/services/ans/toon_formatter.py
+- [x] T077 Implement event queue overflow handling (drop oldest low-priority) in backend/src/services/ans/bus.py
+- [x] T078 [P] Add TOON parsing error handling in UI (show raw content) in frontend/src/components/ChatMessage.tsx
 
 ### Performance
 
-- [ ] T079 Add event processing timing logs for performance monitoring in backend/src/services/ans/accumulator.py
-- [ ] T080 Verify <100ms event processing goal in integration tests in backend/tests/unit/test_ans_integration.py
+- [x] T079 Add event processing timing logs for performance monitoring in backend/src/services/ans/accumulator.py
+- [x] T080 Verify <100ms event processing goal in integration tests in backend/tests/unit/test_ans_integration.py
 
 ### Documentation
 
-- [ ] T081 [P] Update CLAUDE.md with ANS technology additions
-- [ ] T082 [P] Validate quickstart.md instructions work end-to-end
+- [x] T081 [P] Update CLAUDE.md with ANS technology additions
+- [x] T082 [P] Validate quickstart.md instructions work end-to-end
 
 ### Collapsible UI (FR-026)
 
-- [ ] T083 Add collapse/expand toggle for verbose system notifications in frontend/src/components/ChatMessage.tsx
+- [x] T083 Add collapse/expand toggle for verbose system notifications in frontend/src/components/ChatMessage.tsx
 
 ---
 

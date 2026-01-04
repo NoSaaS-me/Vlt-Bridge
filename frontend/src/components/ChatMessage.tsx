@@ -5,6 +5,7 @@ import { User, Bot, FilePlus, Edit, RefreshCw, ChevronDown, ChevronUp, Brain, Fi
 import { SourceList } from './SourceList';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -39,11 +40,14 @@ export function ChatMessage({
   isStreaming = false,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
+  const isSystem = message.role === 'system';
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const [toolsExpanded, setToolsExpanded] = useState(true); // Default expanded to show progress
   const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(new Set());
   const [copiedToolId, setCopiedToolId] = useState<string | null>(null);
+  const [systemMessageExpanded, setSystemMessageExpanded] = useState(false);
+  const [toonParseError, setToonParseError] = useState(false);
 
   // Create markdown components for rendering with wikilink support
   const markdownComponents = useMemo(() => createWikilinkComponent(onSourceClick), [onSourceClick]);
@@ -62,6 +66,56 @@ export function ChatMessage({
   };
 
   const processedContent = useMemo(() => processWikilinks(message.content), [message.content]);
+
+  // Helper to determine if system message should be collapsed by default
+  // Threshold: >200 chars OR >3 lines
+  const isSystemMessageVerbose = useMemo(() => {
+    if (!isSystem || !message.content) return false;
+    const content = message.content;
+    const lineCount = content.split('\n').length;
+    return content.length > 200 || lineCount > 3;
+  }, [isSystem, message.content]);
+
+  // Parse TOON content safely with error handling
+  // TOON content may contain special formatting that could fail to parse
+  const parseToonContent = useCallback((content: string): { parsed: string; hasError: boolean } => {
+    try {
+      // Attempt to detect and validate TOON format markers
+      // TOON uses specific markers like [TITLE], [SUMMARY], etc.
+      // If content starts with TOON markers but is malformed, show raw
+      const toonMarkerPattern = /^\[(TITLE|SUMMARY|DETAILS|WARNING|ERROR|INFO)\]/i;
+
+      if (toonMarkerPattern.test(content.trim())) {
+        // Validate basic TOON structure - should have balanced brackets
+        const openBrackets = (content.match(/\[/g) || []).length;
+        const closeBrackets = (content.match(/\]/g) || []).length;
+
+        if (openBrackets !== closeBrackets) {
+          // Malformed TOON - show raw content
+          return { parsed: content, hasError: true };
+        }
+      }
+
+      // Content is valid or not TOON format - render normally
+      return { parsed: content, hasError: false };
+    } catch {
+      // Any parsing error - show raw content
+      return { parsed: content, hasError: true };
+    }
+  }, []);
+
+  // Process system message content with TOON error handling
+  const systemMessageResult = useMemo(() => {
+    if (!isSystem || !message.content) return { parsed: '', hasError: false };
+    return parseToonContent(message.content);
+  }, [isSystem, message.content, parseToonContent]);
+
+  // Update toonParseError state when content changes
+  useEffect(() => {
+    if (isSystem) {
+      setToonParseError(systemMessageResult.hasError);
+    }
+  }, [isSystem, systemMessageResult.hasError]);
 
   // Type guard to check if message is OracleMessage
   const isOracleMessage = (msg: ChatMessageType | OracleMessage): msg is OracleMessage => {
@@ -205,18 +259,25 @@ export function ChatMessage({
   }, [oracleMsg?.tool_calls]);
 
   return (
-    <div className={cn("flex gap-3 p-4", isUser ? "bg-transparent" : "bg-muted/30")}>
+    <div className={cn(
+      "flex gap-3 p-4",
+      isUser ? "bg-transparent" :
+      isSystem ? "bg-yellow-500/5 border-l-2 border-yellow-500/30" :
+      "bg-muted/30"
+    )}>
       {/* Avatar */}
       <div className={cn(
         "h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 mt-1",
-        isUser ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
+        isUser ? "bg-primary text-primary-foreground" :
+        isSystem ? "bg-yellow-500/20 text-yellow-700 dark:text-yellow-300 border border-yellow-500/30" :
+        "bg-secondary text-secondary-foreground"
       )}>
-        {isUser ? <User className="h-5 w-5" /> : <Bot className="h-5 w-5" />}
+        {isUser ? <User className="h-5 w-5" /> : isSystem ? <AlertCircle className="h-5 w-5" /> : <Bot className="h-5 w-5" />}
       </div>
 
       <div className="flex-1 space-y-3 overflow-hidden min-w-0">
         {/* ===== THINKING SECTION ===== */}
-        {!isUser && oracleMsg && hasThinking && showThinking && (
+        {!isUser && !isSystem && oracleMsg && hasThinking && showThinking && (
           <div className={cn(
             "border rounded-lg overflow-hidden transition-all duration-200",
             isThinkingActive
@@ -278,7 +339,7 @@ export function ChatMessage({
         )}
 
         {/* ===== TOOL CALLS SECTION ===== */}
-        {!isUser && hasToolCalls && (
+        {!isUser && !isSystem && hasToolCalls && (
           <div className="border border-border rounded-lg overflow-hidden bg-muted/10">
             <button
               onClick={() => setToolsExpanded(!toolsExpanded)}
@@ -404,37 +465,138 @@ export function ChatMessage({
         )}
 
         {/* ===== MAIN CONTENT ===== */}
-        <div className={cn(
-          "prose dark:prose-invert prose-sm max-w-none",
-          "prose-pre:bg-muted prose-pre:text-foreground",
-          "prose-code:text-primary prose-code:before:content-none prose-code:after:content-none",
-          "prose-p:my-2 prose-headings:my-3",
-          // LaTeX styling
-          "prose-math:text-foreground",
-          message.is_error && "text-destructive"
-        )}>
-          {processedContent ? (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath]}
-              rehypePlugins={[rehypeKatex]}
-              components={markdownComponents}
-              urlTransform={(url) => url} // Allow all protocols including wikilink:
-            >
-              {processedContent}
-            </ReactMarkdown>
-          ) : (
-            isUser ? null : (
-              isStreaming ? (
-                <span className="inline-block w-2 h-4 bg-primary animate-pulse" />
-              ) : (
-                <span className="text-muted-foreground">...</span>
+        {isSystem && isSystemMessageVerbose ? (
+          /* Collapsible system message for verbose content (>200 chars or >3 lines) */
+          <Collapsible open={systemMessageExpanded} onOpenChange={setSystemMessageExpanded}>
+            <div className={cn(
+              "prose dark:prose-invert prose-sm max-w-none",
+              "prose-pre:bg-muted prose-pre:text-foreground",
+              "prose-code:text-primary prose-code:before:content-none prose-code:after:content-none",
+              "prose-p:my-2 prose-headings:my-3",
+              "prose-math:text-foreground",
+              message.is_error && "text-destructive"
+            )}>
+              {/* Show TOON parse error warning if applicable */}
+              {toonParseError && (
+                <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 mb-2 px-2 py-1 bg-amber-500/10 border border-amber-500/20 rounded">
+                  <AlertCircle className="h-3 w-3 flex-shrink-0" />
+                  <span>Notification format error - showing raw content</span>
+                </div>
+              )}
+              {/* Preview: first line or first 100 chars when collapsed */}
+              {!systemMessageExpanded && message.content && (
+                <p className="text-sm text-muted-foreground truncate">
+                  {message.content.split('\n')[0].slice(0, 100)}
+                  {(message.content.split('\n')[0].length > 100 || message.content.split('\n').length > 1) && '...'}
+                </p>
+              )}
+              <CollapsibleContent>
+                {toonParseError ? (
+                  /* Show raw content on TOON parse error */
+                  <pre className="text-sm whitespace-pre-wrap font-mono bg-muted/50 p-2 rounded border border-border overflow-x-auto">
+                    {message.content}
+                  </pre>
+                ) : (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={markdownComponents}
+                    urlTransform={(url) => url}
+                  >
+                    {processedContent}
+                  </ReactMarkdown>
+                )}
+              </CollapsibleContent>
+            </div>
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground mt-1"
+              >
+                {systemMessageExpanded ? (
+                  <>
+                    <ChevronUp className="h-3 w-3 mr-1" />
+                    Show less
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-3 w-3 mr-1" />
+                    Show more
+                  </>
+                )}
+              </Button>
+            </CollapsibleTrigger>
+          </Collapsible>
+        ) : isSystem ? (
+          /* Non-verbose system message with TOON error handling */
+          <div className={cn(
+            "prose dark:prose-invert prose-sm max-w-none",
+            "prose-pre:bg-muted prose-pre:text-foreground",
+            "prose-code:text-primary prose-code:before:content-none prose-code:after:content-none",
+            "prose-p:my-2 prose-headings:my-3",
+            "prose-math:text-foreground",
+            message.is_error && "text-destructive"
+          )}>
+            {/* Show TOON parse error warning if applicable */}
+            {toonParseError && (
+              <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 mb-2 px-2 py-1 bg-amber-500/10 border border-amber-500/20 rounded">
+                <AlertCircle className="h-3 w-3 flex-shrink-0" />
+                <span>Notification format error - showing raw content</span>
+              </div>
+            )}
+            {toonParseError ? (
+              /* Show raw content on TOON parse error */
+              <pre className="text-sm whitespace-pre-wrap font-mono bg-muted/50 p-2 rounded border border-border overflow-x-auto">
+                {message.content}
+              </pre>
+            ) : processedContent ? (
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex]}
+                components={markdownComponents}
+                urlTransform={(url) => url}
+              >
+                {processedContent}
+              </ReactMarkdown>
+            ) : (
+              <span className="text-muted-foreground">...</span>
+            )}
+          </div>
+        ) : (
+          /* Regular (non-system) message content */
+          <div className={cn(
+            "prose dark:prose-invert prose-sm max-w-none",
+            "prose-pre:bg-muted prose-pre:text-foreground",
+            "prose-code:text-primary prose-code:before:content-none prose-code:after:content-none",
+            "prose-p:my-2 prose-headings:my-3",
+            // LaTeX styling
+            "prose-math:text-foreground",
+            message.is_error && "text-destructive"
+          )}>
+            {processedContent ? (
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex]}
+                components={markdownComponents}
+                urlTransform={(url) => url} // Allow all protocols including wikilink:
+              >
+                {processedContent}
+              </ReactMarkdown>
+            ) : (
+              isUser ? null : (
+                isStreaming ? (
+                  <span className="inline-block w-2 h-4 bg-primary animate-pulse" />
+                ) : (
+                  <span className="text-muted-foreground">...</span>
+                )
               )
-            )
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* ===== MODEL BADGE ===== */}
-        {!isUser && oracleMsg?.model && (
+        {!isUser && !isSystem && oracleMsg?.model && (
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="text-xs font-normal">
               {oracleMsg.model}
@@ -443,7 +605,7 @@ export function ChatMessage({
         )}
 
         {/* ===== NOTES WRITTEN (RAG legacy) ===== */}
-        {!isUser && 'notes_written' in message && message.notes_written && message.notes_written.length > 0 && (
+        {!isUser && !isSystem && 'notes_written' in message && message.notes_written && message.notes_written.length > 0 && (
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2">
               {message.notes_written.map((note, i) => (
@@ -473,7 +635,7 @@ export function ChatMessage({
         )}
 
         {/* ===== ORACLE SOURCES ===== */}
-        {!isUser && showSources && oracleMsg?.sources && oracleMsg.sources.length > 0 && (
+        {!isUser && !isSystem && showSources && oracleMsg?.sources && oracleMsg.sources.length > 0 && (
           <div className="space-y-2">
             <div className="text-xs font-medium text-muted-foreground">Sources</div>
             <div className="flex flex-wrap gap-2">
@@ -503,7 +665,7 @@ export function ChatMessage({
         )}
 
         {/* ===== LEGACY RAG SOURCES ===== */}
-        {!isUser && showSources && !oracleMsg && message.sources && (
+        {!isUser && !isSystem && showSources && !oracleMsg && message.sources && (
           <SourceList sources={message.sources as import('@/types/rag').SourceReference[]} onSourceClick={onSourceClick} />
         )}
       </div>

@@ -16,7 +16,9 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
+import { NotificationSettings as NotificationSettingsComponent } from '@/components/NotificationSettings';
 import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
 import { getIndexHealth, rebuildIndex, type RebuildResponse } from '@/services/api';
 import { getModels, getModelSettings, saveModelSettings } from '@/services/models';
@@ -390,6 +392,15 @@ export function Settings() {
           </Alert>
         )}
 
+        <Tabs defaultValue="account" className="w-full">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="account">Account</TabsTrigger>
+            <TabsTrigger value="models">Models</TabsTrigger>
+            <TabsTrigger value="context">Context</TabsTrigger>
+            <TabsTrigger value="notifications">Notifications</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="account" className="space-y-6 mt-6">
         {/* Profile */}
         {user ? (
           <Card>
@@ -686,7 +697,9 @@ export function Settings() {
             description="CodeRAG indexing status for code search"
           />
         )}
+          </TabsContent>
 
+          <TabsContent value="models" className="space-y-6 mt-6">
         {/* AI Models */}
         {modelSettings ? (
           <Card>
@@ -953,7 +966,9 @@ export function Settings() {
             description="Configure AI models for Oracle and Subagent operations"
           />
         )}
+          </TabsContent>
 
+          <TabsContent value="context" className="space-y-6 mt-6">
         {/* Context Settings */}
         {contextSettings ? (
           <Card>
@@ -1014,9 +1029,16 @@ export function Settings() {
             description="Configure Oracle conversation tree behavior"
           />
         )}
+          </TabsContent>
 
-        {/* System Logs */}
-        <SystemLogs />
+          <TabsContent value="notifications" className="space-y-6 mt-6">
+            {/* Notification Subscribers */}
+            <NotificationSettingsComponent isDemoMode={isDemoMode} />
+
+            {/* System Logs */}
+            <SystemLogs />
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );

@@ -1,0 +1,22 @@
+[subscriber]
+id = "loop_detected"
+name = "Loop Detection Notifications"
+description = "Notifies agent when stuck in repetitive behavior patterns"
+version = "1.0.0"
+
+[events]
+types = ["agent.loop.detected"]
+severity_filter = "warning"
+
+[batching]
+# No batching - immediate notification for loops
+window_ms = 0
+max_size = 1
+dedupe_key = "type:payload.pattern"
+dedupe_window_ms = 30000
+
+[output]
+priority = "critical"
+inject_at = "immediate"
+template = "loop_detected.toon.j2"
+core = true

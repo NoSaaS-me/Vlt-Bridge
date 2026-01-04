@@ -1,0 +1,10 @@
+{% if events|length == 1 %}
+{% set e = events[0] %}
+tool_fail: {{ e.payload.tool_name }} {{ e.payload.error_type }}{% if e.payload.error_message %} - {{ e.payload.error_message }}{% endif %}
+
+{% else %}
+tool_fails[{{ events|length }}]{tool,error,message}:
+{% for e in events %}
+  {{ e.payload.tool_name }},{{ e.payload.error_type }},{{ e.payload.error_message | default("") }}
+{% endfor %}
+{% endif %}

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from ..models.settings import ModelSettings, ModelProvider
 from .database import DatabaseService
@@ -219,6 +220,100 @@ class UserSettingsService:
             subagent_model=model,
             subagent_provider=provider,
         )
+
+    def get_disabled_subscribers(self, user_id: str) -> List[str]:
+        """
+        Get user's disabled notification subscribers.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            List of disabled subscriber IDs
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT disabled_subscribers_json FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row and row["disabled_subscribers_json"]:
+                try:
+                    return json.loads(row["disabled_subscribers_json"])
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON in disabled_subscribers_json for user {user_id}")
+                    return []
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get disabled subscribers for user {user_id}: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def set_disabled_subscribers(self, user_id: str, disabled_subscribers: List[str]) -> None:
+        """
+        Set user's disabled notification subscribers.
+
+        Args:
+            user_id: User identifier
+            disabled_subscribers: List of subscriber IDs to disable
+        """
+        conn = self.db.connect()
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            disabled_json = json.dumps(disabled_subscribers)
+
+            with conn:
+                # First check if user exists
+                cursor = conn.execute(
+                    "SELECT user_id FROM user_settings WHERE user_id = ?",
+                    (user_id,)
+                )
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    conn.execute(
+                        """
+                        UPDATE user_settings
+                        SET disabled_subscribers_json = ?, updated = ?
+                        WHERE user_id = ?
+                        """,
+                        (disabled_json, now, user_id)
+                    )
+                else:
+                    # Create new user settings row with defaults
+                    conn.execute(
+                        """
+                        INSERT INTO user_settings (
+                            user_id, oracle_model, oracle_provider,
+                            subagent_model, subagent_provider, thinking_enabled,
+                            chat_center_mode, librarian_timeout, max_context_nodes,
+                            disabled_subscribers_json, created, updated
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            "gemini-2.0-flash-exp",  # default oracle_model
+                            "google",  # default oracle_provider
+                            "gemini-2.0-flash-exp",  # default subagent_model
+                            "google",  # default subagent_provider
+                            0,  # default thinking_enabled
+                            0,  # default chat_center_mode
+                            1200,  # default librarian_timeout
+                            30,  # default max_context_nodes
+                            disabled_json,
+                            now,
+                            now
+                        )
+                    )
+
+            logger.info(f"Updated disabled subscribers for user {user_id}: {disabled_subscribers}")
+        except Exception as e:
+            logger.error(f"Failed to set disabled subscribers for user {user_id}: {e}")
+            raise
+        finally:
+            conn.close()
 
     def update_settings(
         self,

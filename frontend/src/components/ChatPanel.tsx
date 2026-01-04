@@ -63,6 +63,9 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
   const [currentContextId, setCurrentContextId] = useState<string | null>(null);
   const [isLoadingTrees, setIsLoadingTrees] = useState(false);
   const [userHasScrolled, setUserHasScrolled] = useState(false);
+  // Context window tracking
+  const [contextTokens, setContextTokens] = useState<number>(0);
+  const [maxContextTokens, setMaxContextTokens] = useState<number>(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -668,6 +671,15 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
                 );
                 return prev; // No state change
               }
+            } else if (chunk.type === 'context_update') {
+              // Update context window tracking (outside of message state)
+              if (chunk.context_tokens !== undefined) {
+                setContextTokens(chunk.context_tokens);
+              }
+              if (chunk.max_context_tokens !== undefined) {
+                setMaxContextTokens(chunk.max_context_tokens);
+              }
+              return prev; // No message state change needed
             } else if (chunk.type === 'done') {
               // Mark all running tools as completed
               const newToolCalls = lastMsg.tool_calls?.map(tc =>
@@ -684,12 +696,30 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
                 setCurrentContextId(chunk.context_id);
                 console.debug(`Updated context_id to ${chunk.context_id}`);
               }
+              // Update context tokens from done chunk as well
+              if (chunk.context_tokens !== undefined) {
+                setContextTokens(chunk.context_tokens);
+              }
+              if (chunk.max_context_tokens !== undefined) {
+                setMaxContextTokens(chunk.max_context_tokens);
+              }
             } else if (chunk.type === 'error') {
               updatedMsg = {
                 ...lastMsg,
                 is_error: true,
                 content: chunk.error || 'Unknown error occurred',
               };
+            } else if (chunk.type === 'system') {
+              // Create a system message when we receive a system notification
+              // This is handled outside the message update loop
+              const systemMsg: OracleMessageWithId = {
+                _id: `sys_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+                role: 'system',
+                content: chunk.content || '',
+                timestamp: new Date().toISOString(),
+              };
+              // Insert system message before the current assistant message
+              return [...prev.slice(0, lastIndex), systemMsg, lastMsg];
             } else {
               // Unknown chunk type - no update
               return prev;
@@ -943,9 +973,26 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
           <span>
             Type <kbd className="px-1 py-0.5 bg-muted rounded">/</kbd> for commands
           </span>
-          {messages.length > 0 && (
-            <span>{messages.length} messages</span>
-          )}
+          <div className="flex items-center gap-3">
+            {/* Context window percentage indicator */}
+            {maxContextTokens > 0 && (
+              <span
+                className={`font-medium ${
+                  contextTokens / maxContextTokens > 0.8
+                    ? 'text-red-500'
+                    : contextTokens / maxContextTokens > 0.5
+                    ? 'text-yellow-500'
+                    : 'text-green-500'
+                }`}
+                title={`${contextTokens.toLocaleString()} / ${maxContextTokens.toLocaleString()} tokens`}
+              >
+                {Math.round((contextTokens / maxContextTokens) * 100)}% context
+              </span>
+            )}
+            {messages.length > 0 && (
+              <span>{messages.length} messages</span>
+            )}
+          </div>
         </div>
       </div>
     </div>

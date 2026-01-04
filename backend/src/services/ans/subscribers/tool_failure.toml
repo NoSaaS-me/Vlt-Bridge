@@ -1,0 +1,21 @@
+[subscriber]
+id = "tool_failure"
+name = "Tool Failure Notifications"
+description = "Notifies agent when tool calls fail or timeout"
+version = "1.0.0"
+
+[events]
+types = ["tool.call.failure", "tool.call.timeout"]
+severity_filter = "warning"
+
+[batching]
+window_ms = 2000
+max_size = 10
+dedupe_key = "type:payload.tool_name"
+dedupe_window_ms = 5000
+
+[output]
+priority = "high"
+inject_at = "after_tool"
+template = "tool_failure.toon.j2"
+core = true

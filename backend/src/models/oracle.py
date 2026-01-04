@@ -1,8 +1,22 @@
 """Pydantic models for Oracle feature."""
 
+from enum import Enum
 from typing import List, Optional, Literal, Any, Dict
 from datetime import datetime
 from pydantic import BaseModel, Field
+
+
+class StreamEventType(str, Enum):
+    """SSE stream event types for Oracle responses."""
+    STATUS = "status"
+    THINKING = "thinking"
+    CONTENT = "content"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    SOURCES = "sources"
+    ERROR = "error"
+    DONE = "done"
+    SYSTEM = "system"
 
 
 class SourceReference(BaseModel):
@@ -33,7 +47,7 @@ class OracleRequest(BaseModel):
 
 class OracleStreamChunk(BaseModel):
     """Server-sent event chunk for streaming responses."""
-    type: Literal["thinking", "content", "source", "tool_call", "tool_result", "done", "error"] = Field(
+    type: Literal["thinking", "content", "source", "tool_call", "tool_result", "done", "error", "system", "context_update"] = Field(
         ..., description="Chunk type"
     )
     content: Optional[str] = Field(None, description="Text content for thinking/content chunks")
@@ -46,6 +60,9 @@ class OracleStreamChunk(BaseModel):
     context_id: Optional[str] = Field(None, description="Context ID for conversation persistence (done chunk)")
     error: Optional[str] = Field(None, description="Error message (error chunk only)")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    # Context window tracking fields (for context_update and done chunks)
+    context_tokens: Optional[int] = Field(None, description="Current tokens used in context window")
+    max_context_tokens: Optional[int] = Field(None, description="Maximum context window size for the model")
 
 
 class OracleResponse(BaseModel):

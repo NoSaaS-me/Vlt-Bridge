@@ -438,6 +438,110 @@ The app can be embedded in ChatGPT as an iFrame:
 - MCP endpoint remains accessible for other AI agents simultaneously
 - Entry point: `frontend/src/widget.tsx`
 
+## Agent Notification System (ANS)
+
+The ANS provides real-time notifications to AI agents during task execution, enabling self-awareness about tool failures, budget limits, and operational issues.
+
+### Architecture Overview
+
+```
+Event Source (oracle_agent.py, tool_executor.py)
+    │
+    ▼ emit(Event)
+EventBus (pub/sub)
+    │
+    ▼ notify handlers
+SubscriberLoader → Subscriber configs (*.toml)
+    │
+    ▼ filter + batch
+NotificationAccumulator
+    │
+    ▼ render with template
+ToonFormatter (Jinja2 + python-toon)
+    │
+    ▼ yield OracleStreamChunk(type="system")
+SSE Stream → Frontend ChatPanel
+```
+
+### Components
+
+**EventBus** (`backend/src/services/ans/bus.py`):
+- Pub/sub pattern for decoupled event emission
+- Supports wildcard subscriptions (e.g., `tool.*`)
+- Thread-safe with overflow handling
+
+**Subscribers** (`backend/src/services/ans/subscribers/*.toml`):
+- TOML-based configuration for each notification type
+- Define event types, severity filters, batching windows
+- Reference Jinja2 templates for formatting
+
+Example subscriber config:
+```toml
+[subscriber]
+id = "tool_failure"
+name = "Tool Failure Notifications"
+
+[events]
+types = ["tool.call.failure", "tool.call.timeout"]
+severity_filter = "warning"
+
+[output]
+priority = "high"
+inject_at = "after_tool"
+template = "tool_failure.toon.j2"
+core = true  # Cannot be disabled by user
+```
+
+**Templates** (`backend/src/services/ans/templates/*.toon.j2`):
+- Jinja2 templates producing TOON (Token-Optimized Object Notation) output
+- Compact format optimized for LLM context windows
+- Supports batching multiple events into single notification
+
+**Notification Injection Points**:
+- `turn_start`: Injected before agent receives next prompt (budget warnings)
+- `after_tool`: Injected after tool execution (tool failures)
+- `immediate`: Injected as soon as event occurs (critical alerts)
+
+### Frontend Display
+
+System messages appear in ChatPanel with distinct styling:
+- Yellow/amber left border and background
+- AlertCircle icon with "System" attribution
+- Rendered inline with agent/user messages
+- Persisted in context_nodes.system_messages_json
+
+### Available Subscribers
+
+| Subscriber | Events | Priority | Inject At |
+|------------|--------|----------|-----------|
+| tool_failure | tool.call.failure, tool.call.timeout | high | after_tool |
+| budget_warning | budget.token.warning, budget.iteration.warning | normal | turn_start |
+| budget_exceeded | budget.token.exceeded, budget.iteration.exceeded | critical | immediate |
+| loop_detected | agent.loop.detected | high | immediate |
+
+### Extending ANS
+
+1. Create `backend/src/services/ans/subscribers/my_subscriber.toml`
+2. Create `backend/src/services/ans/templates/my_subscriber.toon.j2`
+3. Emit events from your service code:
+   ```python
+   # Within backend/src/services/, use relative imports:
+   from .ans.bus import get_event_bus
+   from .ans.event import Event, Severity
+
+   bus = get_event_bus()
+   bus.emit(Event(
+       type="my.custom.event",
+       source="my_service",
+       severity=Severity.INFO,
+       payload={"message": "Something happened"}
+   ))
+   ```
+
+### User Settings
+
+Users can toggle non-core subscribers via Settings > Notifications tab. Core subscribers (marked `core = true`) cannot be disabled. Settings stored in `user_settings.disabled_subscribers_json`.
+
 ## Recent Changes
 - 013-agent-notification-system: Added Python 3.11+ (backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, python-toon, Jinja2 (backend); React 18+, shadcn/ui (frontend)
 - 011-coderag-project-init: Added Python 3.11+ (CLI, backend), TypeScript 5.x (frontend)

@@ -1,0 +1,9 @@
+{% if events|length == 1 %}
+{% set e = events[0] %}
+budget_warn: {{ e.payload.budget_type }} at {{ e.payload.percent }}% - {{ e.payload.message }}
+{% else %}
+budget_warns[{{ events|length }}]{type,percent,message}:
+{% for e in events %}
+  {{ e.payload.budget_type }},{{ e.payload.percent }}%,{{ e.payload.message | default("") }}
+{% endfor %}
+{% endif %}

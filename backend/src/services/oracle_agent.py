@@ -23,7 +23,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
 
-from ..models.oracle import OracleStreamChunk, SourceReference
+from ..models.oracle import OracleStreamChunk, SourceReference, StreamEventType
+from ..models.settings import ModelInfo
 from ..models.oracle_context import (
     ContextStatus,
     ExchangeRole,
@@ -35,6 +36,13 @@ from ..models.oracle_context import (
 from .oracle_context_service import OracleContextService, get_context_service
 from .context_tree_service import ContextTreeService, get_context_tree_service
 from .tool_parsers import ToolCallParserChain
+
+# ANS imports for event emission
+from .ans.bus import get_event_bus
+from .ans.event import Event, EventType, Severity
+from .ans.accumulator import NotificationAccumulator
+from .ans.subscriber import SubscriberLoader
+from .ans.toon_formatter import get_toon_formatter
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +81,159 @@ def _get_prompt_loader():
     return _prompt_loader
 
 
+# Default context window sizes for common models (fallback when API doesn't provide)
+DEFAULT_MODEL_CONTEXT_SIZES = {
+    # DeepSeek models
+    "deepseek/deepseek-chat": 64000,
+    "deepseek/deepseek-coder": 64000,
+    "deepseek/deepseek-v3": 64000,
+    "deepseek/deepseek-r1": 64000,
+    # Anthropic models
+    "anthropic/claude-3-opus": 200000,
+    "anthropic/claude-3-sonnet": 200000,
+    "anthropic/claude-3-haiku": 200000,
+    "anthropic/claude-sonnet-4": 200000,
+    "anthropic/claude-3.5-sonnet": 200000,
+    "anthropic/claude-3.7-sonnet": 200000,
+    # Google models
+    "gemini-2.0-flash-exp": 1000000,
+    "gemini-1.5-pro": 2000000,
+    "gemini-1.5-flash": 1000000,
+    "google/gemini-pro": 128000,
+    "google/gemini-flash-1.5": 1000000,
+    # OpenAI models
+    "openai/gpt-4-turbo": 128000,
+    "openai/gpt-4": 8192,
+    "openai/gpt-3.5-turbo": 16384,
+    "openai/o1": 200000,
+    "openai/o1-mini": 128000,
+    # Meta Llama models
+    "meta-llama/llama-3-70b": 8192,
+    "meta-llama/llama-3.1-70b": 131072,
+    "meta-llama/llama-3.3-70b": 131072,
+    # Mistral models
+    "mistralai/mistral-large": 128000,
+    "mistralai/mixtral-8x7b": 32000,
+    # Qwen models
+    "qwen/qwen-2.5-72b": 131072,
+}
+
+# Default fallback for unknown models
+DEFAULT_CONTEXT_SIZE = 64000
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate token count for a string.
+
+    Uses a simple heuristic of ~4 characters per token for English text.
+    This is reasonably accurate for most LLM tokenizers.
+
+    Args:
+        text: The text to estimate tokens for
+
+    Returns:
+        Estimated token count
+    """
+    if not text:
+        return 0
+    # Average ~4 characters per token for English
+    # Adjust slightly for code/JSON which tends to have more tokens per char
+    return max(1, len(text) // 4)
+
+
+def estimate_message_tokens(message: Dict[str, Any]) -> int:
+    """Estimate tokens for a conversation message.
+
+    Accounts for message structure overhead (role, separators, etc.)
+
+    Args:
+        message: A conversation message dict with 'role' and 'content'
+
+    Returns:
+        Estimated token count including overhead
+    """
+    content = message.get("content") or ""
+    role = message.get("role", "")
+
+    # Base content tokens
+    tokens = estimate_tokens(content)
+
+    # Add overhead for message structure (~4 tokens for role + formatting)
+    tokens += 4
+
+    # Tool calls add significant overhead
+    if "tool_calls" in message and message["tool_calls"]:
+        for tc in message["tool_calls"]:
+            func = tc.get("function", {})
+            tokens += estimate_tokens(func.get("name", ""))
+            tokens += estimate_tokens(func.get("arguments", ""))
+            tokens += 10  # Overhead for tool call structure
+
+    return tokens
+
+
+def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
+    """Estimate total tokens for a list of conversation messages.
+
+    Args:
+        messages: List of conversation messages
+
+    Returns:
+        Total estimated token count
+    """
+    total = 0
+    for msg in messages:
+        total += estimate_message_tokens(msg)
+    # Add conversation overhead (beginning/end markers, etc.)
+    total += 3
+    return total
+
+
+def get_model_context_size(model_id: str) -> int:
+    """Get the context window size for a model.
+
+    First checks the default sizes dict, then falls back to a reasonable default.
+
+    Args:
+        model_id: The model identifier (e.g., 'deepseek/deepseek-chat')
+
+    Returns:
+        Context window size in tokens
+    """
+    # Try exact match first
+    if model_id in DEFAULT_MODEL_CONTEXT_SIZES:
+        return DEFAULT_MODEL_CONTEXT_SIZES[model_id]
+
+    # Try matching base model (without :free, :thinking suffixes)
+    base_model = model_id.split(":")[0]
+    if base_model in DEFAULT_MODEL_CONTEXT_SIZES:
+        return DEFAULT_MODEL_CONTEXT_SIZES[base_model]
+
+    # Try partial match (for models like 'deepseek/deepseek-chat:free')
+    for key, size in DEFAULT_MODEL_CONTEXT_SIZES.items():
+        if key in model_id or model_id.startswith(key):
+            return size
+
+    # Check for model family patterns
+    model_lower = model_id.lower()
+    if "claude" in model_lower:
+        return 200000
+    elif "gemini" in model_lower:
+        return 1000000
+    elif "deepseek" in model_lower:
+        return 64000
+    elif "gpt-4" in model_lower:
+        return 128000
+    elif "llama" in model_lower:
+        return 131072
+    elif "mistral" in model_lower:
+        return 128000
+    elif "qwen" in model_lower:
+        return 131072
+
+    return DEFAULT_CONTEXT_SIZE
+
+
 def _parse_xml_tool_calls(content: str) -> Tuple[List[Dict[str, Any]], str]:
     """Parse XML-style function calls from content.
 
@@ -97,6 +258,84 @@ def _parse_xml_tool_calls(content: str) -> Tuple[List[Dict[str, Any]], str]:
     """
     parser_chain = ToolCallParserChain()
     return parser_chain.parse(content)
+
+
+# Patterns that indicate tool call syntax starting
+# Used by streaming to detect when to stop yielding content
+_TOOL_CALL_PREFIXES = (
+    "<function_calls",
+    "<invoke",
+    "<｜DSML｜",
+    "ALERT:",  # Common model prefix before tool calls
+)
+
+# Pattern for inline tool calls like: tool_name{"arg": "value"}
+# or tool_name{json...}
+_INLINE_TOOL_CALL_PATTERN = re.compile(
+    r'^([a-z_][a-z0-9_]*)\s*\{',
+    re.IGNORECASE
+)
+
+def _is_tool_call_content(content: str) -> bool:
+    """Check if content looks like it contains tool call syntax.
+
+    This is used during streaming to detect when the model is outputting
+    tool calls as plain text instead of using proper function calling.
+
+    Args:
+        content: The accumulated content buffer
+
+    Returns:
+        True if content appears to contain tool call syntax
+    """
+    # Check for XML-style prefixes
+    stripped = content.strip()
+    for prefix in _TOOL_CALL_PREFIXES:
+        if stripped.startswith(prefix):
+            return True
+
+    # Check for inline tool calls (tool_name{json})
+    if _INLINE_TOOL_CALL_PATTERN.match(stripped):
+        return True
+
+    return False
+
+
+def _extract_safe_content(content: str) -> Tuple[str, str]:
+    """Extract content that is safe to show to users, separating tool call syntax.
+
+    Some models output a mix of readable content and tool call syntax.
+    This function separates them so we can show readable content while
+    still parsing and executing tool calls.
+
+    Args:
+        content: The accumulated content buffer
+
+    Returns:
+        Tuple of (safe_content, tool_call_content) where:
+        - safe_content: Content that should be shown to the user
+        - tool_call_content: Content that contains tool call syntax
+    """
+    # Check for common patterns where content precedes tool calls
+    patterns_to_split = [
+        "\n<function_calls",
+        "\n<invoke",
+        "\n<｜DSML｜",
+        "\n\nALERT:",
+        "\n\n<function_calls",
+        "\n\n<invoke",
+    ]
+
+    for pattern in patterns_to_split:
+        if pattern in content:
+            idx = content.index(pattern)
+            return content[:idx].strip(), content[idx:].strip()
+
+    # Check if the entire content is tool call syntax
+    if _is_tool_call_content(content):
+        return "", content
+
+    return content, ""
 
 
 class OracleAgentError(Exception):
@@ -166,6 +405,7 @@ class OracleAgent:
         self._context: Optional[OracleContext] = None
         self._collected_sources: List[SourceReference] = []
         self._collected_tool_calls: List[ToolCall] = []
+        self._collected_system_messages: List[str] = []
         self._context_service = context_service or get_context_service()
         self._tree_service = tree_service or get_context_tree_service()
 
@@ -176,6 +416,39 @@ class OracleAgent:
         # Cancellation support
         self._cancelled = False
         self._active_tasks: List[asyncio.Task] = []
+
+        # Loop detection tracking
+        self._recent_tool_patterns: List[str] = []  # Track recent tool call patterns
+        self._loop_detection_window = 6  # Number of recent patterns to track
+        self._loop_threshold = 3  # Number of repetitions to trigger loop detection
+        self._loop_already_warned = False  # Prevent repeated warnings for same loop
+
+        # ANS (Agent Notification System) initialization
+        self._event_bus = get_event_bus()
+        self._accumulator = NotificationAccumulator()
+        self._toon_formatter = get_toon_formatter()
+        self._subscriber_loader = SubscriberLoader()
+
+        # Load and register subscribers
+        subscribers = self._subscriber_loader.load_all()
+        self._accumulator.register_subscribers(list(subscribers.values()))
+
+        # Budget tracking state (reset per query)
+        self._iteration_warning_emitted = False
+        self._iteration_exceeded_emitted = False
+        self._token_warning_emitted = False
+        self._token_exceeded_emitted = False
+        self._total_tokens_used = 0
+        self._max_tokens_budget = 0  # Set per query
+
+        # Budget thresholds (configurable)
+        self.ITERATION_WARNING_THRESHOLD = 0.70  # 70% of MAX_TURNS
+        self.TOKEN_WARNING_THRESHOLD = 0.80  # 80% of max_tokens
+
+        # Context window tracking (for UI display)
+        self._context_tokens = 0  # Current tokens in context
+        self._max_context_tokens = DEFAULT_CONTEXT_SIZE  # Model's max context
+        self._last_context_update_tokens = 0  # Last sent update (avoid spam)
 
     def cancel(self) -> None:
         """Cancel all running operations.
@@ -198,6 +471,218 @@ class OracleAgent:
         """Reset cancellation state for reuse."""
         self._cancelled = False
         self._active_tasks.clear()
+
+    def _detect_loop(self, tool_calls: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Detect if the agent is stuck in a repetitive loop.
+
+        Tracks recent tool call patterns and detects when the same pattern
+        is repeated multiple times, indicating the agent may be stuck.
+
+        Args:
+            tool_calls: List of tool calls from current turn
+
+        Returns:
+            Dict with pattern info if loop detected, None otherwise.
+            Contains: pattern (str), count (int), suggestion (str)
+        """
+        if not tool_calls:
+            return None
+
+        # Create a pattern signature from tool names and key arguments
+        pattern_parts = []
+        for call in tool_calls:
+            function = call.get("function", {})
+            name = function.get("name", "unknown")
+            args_str = function.get("arguments", "{}")
+            try:
+                args = json.loads(args_str)
+                # Include key identifying arguments in pattern
+                key_args = []
+                for key in ["path", "query", "thread_id", "file_path"]:
+                    if key in args:
+                        key_args.append(f"{key}={args[key][:50] if isinstance(args[key], str) else args[key]}")
+                pattern_parts.append(f"{name}({','.join(key_args)})")
+            except json.JSONDecodeError:
+                pattern_parts.append(name)
+
+        current_pattern = "|".join(sorted(pattern_parts))
+
+        # Add to recent patterns
+        self._recent_tool_patterns.append(current_pattern)
+
+        # Keep only the window size
+        if len(self._recent_tool_patterns) > self._loop_detection_window:
+            self._recent_tool_patterns = self._recent_tool_patterns[-self._loop_detection_window:]
+
+        # Count occurrences of current pattern in recent history
+        pattern_count = self._recent_tool_patterns.count(current_pattern)
+
+        if pattern_count >= self._loop_threshold and not self._loop_already_warned:
+            self._loop_already_warned = True
+            logger.warning(
+                f"Loop detected: pattern '{current_pattern}' repeated {pattern_count}x"
+            )
+
+            # Generate human-readable pattern description
+            tool_names = [call.get("function", {}).get("name", "unknown") for call in tool_calls]
+            if len(tool_names) == 1:
+                pattern_desc = f"Same tool '{tool_names[0]}' called repeatedly"
+            else:
+                pattern_desc = f"Same tool sequence ({', '.join(tool_names)}) repeated"
+
+            return {
+                "pattern": pattern_desc,
+                "count": pattern_count,
+                "suggestion": "Try a different approach or ask for clarification",
+            }
+
+        return None
+
+    def _reset_loop_detection(self) -> None:
+        """Reset loop detection state for new query."""
+        self._recent_tool_patterns.clear()
+        self._loop_already_warned = False
+
+    def _should_emit_context_update(self, new_tokens: int) -> bool:
+        """Check if we should emit a context update based on token change.
+
+        Only emits updates when tokens change by at least 500 or 2% of max context,
+        whichever is smaller. This prevents spamming updates on every chunk.
+
+        Args:
+            new_tokens: New total context token count
+
+        Returns:
+            True if we should emit an update
+        """
+        threshold = min(500, self._max_context_tokens // 50)
+        return abs(new_tokens - self._last_context_update_tokens) >= threshold
+
+    def _create_context_update_chunk(self) -> OracleStreamChunk:
+        """Create a context update chunk with current token counts.
+
+        Returns:
+            OracleStreamChunk with context_update type
+        """
+        self._last_context_update_tokens = self._context_tokens
+        return OracleStreamChunk(
+            type="context_update",
+            context_tokens=self._context_tokens,
+            max_context_tokens=self._max_context_tokens,
+        )
+
+    def _reset_budget_tracking(self, max_tokens: int) -> None:
+        """Reset budget tracking state for new query.
+
+        Args:
+            max_tokens: Maximum tokens budget for this query
+        """
+        self._iteration_warning_emitted = False
+        self._iteration_exceeded_emitted = False
+        self._token_warning_emitted = False
+        self._token_exceeded_emitted = False
+        self._total_tokens_used = 0
+        self._max_tokens_budget = max_tokens
+
+    def _check_iteration_budget(self, turn: int) -> None:
+        """Check iteration budget and emit warning event at 70% threshold.
+
+        Args:
+            turn: Current turn number (0-indexed)
+        """
+        warning_threshold_turn = int(self.MAX_TURNS * self.ITERATION_WARNING_THRESHOLD)
+
+        # Check for iteration warning at 70% threshold
+        if not self._iteration_warning_emitted and (turn + 1) >= warning_threshold_turn:
+            self._iteration_warning_emitted = True
+            percent = int(((turn + 1) / self.MAX_TURNS) * 100)
+            logger.warning(f"Iteration budget warning: {turn + 1}/{self.MAX_TURNS} ({percent}%)")
+
+            self._event_bus.emit(Event(
+                type=EventType.BUDGET_ITERATION_WARNING,
+                source="oracle_agent",
+                severity=Severity.WARNING,
+                payload={
+                    "budget_type": "iteration",
+                    "current": turn + 1,
+                    "max": self.MAX_TURNS,
+                    "percent": percent,
+                    "message": f"Iteration {turn + 1} of {self.MAX_TURNS} - approaching limit",
+                }
+            ))
+
+    def _check_token_budget(self, tokens_used: int) -> None:
+        """Check token budget and emit warning event at 80% threshold.
+
+        Args:
+            tokens_used: Tokens used in last response
+        """
+        if self._max_tokens_budget <= 0:
+            return
+
+        self._total_tokens_used += tokens_used
+        token_percent = self._total_tokens_used / self._max_tokens_budget
+
+        # Check for token warning at 80% threshold
+        if not self._token_warning_emitted and token_percent >= self.TOKEN_WARNING_THRESHOLD:
+            self._token_warning_emitted = True
+            percent = int(token_percent * 100)
+            logger.warning(f"Token budget warning: {self._total_tokens_used}/{self._max_tokens_budget} ({percent}%)")
+
+            self._event_bus.emit(Event(
+                type=EventType.BUDGET_TOKEN_WARNING,
+                source="oracle_agent",
+                severity=Severity.WARNING,
+                payload={
+                    "budget_type": "token",
+                    "current": self._total_tokens_used,
+                    "max": self._max_tokens_budget,
+                    "percent": percent,
+                    "message": f"Used {self._total_tokens_used} of {self._max_tokens_budget} tokens",
+                }
+            ))
+
+    def _emit_iteration_exceeded(self) -> None:
+        """Emit iteration exceeded event when MAX_TURNS is reached."""
+        if self._iteration_exceeded_emitted:
+            return
+
+        self._iteration_exceeded_emitted = True
+        logger.error(f"Iteration budget exceeded: {self.MAX_TURNS}/{self.MAX_TURNS}")
+
+        self._event_bus.emit(Event(
+            type=EventType.BUDGET_ITERATION_EXCEEDED,
+            source="oracle_agent",
+            severity=Severity.ERROR,
+            payload={
+                "budget_type": "iteration",
+                "current": self.MAX_TURNS,
+                "max": self.MAX_TURNS,
+                "percent": 100,
+                "message": f"Maximum iterations ({self.MAX_TURNS}) reached - stopping",
+            }
+        ))
+
+    def _emit_token_exceeded(self) -> None:
+        """Emit token exceeded event when token budget is reached."""
+        if self._token_exceeded_emitted or self._max_tokens_budget <= 0:
+            return
+
+        self._token_exceeded_emitted = True
+        logger.error(f"Token budget exceeded: {self._total_tokens_used}/{self._max_tokens_budget}")
+
+        self._event_bus.emit(Event(
+            type=EventType.BUDGET_TOKEN_EXCEEDED,
+            source="oracle_agent",
+            severity=Severity.ERROR,
+            payload={
+                "budget_type": "token",
+                "current": self._total_tokens_used,
+                "max": self._max_tokens_budget,
+                "percent": 100,
+                "message": f"Token limit ({self._max_tokens_budget}) exceeded - stopping",
+            }
+        ))
 
     async def query(
         self,
@@ -225,9 +710,12 @@ class OracleAgent:
         """
         # Reset cancellation state for new query
         self.reset_cancellation()
+        self._reset_loop_detection()
+        self._reset_budget_tracking(max_tokens)
         self.user_id = user_id
         self._collected_sources = []
         self._collected_tool_calls = []
+        self._collected_system_messages = []
 
         # Use provided project_id or fall back to init value
         effective_project_id = project_id or self.project_id or "default"
@@ -360,17 +848,25 @@ class OracleAgent:
                     current_id = node_map[current_id].parent_id
 
                 # Add conversation history from path (skip empty root nodes)
+                # Include system messages for each node (T041)
+                system_messages_loaded = 0
                 for node in path_nodes:
                     if node.is_root and not node.question and not node.answer:
                         continue
                     if node.question:
                         messages.append({"role": "user", "content": node.question})
+                    # Add system messages (notifications) that occurred during this exchange
+                    if hasattr(node, 'system_messages') and node.system_messages:
+                        for sys_msg in node.system_messages:
+                            messages.append({"role": "system", "content": sys_msg})
+                            system_messages_loaded += 1
                     if node.answer:
                         messages.append({"role": "assistant", "content": node.answer})
 
                 logger.debug(
                     f"Loaded {len(path_nodes)} nodes from tree, "
-                    f"added {len(messages) - 1} context messages"
+                    f"added {len(messages) - 1} context messages "
+                    f"(including {system_messages_loaded} system messages)"
                 )
             except Exception as e:
                 logger.error(f"Failed to load tree history: {e}")
@@ -397,6 +893,25 @@ class OracleAgent:
         # Get tool definitions
         tools = tool_executor.get_tool_schemas(agent="oracle")
 
+        # Initialize context window tracking
+        self._max_context_tokens = get_model_context_size(self.model)
+        self._context_tokens = estimate_messages_tokens(messages)
+        # Add estimated tokens for tool definitions (~50 tokens per tool)
+        self._context_tokens += len(tools) * 50
+        self._last_context_update_tokens = 0
+
+        logger.debug(
+            f"Initial context: {self._context_tokens}/{self._max_context_tokens} tokens "
+            f"({100 * self._context_tokens // self._max_context_tokens}%)"
+        )
+
+        # Yield initial context update
+        yield OracleStreamChunk(
+            type="context_update",
+            context_tokens=self._context_tokens,
+            max_context_tokens=self._max_context_tokens,
+        )
+
         # Yield thinking chunk to indicate we're starting
         yield OracleStreamChunk(
             type="thinking",
@@ -419,6 +934,13 @@ class OracleAgent:
                     logger.info(f"Agent cancelled at turn {turn + 1}")
                     yield OracleStreamChunk(type="error", error="Cancelled by user")
                     return
+
+                # Check iteration budget and emit warning at 70% threshold (T047)
+                self._check_iteration_budget(turn)
+
+                # Drain and yield turn_start notifications (T049 - budget warnings)
+                async for notification_chunk in self._drain_and_yield_turn_start_notifications():
+                    yield notification_chunk
 
                 logger.debug(f"Agent turn {turn + 1}/{self.MAX_TURNS}")
 
@@ -453,7 +975,14 @@ class OracleAgent:
                     if chunk.type == "error":
                         return
 
-            # Max turns reached - yield accumulated content before error
+            # Max turns reached - emit iteration exceeded event (T048)
+            self._emit_iteration_exceeded()
+
+            # Drain and yield immediate notifications for exceeded events (T050)
+            async for notification_chunk in self._drain_and_yield_immediate_notifications():
+                yield notification_chunk
+
+            # Log and yield accumulated content before error
             logger.warning(f"Max turns ({self.MAX_TURNS}) reached with accumulated content: {len(accumulated_content)} chars")
 
             if accumulated_content:
@@ -520,10 +1049,32 @@ class OracleAgent:
         Yields:
             Response chunks from this turn
         """
-        # Apply thinking suffix if requested
+        # Apply thinking suffix if requested AND model supports it
         model = self.model
         if thinking and not model.endswith(":thinking"):
-            model = f"{model}:thinking"
+            # Only apply :thinking to models that actually support it
+            # Based on OpenRouter's supported models:
+            # - Models with -r1, /r1 (DeepSeek R1, etc.)
+            # - Models with /o1, /o3 (OpenAI reasoning models)
+            # - Claude 3.7 Sonnet (anthropic/claude-3.7-sonnet)
+            # - Qwen thinking variants
+            model_lower = model.lower()
+            supports_thinking = (
+                "-r1" in model_lower
+                or "/r1" in model_lower
+                or "/o1" in model_lower
+                or "/o3" in model_lower
+                or "claude-3.7-sonnet" in model_lower
+                or "qwen" in model_lower and "thinking" in model_lower
+            )
+            if supports_thinking:
+                model = f"{model}:thinking"
+            elif thinking:
+                # Log warning that thinking was requested but model doesn't support it
+                logger.warning(
+                    f"Thinking mode requested but model '{model}' does not support :thinking suffix. "
+                    "Using model without thinking mode."
+                )
 
         try:
             request_body = {
@@ -603,7 +1154,12 @@ class OracleAgent:
         Yields:
             Parsed stream chunks
         """
-        content_buffer = ""
+        content_buffer = ""  # All content received
+        reasoning_buffer = ""  # All reasoning/thinking received
+        yielded_content_len = 0  # How much content we've already yielded to user
+        yielded_reasoning_len = 0  # How much reasoning we've already yielded
+        tool_call_detected = False  # True when we detect tool call syntax starting
+        reasoning_tool_call_detected = False  # Tool calls found in reasoning stream
         tool_calls_buffer: Dict[int, Dict[str, Any]] = {}
         finish_reason = None
         chunk_count = 0
@@ -642,35 +1198,89 @@ class OracleAgent:
             logger.info(f"[RAW SSE #{chunk_count}] finish_reason={finish_reason} delta_keys={list(delta.keys())} delta={json.dumps(delta)[:1000]}")
 
             # Handle reasoning/thinking traces (from models like DeepSeek)
-            # Track what we've yielded to avoid duplication
-            yielded_reasoning_text = None
+            # IMPORTANT: Some models output tool calls in reasoning instead of content!
+            # We must buffer and check reasoning for tool call patterns too.
+            reasoning_chunk = None
             if "reasoning" in delta and delta["reasoning"]:
-                yielded_reasoning_text = delta["reasoning"]
-                yield OracleStreamChunk(
-                    type="thinking",
-                    content=yielded_reasoning_text,
-                )
-
-            # Handle reasoning_details (alternative format)
-            # Only yield if different from what we already yielded from "reasoning"
-            if "reasoning_details" in delta and delta["reasoning_details"]:
+                reasoning_chunk = delta["reasoning"]
+            elif "reasoning_details" in delta and delta["reasoning_details"]:
+                # Alternative format - combine all text
                 for detail in delta["reasoning_details"]:
                     if isinstance(detail, dict) and detail.get("text"):
-                        detail_text = detail["text"]
-                        # Skip if this is the same as what we already yielded
-                        if detail_text != yielded_reasoning_text:
-                            yield OracleStreamChunk(
-                                type="thinking",
-                                content=detail_text,
-                            )
+                        if reasoning_chunk is None:
+                            reasoning_chunk = ""
+                        reasoning_chunk += detail["text"]
 
-            # Handle content
+            if reasoning_chunk:
+                reasoning_buffer += reasoning_chunk
+
+                # Check if reasoning contains tool call syntax
+                if not reasoning_tool_call_detected:
+                    if _is_tool_call_content(reasoning_buffer):
+                        reasoning_tool_call_detected = True
+                        logger.info(f"[STREAM] Detected tool call syntax in reasoning, suppressing output")
+                        # Yield any safe reasoning before the tool call marker
+                        safe_reasoning, _ = _extract_safe_content(reasoning_buffer)
+                        if safe_reasoning and len(safe_reasoning) > yielded_reasoning_len:
+                            remaining = safe_reasoning[yielded_reasoning_len:]
+                            if remaining.strip():
+                                yield OracleStreamChunk(
+                                    type="thinking",
+                                    content=remaining,
+                                )
+                            yielded_reasoning_len = len(safe_reasoning)
+                    else:
+                        # Safe to yield reasoning - but keep a buffer for safety
+                        safe_threshold = 30  # Keep last 30 chars buffered for reasoning
+                        if len(reasoning_buffer) > yielded_reasoning_len + safe_threshold:
+                            to_yield = reasoning_buffer[yielded_reasoning_len:-safe_threshold]
+                            if to_yield:
+                                yield OracleStreamChunk(
+                                    type="thinking",
+                                    content=to_yield,
+                                )
+                                yielded_reasoning_len = len(reasoning_buffer) - safe_threshold
+
+            # Handle content with tool call detection
+            # Buffer content and only yield what's safe to show to users
             if "content" in delta and delta["content"]:
                 content_buffer += delta["content"]
-                yield OracleStreamChunk(
-                    type="content",
-                    content=delta["content"],
-                )
+
+                # If we haven't detected tool call syntax yet, check now
+                if not tool_call_detected:
+                    # Check if the buffer looks like tool call syntax starting
+                    if _is_tool_call_content(content_buffer):
+                        tool_call_detected = True
+                        logger.info(f"[STREAM] Detected tool call syntax in content, suppressing output")
+                    else:
+                        # Safe to yield - but be conservative about what we show
+                        # Keep a buffer of last few chars in case tool call starts
+                        safe_threshold = 20  # Keep last 20 chars buffered
+                        if len(content_buffer) > yielded_content_len + safe_threshold:
+                            # Extract safe content and any tool call markers
+                            safe_content, tool_content = _extract_safe_content(content_buffer)
+
+                            if tool_content:
+                                # Found tool call markers, stop yielding
+                                tool_call_detected = True
+                                logger.info(f"[STREAM] Found tool call markers in buffer, suppressing")
+                                # Yield any safe content before the tool call
+                                remaining_safe = safe_content[yielded_content_len:]
+                                if remaining_safe:
+                                    yield OracleStreamChunk(
+                                        type="content",
+                                        content=remaining_safe,
+                                    )
+                                    yielded_content_len = len(safe_content)
+                            else:
+                                # No tool call markers, yield up to safe threshold
+                                to_yield = content_buffer[yielded_content_len:-safe_threshold] if safe_threshold else content_buffer[yielded_content_len:]
+                                if to_yield:
+                                    yield OracleStreamChunk(
+                                        type="content",
+                                        content=to_yield,
+                                    )
+                                    yielded_content_len = len(content_buffer) - safe_threshold
 
             # Handle tool calls
             if "tool_calls" in delta:
@@ -695,10 +1305,14 @@ class OracleAgent:
         # Log final state
         logger.info(f"=== SSE STREAM ENDED after {chunk_count} chunks ===")
         logger.info(f"[FINAL STATE] finish_reason={finish_reason}")
-        logger.info(f"[FINAL STATE] content_buffer_len={len(content_buffer)}")
+        logger.info(f"[FINAL STATE] content_buffer_len={len(content_buffer)} yielded={yielded_content_len}")
+        logger.info(f"[FINAL STATE] reasoning_buffer_len={len(reasoning_buffer)} yielded={yielded_reasoning_len}")
+        logger.info(f"[FINAL STATE] tool_call_detected={tool_call_detected} reasoning_tool_call_detected={reasoning_tool_call_detected}")
         logger.info(f"[FINAL STATE] tool_calls_buffer={json.dumps(tool_calls_buffer)[:2000]}")
         if content_buffer:
             logger.info(f"[FINAL STATE] content_preview={content_buffer[:500]}")
+        if reasoning_buffer:
+            logger.info(f"[FINAL STATE] reasoning_preview={reasoning_buffer[:500]}")
 
         # Process finish
         if finish_reason == "tool_calls" and tool_calls_buffer:
@@ -715,10 +1329,28 @@ class OracleAgent:
             async for chunk in self._execute_tools(tool_calls, messages, user_id):
                 yield chunk
 
-        elif finish_reason == "stop" or (content_buffer and not tool_calls_buffer):
-            # Check if the model output XML-style tool calls in content
-            # (Some models like DeepSeek don't support proper function calling)
+        elif finish_reason == "stop" or content_buffer or reasoning_buffer:
+            # Check if the model output XML-style tool calls in content OR reasoning
+            # (Some models like DeepSeek output tool calls in reasoning stream!)
             xml_tool_calls, cleaned_content = _parse_xml_tool_calls(content_buffer)
+
+            # If no tool calls in content, check reasoning buffer
+            if not xml_tool_calls and reasoning_buffer:
+                logger.info(f"[STREAM] No tool calls in content, checking reasoning buffer...")
+                xml_tool_calls, cleaned_reasoning = _parse_xml_tool_calls(reasoning_buffer)
+                if xml_tool_calls:
+                    logger.warning(
+                        f"Model {self.model} output {len(xml_tool_calls)} tool call(s) "
+                        "in REASONING stream instead of content. Extracting and executing."
+                    )
+                    # Yield any safe reasoning that wasn't shown
+                    if cleaned_reasoning and len(cleaned_reasoning) > yielded_reasoning_len:
+                        remaining = cleaned_reasoning[yielded_reasoning_len:]
+                        if remaining.strip():
+                            yield OracleStreamChunk(
+                                type="thinking",
+                                content=remaining,
+                            )
 
             if xml_tool_calls:
                 # Model used XML-style tool calls instead of proper function calling
@@ -726,6 +1358,16 @@ class OracleAgent:
                     f"Model {self.model} output {len(xml_tool_calls)} XML-style tool call(s) "
                     "instead of using proper function calling. Parsing and executing."
                 )
+
+                # Yield any remaining safe content that wasn't yielded during streaming
+                # The cleaned_content is what's left after removing tool call syntax
+                if cleaned_content and len(cleaned_content) > yielded_content_len:
+                    remaining = cleaned_content[yielded_content_len:]
+                    if remaining.strip():
+                        yield OracleStreamChunk(
+                            type="content",
+                            content=remaining,
+                        )
 
                 # Add assistant message with the parsed tool calls
                 assistant_msg = {"role": "assistant", "content": cleaned_content or None}
@@ -737,7 +1379,18 @@ class OracleAgent:
                     yield chunk
             else:
                 # Final response without tool calls
+                # Yield any remaining buffered content that wasn't yielded during streaming
+                if len(content_buffer) > yielded_content_len:
+                    remaining = content_buffer[yielded_content_len:]
+                    if remaining.strip():
+                        yield OracleStreamChunk(
+                            type="content",
+                            content=remaining,
+                        )
                 messages.append({"role": "assistant", "content": content_buffer})
+
+                # Update context token count with assistant response
+                self._context_tokens += estimate_tokens(content_buffer)
 
                 # Save the exchange to persistent context
                 context_id = self._save_exchange(
@@ -752,12 +1405,21 @@ class OracleAgent:
                         source=source,
                     )
 
+                # Emit final context update before done
+                yield OracleStreamChunk(
+                    type="context_update",
+                    context_tokens=self._context_tokens,
+                    max_context_tokens=self._max_context_tokens,
+                )
+
                 # Done with context_id for frontend reference
                 yield OracleStreamChunk(
                     type="done",
                     tokens_used=None,  # Could extract from response headers
                     model_used=self.model,
                     context_id=context_id,
+                    context_tokens=self._context_tokens,
+                    max_context_tokens=self._max_context_tokens,
                 )
 
     async def _process_response(
@@ -836,6 +1498,9 @@ class OracleAgent:
 
                 messages.append({"role": "assistant", "content": content})
 
+                # Update context token count with assistant response
+                self._context_tokens += estimate_tokens(content)
+
                 # Save the exchange to persistent context
                 usage = data.get("usage", {})
                 context_id = self._save_exchange(
@@ -851,12 +1516,21 @@ class OracleAgent:
                         source=source,
                     )
 
+                # Emit final context update before done
+                yield OracleStreamChunk(
+                    type="context_update",
+                    context_tokens=self._context_tokens,
+                    max_context_tokens=self._max_context_tokens,
+                )
+
                 # Done - only when no XML tool calls were found
                 yield OracleStreamChunk(
                     type="done",
                     tokens_used=usage.get("total_tokens"),
                     model_used=self.model,
                     context_id=context_id,
+                    context_tokens=self._context_tokens,
+                    max_context_tokens=self._max_context_tokens,
                 )
 
     async def _execute_tools(
@@ -883,6 +1557,30 @@ class OracleAgent:
         """
         if not tool_calls:
             return
+
+        # Loop detection check (T053, T054)
+        loop_info = self._detect_loop(tool_calls)
+        if loop_info:
+            # Emit agent.loop.detected event
+            self._event_bus.emit(Event(
+                type=EventType.AGENT_LOOP_DETECTED,
+                source="oracle_agent",
+                severity=Severity.WARNING,
+                payload={
+                    "pattern": loop_info["pattern"],
+                    "count": loop_info["count"],
+                    "suggestion": loop_info["suggestion"],
+                }
+            ))
+
+            # Yield system notification about the loop
+            loop_content = f"!loop: {loop_info['pattern']} repeated {loop_info['count']}x - {loop_info['suggestion']}"
+            # Collect for persistence (T040)
+            self._collected_system_messages.append(loop_content)
+            yield OracleStreamChunk(
+                type="system",
+                content=loop_content,
+            )
 
         tool_executor = _get_tool_executor()
 
@@ -1050,6 +1748,18 @@ class OracleAgent:
                     ),
                 )
 
+                # Emit tool.call.success event (T029)
+                self._event_bus.emit(Event(
+                    type=EventType.TOOL_CALL_SUCCESS,
+                    source="oracle_agent",
+                    severity=Severity.INFO,
+                    payload={
+                        "tool_name": result.name,
+                        "call_id": result.call_id,
+                        "result_length": len(result.result),
+                    }
+                ))
+
                 # Yield thinking update about tool completion
                 result_preview = result.result[:100] + "..." if len(result.result) > 100 else result.result
                 yield OracleStreamChunk(
@@ -1077,6 +1787,11 @@ class OracleAgent:
                     "tool_call_id": result.call_id,
                     "content": result.result,
                 })
+
+                # Update context tokens and emit update if significant change
+                self._context_tokens += estimate_tokens(result.result) + 10  # +10 for message overhead
+                if self._should_emit_context_update(self._context_tokens):
+                    yield self._create_context_update_chunk()
             else:
                 # Error case - T027: provide error but let agent continue
                 error_content = self._format_tool_error(
@@ -1084,6 +1799,19 @@ class OracleAgent:
                     result.error or "Unknown error",
                     result.arguments,
                 )
+
+                # Emit tool.call.failure event (T027)
+                self._event_bus.emit(Event(
+                    type=EventType.TOOL_CALL_FAILURE,
+                    source="oracle_agent",
+                    severity=Severity.ERROR,
+                    payload={
+                        "tool_name": result.name,
+                        "error_type": "execution_error",
+                        "error_message": result.error or "Unknown error",
+                        "call_id": result.call_id,
+                    }
+                ))
 
                 yield OracleStreamChunk(
                     type="tool_result",
@@ -1114,6 +1842,157 @@ class OracleAgent:
                     "tool_call_id": result.call_id,
                     "content": error_content,
                 })
+
+                # Update context tokens for error result
+                self._context_tokens += estimate_tokens(error_content) + 10
+
+        # Drain notifications after tool execution (T030-T033)
+        async for notification_chunk in self._drain_and_yield_notifications():
+            yield notification_chunk
+
+    async def _drain_and_yield_notifications(
+        self,
+    ) -> AsyncGenerator[OracleStreamChunk, None]:
+        """Drain notifications from the accumulator and yield as system chunks.
+
+        This processes events that have been accumulated during tool execution
+        and formats them into TOON-formatted system messages for the agent.
+
+        Yields:
+            OracleStreamChunk objects with type="system" containing formatted notifications.
+        """
+        # Process events through subscribers to create notifications
+        for subscriber in self._subscriber_loader.get_all_subscribers():
+            if not subscriber.enabled:
+                continue
+
+            # Check pending events in the event bus
+            pending = self._event_bus.drain_pending()
+            for event in pending:
+                if subscriber.matches_event(event.type):
+                    notification = self._accumulator.accumulate(event, subscriber)
+                    if notification:
+                        # Format immediately if returned (critical priority)
+                        template_name = subscriber.config.template
+                        notification.content = self._toon_formatter.format_notification(
+                            notification, template_name
+                        )
+
+        # Drain after_tool notifications
+        notifications = self._accumulator.drain_after_tool()
+        for notification in notifications:
+            # Format content if not already done
+            if not notification.content:
+                subscriber = self._subscriber_loader.get_subscriber(notification.subscriber_id)
+                if subscriber:
+                    template_name = subscriber.config.template
+                    notification.content = self._toon_formatter.format_notification(
+                        notification, template_name
+                    )
+
+            if notification.content:
+                # Collect for persistence (T040)
+                self._collected_system_messages.append(notification.content)
+                yield OracleStreamChunk(
+                    type="system",
+                    content=notification.content,
+                )
+
+    async def _drain_and_yield_turn_start_notifications(
+        self,
+    ) -> AsyncGenerator[OracleStreamChunk, None]:
+        """Drain turn_start notifications and yield as system chunks.
+
+        This is called at the start of each agent turn to inject budget
+        warnings and other turn_start priority notifications (T049).
+
+        Yields:
+            OracleStreamChunk objects with type="system" containing formatted notifications.
+        """
+        # Process events through subscribers to create notifications
+        for subscriber in self._subscriber_loader.get_all_subscribers():
+            if not subscriber.enabled:
+                continue
+
+            # Check pending events in the event bus
+            pending = self._event_bus.drain_pending()
+            for event in pending:
+                if subscriber.matches_event(event.type):
+                    notification = self._accumulator.accumulate(event, subscriber)
+                    if notification:
+                        # Format immediately if returned (critical priority)
+                        template_name = subscriber.config.template
+                        notification.content = self._toon_formatter.format_notification(
+                            notification, template_name
+                        )
+
+        # Drain turn_start notifications
+        notifications = self._accumulator.drain_turn_start()
+        for notification in notifications:
+            # Format content if not already done
+            if not notification.content:
+                subscriber = self._subscriber_loader.get_subscriber(notification.subscriber_id)
+                if subscriber:
+                    template_name = subscriber.config.template
+                    notification.content = self._toon_formatter.format_notification(
+                        notification, template_name
+                    )
+
+            if notification.content:
+                # Collect for persistence
+                self._collected_system_messages.append(notification.content)
+                yield OracleStreamChunk(
+                    type="system",
+                    content=notification.content,
+                )
+
+    async def _drain_and_yield_immediate_notifications(
+        self,
+    ) -> AsyncGenerator[OracleStreamChunk, None]:
+        """Drain immediate (critical) notifications and yield as system chunks.
+
+        This is called when critical events occur (like budget exceeded)
+        to immediately inject notifications (T050).
+
+        Yields:
+            OracleStreamChunk objects with type="system" containing formatted notifications.
+        """
+        # Process events through subscribers to create notifications
+        for subscriber in self._subscriber_loader.get_all_subscribers():
+            if not subscriber.enabled:
+                continue
+
+            # Check pending events in the event bus
+            pending = self._event_bus.drain_pending()
+            for event in pending:
+                if subscriber.matches_event(event.type):
+                    notification = self._accumulator.accumulate(event, subscriber)
+                    if notification:
+                        # Format immediately if returned (critical priority)
+                        template_name = subscriber.config.template
+                        notification.content = self._toon_formatter.format_notification(
+                            notification, template_name
+                        )
+
+        # Drain immediate notifications (critical priority)
+        notifications = self._accumulator.drain_immediate()
+        for notification in notifications:
+            # Format content if not already done
+            if not notification.content:
+                subscriber = self._subscriber_loader.get_subscriber(notification.subscriber_id)
+                if subscriber:
+                    template_name = subscriber.config.template
+                    notification.content = self._toon_formatter.format_notification(
+                        notification, template_name
+                    )
+
+            if notification.content:
+                # Collect for persistence
+                self._collected_system_messages.append(notification.content)
+                yield OracleStreamChunk(
+                    type="system",
+                    content=notification.content,
+                )
 
     def _format_tool_error(
         self,
@@ -1394,6 +2273,7 @@ class OracleAgent:
         if self._current_tree_root_id and self._current_node_id and self.user_id:
             try:
                 # Create new node as child of current HEAD
+                # Include system messages collected during this exchange (T040)
                 new_node = self._tree_service.create_node(
                     user_id=self.user_id,
                     root_id=self._current_tree_root_id,
@@ -1403,6 +2283,7 @@ class OracleAgent:
                     tool_calls=self._collected_tool_calls if self._collected_tool_calls else None,
                     tokens_used=tokens_used or self._estimate_tokens(question + answer),
                     model_used=self.model,
+                    system_messages=self._collected_system_messages if self._collected_system_messages else None,
                 )
 
                 # Update current node to the new one (new HEAD)
@@ -1411,7 +2292,7 @@ class OracleAgent:
 
                 logger.info(
                     f"Saved exchange to tree node {new_node.id} "
-                    f"(tree: {self._current_tree_root_id})"
+                    f"(tree: {self._current_tree_root_id}, system_messages: {len(self._collected_system_messages)})"
                 )
 
             except Exception as e:
