@@ -4,8 +4,8 @@ The Oracle Plugin System enables reactive and proactive agent behaviors through 
 
 ## Quick Overview
 
-- **80% TOML Rules**: Simple threshold and conditional rules defined in TOML with `simpleeval` expressions
-- **20% Lua Scripts**: Complex logic escape hatch via sandboxed Lua execution
+- **TOML Rules**: Simple threshold and conditional rules defined in TOML with `simpleeval` expressions
+- **Lua Scripts**: Complex logic escape hatch via sandboxed Lua execution
 - **Hook Points**: Integration with ANS EventBus for agent lifecycle events
 - **Persistent State**: SQLite-backed per-plugin state storage
 
