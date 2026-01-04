@@ -57,7 +57,7 @@ Use the Settings UI or API to verify:
 curl -X POST http://localhost:8000/api/rules/my-first-rule/test \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"context_override": {"turn": {"number": 5}}}'
+  -d '{"context_override": {"turn_number": 5}}'
 ```
 
 ---
@@ -248,7 +248,7 @@ curl -X POST http://localhost:8000/api/rules/large-result-hint/toggle \
 curl -X POST http://localhost:8000/api/rules/token-budget-warning/test \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"context_override": {"turn": {"token_usage": 0.85}}}'
+  -d '{"context_override": {"token_usage": 0.85}}'
 ```
 
 ---
@@ -320,7 +320,7 @@ Check that function calls have parentheses: `context_above_threshold(0.8)`
 
 ## Next Steps
 
-- Read the [Expression Language Reference](../docs/plugin-api/rules/conditions.md)
-- Explore [Context API](../docs/plugin-api/context-api/reference.md)
-- See [Lua Scripting Guide](../docs/plugin-api/scripting/lua-guide.md)
-- Browse [Built-in Rules](../docs/plugin-api/built-ins/)
+- Read the [Expression Language Reference](../../docs/plugin-api/rules/conditions.md)
+- Explore [Context API](../../docs/plugin-api/context-api/reference.md)
+- See [Lua Scripting Guide](../../docs/plugin-api/scripting/lua-guide.md)
+- Browse [Built-in Rules](../../docs/plugin-api/built-ins/)

@@ -437,6 +437,284 @@ class UserSettingsService:
             conn.close()
 
 
+    def get_disabled_rules(self, user_id: str) -> List[str]:
+        """
+        Get user's disabled rule IDs.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            List of disabled rule IDs (qualified IDs like "plugin:rule-name")
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT disabled_rules_json FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row and row["disabled_rules_json"]:
+                try:
+                    return json.loads(row["disabled_rules_json"])
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON in disabled_rules_json for user {user_id}")
+                    return []
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get disabled rules for user {user_id}: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def set_disabled_rules(self, user_id: str, disabled_rules: List[str]) -> None:
+        """
+        Set user's disabled rule IDs.
+
+        Args:
+            user_id: User identifier
+            disabled_rules: List of rule IDs to disable (qualified IDs)
+        """
+        conn = self.db.connect()
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            disabled_json = json.dumps(disabled_rules)
+
+            with conn:
+                # First check if user exists
+                cursor = conn.execute(
+                    "SELECT user_id FROM user_settings WHERE user_id = ?",
+                    (user_id,)
+                )
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    conn.execute(
+                        """
+                        UPDATE user_settings
+                        SET disabled_rules_json = ?, updated = ?
+                        WHERE user_id = ?
+                        """,
+                        (disabled_json, now, user_id)
+                    )
+                else:
+                    # Create new user settings row with defaults
+                    conn.execute(
+                        """
+                        INSERT INTO user_settings (
+                            user_id, oracle_model, oracle_provider,
+                            subagent_model, subagent_provider, thinking_enabled,
+                            chat_center_mode, librarian_timeout, max_context_nodes,
+                            disabled_rules_json, created, updated
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            "gemini-2.0-flash-exp",  # default oracle_model
+                            "google",  # default oracle_provider
+                            "gemini-2.0-flash-exp",  # default subagent_model
+                            "google",  # default subagent_provider
+                            0,  # default thinking_enabled
+                            0,  # default chat_center_mode
+                            1200,  # default librarian_timeout
+                            30,  # default max_context_nodes
+                            disabled_json,
+                            now,
+                            now
+                        )
+                    )
+
+            logger.info(f"Updated disabled rules for user {user_id}: {disabled_rules}")
+        except Exception as e:
+            logger.error(f"Failed to set disabled rules for user {user_id}: {e}")
+            raise
+        finally:
+            conn.close()
+
+    def get_plugin_settings(self, user_id: str, plugin_id: str) -> dict:
+        """
+        Get user's settings for a specific plugin.
+
+        Args:
+            user_id: User identifier
+            plugin_id: Plugin identifier
+
+        Returns:
+            Dictionary of setting_id -> value for the plugin
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT plugin_settings_json FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row and row["plugin_settings_json"]:
+                try:
+                    all_plugin_settings = json.loads(row["plugin_settings_json"])
+                    return all_plugin_settings.get(plugin_id, {})
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON in plugin_settings_json for user {user_id}")
+                    return {}
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to get plugin settings for user {user_id}, plugin {plugin_id}: {e}")
+            return {}
+        finally:
+            conn.close()
+
+    def get_all_plugin_settings(self, user_id: str) -> dict:
+        """
+        Get all plugin settings for a user.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Dictionary of plugin_id -> {setting_id -> value}
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT plugin_settings_json FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row and row["plugin_settings_json"]:
+                try:
+                    return json.loads(row["plugin_settings_json"])
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON in plugin_settings_json for user {user_id}")
+                    return {}
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to get all plugin settings for user {user_id}: {e}")
+            return {}
+        finally:
+            conn.close()
+
+    def set_plugin_settings(self, user_id: str, plugin_id: str, settings: dict) -> None:
+        """
+        Set user's settings for a specific plugin.
+
+        Args:
+            user_id: User identifier
+            plugin_id: Plugin identifier
+            settings: Dictionary of setting_id -> value
+        """
+        conn = self.db.connect()
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+
+            with conn:
+                # Get existing plugin settings
+                cursor = conn.execute(
+                    "SELECT plugin_settings_json FROM user_settings WHERE user_id = ?",
+                    (user_id,)
+                )
+                row = cursor.fetchone()
+
+                if row:
+                    # Update existing
+                    all_settings = {}
+                    if row["plugin_settings_json"]:
+                        try:
+                            all_settings = json.loads(row["plugin_settings_json"])
+                        except json.JSONDecodeError:
+                            pass
+
+                    all_settings[plugin_id] = settings
+                    settings_json = json.dumps(all_settings)
+
+                    conn.execute(
+                        """
+                        UPDATE user_settings
+                        SET plugin_settings_json = ?, updated = ?
+                        WHERE user_id = ?
+                        """,
+                        (settings_json, now, user_id)
+                    )
+                else:
+                    # Create new user settings row with defaults
+                    all_settings = {plugin_id: settings}
+                    settings_json = json.dumps(all_settings)
+
+                    conn.execute(
+                        """
+                        INSERT INTO user_settings (
+                            user_id, oracle_model, oracle_provider,
+                            subagent_model, subagent_provider, thinking_enabled,
+                            chat_center_mode, librarian_timeout, max_context_nodes,
+                            plugin_settings_json, created, updated
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            "gemini-2.0-flash-exp",  # default oracle_model
+                            "google",  # default oracle_provider
+                            "gemini-2.0-flash-exp",  # default subagent_model
+                            "google",  # default subagent_provider
+                            0,  # default thinking_enabled
+                            0,  # default chat_center_mode
+                            1200,  # default librarian_timeout
+                            30,  # default max_context_nodes
+                            settings_json,
+                            now,
+                            now
+                        )
+                    )
+
+            logger.info(f"Updated plugin settings for user {user_id}, plugin {plugin_id}")
+        except Exception as e:
+            logger.error(f"Failed to set plugin settings for user {user_id}, plugin {plugin_id}: {e}")
+            raise
+        finally:
+            conn.close()
+
+    def clear_plugin_settings(self, user_id: str, plugin_id: str) -> None:
+        """
+        Clear user's settings for a specific plugin (revert to defaults).
+
+        Args:
+            user_id: User identifier
+            plugin_id: Plugin identifier
+        """
+        conn = self.db.connect()
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+
+            with conn:
+                cursor = conn.execute(
+                    "SELECT plugin_settings_json FROM user_settings WHERE user_id = ?",
+                    (user_id,)
+                )
+                row = cursor.fetchone()
+
+                if row and row["plugin_settings_json"]:
+                    try:
+                        all_settings = json.loads(row["plugin_settings_json"])
+                        if plugin_id in all_settings:
+                            del all_settings[plugin_id]
+                            settings_json = json.dumps(all_settings)
+
+                            conn.execute(
+                                """
+                                UPDATE user_settings
+                                SET plugin_settings_json = ?, updated = ?
+                                WHERE user_id = ?
+                                """,
+                                (settings_json, now, user_id)
+                            )
+                            logger.info(f"Cleared plugin settings for user {user_id}, plugin {plugin_id}")
+                    except json.JSONDecodeError:
+                        pass
+        except Exception as e:
+            logger.error(f"Failed to clear plugin settings for user {user_id}, plugin {plugin_id}: {e}")
+            raise
+        finally:
+            conn.close()
+
+
 def get_user_settings_service() -> UserSettingsService:
     """Get instance of UserSettingsService."""
     return UserSettingsService()

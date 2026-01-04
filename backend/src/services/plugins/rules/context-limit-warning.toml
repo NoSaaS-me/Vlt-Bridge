@@ -1,0 +1,22 @@
+# Context Window Limit Warning Rule
+# Notifies the agent when context window usage exceeds 70%
+
+[rule]
+id = "context-limit-warning"
+name = "Context Limit Warning"
+description = "Warn when context window exceeds 70% capacity"
+version = "1.0.0"
+trigger = "on_turn_start"
+priority = 90
+enabled = true
+core = true
+
+[condition]
+expression = "context.turn.context_usage > 0.7"
+
+[action]
+type = "notify_self"
+message = "Context window at {{ (context.turn.context_usage * 100) | int }}%. Older context may be compressed."
+category = "context"
+priority = "normal"
+deliver_at = "turn_start"

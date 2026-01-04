@@ -1,0 +1,24 @@
+# Large Result Hint Rule
+# Suggests summarization when tool results contain many items
+
+[rule]
+id = "large-result-hint"
+name = "Large Result Hint"
+description = "Suggest summarization when tool results exceed 6 items"
+version = "1.0.0"
+trigger = "on_tool_complete"
+priority = 50
+enabled = true
+core = false
+
+[condition]
+# Check if the result contains indicators of large result sets
+# This checks for common patterns in result text
+expression = "context.result is not None and context.result.success and len(context.result.result or '') > 2000"
+
+[action]
+type = "notify_self"
+message = "Large result from {{ context.result.tool_name }}. Consider summarizing key findings rather than processing all items."
+category = "info"
+priority = "normal"
+deliver_at = "after_tool"

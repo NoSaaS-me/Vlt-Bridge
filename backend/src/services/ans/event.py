@@ -86,6 +86,10 @@ class EventType:
     SOURCE_STALE = "source.stale"
     TASK_CHECKPOINT = "task.checkpoint"
 
+    # Session lifecycle events (015-oracle-plugin-system)
+    QUERY_START = "query.start"        # New user query received
+    SESSION_END = "session.end"        # Session closing
+
     # Future events (placeholders)
     SUBAGENT_COMPLETE = "subagent.complete"
     SUBAGENT_FAILED = "subagent.failed"

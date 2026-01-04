@@ -1,0 +1,24 @@
+# Repeated Failure Warning Rule
+# Alerts when the same tool fails multiple times
+
+[rule]
+id = "repeated-failure-warning"
+name = "Repeated Failure Warning"
+description = "Alert when a tool has failed 3 or more times in this session"
+version = "1.0.0"
+trigger = "on_tool_failure"
+priority = 80
+enabled = true
+core = false
+
+[condition]
+# Check if the event contains tool info and has failed multiple times
+# context.event.payload should contain the tool name for failure events
+expression = "context.event is not None and context.history.total_failures >= 3"
+
+[action]
+type = "notify_self"
+message = "Multiple tool failures detected ({{ context.history.total_failures }} total). Consider trying a different approach or checking tool availability."
+category = "warning"
+priority = "high"
+deliver_at = "immediate"

@@ -19,6 +19,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
@@ -38,13 +39,29 @@ from .context_tree_service import ContextTreeService, get_context_tree_service
 from .tool_parsers import ToolCallParserChain
 
 # ANS imports for event emission
-from .ans.bus import get_event_bus
+from .ans.bus import get_event_bus, EventBus
 from .ans.event import Event, EventType, Severity
 from .ans.accumulator import NotificationAccumulator
 from .ans.subscriber import SubscriberLoader
 from .ans.toon_formatter import get_toon_formatter
 from .ans.persistence import CrossSessionPersistenceService, get_persistence_service
 from .ans.deferred import reset_deferred_queue, get_deferred_queue
+
+# Plugin system imports for rule engine
+from .plugins.engine import RuleEngine
+from .plugins.loader import RuleLoader
+from .plugins.expression import ExpressionEvaluator
+from .plugins.actions import ActionDispatcher
+from .plugins.context import (
+    EventData,
+    HistoryState,
+    PluginState,
+    ProjectState,
+    RuleContext,
+    ToolCallRecord,
+    TurnState,
+    UserState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -459,6 +476,154 @@ class OracleAgent:
         # Cross-session persistence (014-ans-enhancements Feature 3)
         self._persistence_service = get_persistence_service()
 
+        # Plugin System - RuleEngine (015-oracle-plugin-system Phase 4)
+        self._rule_engine: Optional[RuleEngine] = None
+        self._init_rule_engine()
+
+    def _init_rule_engine(self) -> None:
+        """Initialize the RuleEngine for plugin-based rule evaluation.
+
+        Sets up the RuleEngine with:
+        - RuleLoader pointing to the rules directory
+        - ExpressionEvaluator for condition evaluation
+        - ActionDispatcher for action execution
+        - EventBus subscription for lifecycle events
+        """
+        try:
+            # Rules directory relative to this file
+            rules_dir = Path(__file__).parent / "plugins" / "rules"
+
+            # Only initialize if rules directory exists
+            if not rules_dir.exists():
+                logger.info(f"Rules directory does not exist, skipping RuleEngine init: {rules_dir}")
+                return
+
+            loader = RuleLoader(rules_dir)
+            evaluator = ExpressionEvaluator()
+            dispatcher = ActionDispatcher(
+                event_bus=self._event_bus,
+                state_setter=self._set_plugin_state,
+            )
+
+            self._rule_engine = RuleEngine(
+                loader=loader,
+                evaluator=evaluator,
+                dispatcher=dispatcher,
+                event_bus=self._event_bus,
+                context_builder=self._build_rule_context,
+                auto_subscribe=True,
+            )
+
+            self._rule_engine.start()
+            logger.info(f"RuleEngine initialized with {self._rule_engine.rule_count} rules")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize RuleEngine: {e}")
+            self._rule_engine = None
+
+    def _set_plugin_state(self, key: str, value: Any) -> None:
+        """Set a value in plugin-scoped state.
+
+        Used by ActionDispatcher for set_state actions.
+        State is persisted per user/project in the context.
+
+        Args:
+            key: State key to set.
+            value: Value to store.
+        """
+        # For now, log the state change. Full persistence can be added later.
+        logger.debug(f"Plugin state set: {key} = {value}")
+        # TODO: Persist to plugin_state table when database schema is ready
+
+    def _build_rule_context(self, event: Event) -> RuleContext:
+        """Build a RuleContext from the current agent state.
+
+        Called by RuleEngine when evaluating rules. Creates a snapshot
+        of the agent's current state for rule condition evaluation.
+
+        Args:
+            event: The event that triggered rule evaluation.
+
+        Returns:
+            RuleContext populated with current agent state.
+        """
+        # Build turn state
+        turn_number = getattr(self, '_current_turn', 1)
+        token_usage = 0.0
+        if self._max_tokens_budget > 0:
+            token_usage = min(1.0, self._total_tokens_used / self._max_tokens_budget)
+        context_usage = 0.0
+        if self._max_context_tokens > 0:
+            context_usage = min(1.0, self._context_tokens / self._max_context_tokens)
+
+        turn = TurnState(
+            number=turn_number,
+            token_usage=token_usage,
+            context_usage=context_usage,
+            iteration_count=getattr(self, '_iteration_count', 0),
+        )
+
+        # Build history state from collected data
+        messages = []
+        if hasattr(self, '_context') and self._context:
+            for exchange in self._context.recent_exchanges:
+                messages.append({
+                    "role": exchange.role.value,
+                    "content": exchange.content,
+                })
+
+        tools = []
+        failures: Dict[str, int] = {}
+        for tc in self._collected_tool_calls:
+            record = ToolCallRecord(
+                name=tc.name,
+                arguments=tc.arguments,
+                result=tc.result,
+                success=tc.status == ToolCallStatus.SUCCESS,
+                timestamp=datetime.now(timezone.utc),
+            )
+            tools.append(record)
+            if tc.status == ToolCallStatus.FAILED:
+                failures[tc.name] = failures.get(tc.name, 0) + 1
+
+        history = HistoryState(
+            messages=messages,
+            tools=tools,
+            failures=failures,
+        )
+
+        # User and project state
+        user = UserState(
+            id=self.user_id or "unknown",
+            settings={},  # Could load from user_settings in future
+        )
+
+        project = ProjectState(
+            id=self.project_id,
+            settings={},  # Could load from project settings in future
+        )
+
+        # Plugin state (empty for now, can load from DB later)
+        state = PluginState()
+
+        # Event data
+        event_data = EventData(
+            type=event.type,
+            source=event.source,
+            severity=event.severity.value,
+            payload=event.payload,
+            timestamp=event.timestamp,
+        )
+
+        return RuleContext(
+            turn=turn,
+            history=history,
+            user=user,
+            project=project,
+            state=state,
+            event=event_data,
+        )
+
     def cancel(self) -> None:
         """Cancel all running operations.
 
@@ -770,6 +935,19 @@ class OracleAgent:
         effective_project_id = project_id or self.project_id or "default"
         # Update instance variable so tool injection uses correct project
         self.project_id = effective_project_id
+
+        # Emit QUERY_START event (015-oracle-plugin-system Phase 4)
+        self._event_bus.emit(Event(
+            type=EventType.QUERY_START,
+            source="oracle_agent",
+            severity=Severity.INFO,
+            payload={
+                "query": question[:200],  # Truncate for event payload
+                "user_id": user_id,
+                "project_id": effective_project_id,
+                "context_id": context_id,
+            }
+        ))
 
         # Check cancellation at start
         if self._cancelled:
@@ -1139,6 +1317,20 @@ class OracleAgent:
                     )
                 except Exception as e:
                     logger.error(f"Failed to save partial exchange in finally block: {e}")
+
+            # Emit SESSION_END event (015-oracle-plugin-system Phase 4)
+            self._event_bus.emit(Event(
+                type=EventType.SESSION_END,
+                source="oracle_agent",
+                severity=Severity.INFO,
+                payload={
+                    "user_id": user_id,
+                    "project_id": effective_project_id,
+                    "exchange_saved": exchange_saved,
+                    "accumulated_content_length": len(accumulated_content),
+                    "cancelled": self._cancelled,
+                }
+            ))
 
     async def _agent_turn(
         self,

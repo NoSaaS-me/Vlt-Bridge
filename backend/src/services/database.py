@@ -270,6 +270,21 @@ DDL_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_cross_session_status ON cross_session_notifications(status)",
     "CREATE INDEX IF NOT EXISTS idx_cross_session_tree ON cross_session_notifications(tree_id)",
     "CREATE INDEX IF NOT EXISTS idx_cross_session_expires ON cross_session_notifications(expires_at)",
+    # Plugin state table (015-oracle-plugin-system)
+    """
+    CREATE TABLE IF NOT EXISTS plugin_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        plugin_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(user_id, project_id, plugin_id, key)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_plugin_state_lookup ON plugin_state(user_id, project_id, plugin_id)",
 )
 
 # Migration statements for existing databases
@@ -288,6 +303,10 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE user_settings ADD COLUMN disabled_subscribers_json TEXT DEFAULT '[]'",
     # Add system_messages_json column to context_nodes (013-agent-notification-system T007)
     "ALTER TABLE context_nodes ADD COLUMN system_messages_json TEXT DEFAULT '[]'",
+    # Add disabled_rules_json column to user_settings (015-oracle-plugin-system T007)
+    "ALTER TABLE user_settings ADD COLUMN disabled_rules_json TEXT DEFAULT '[]'",
+    # Add plugin_settings_json column to user_settings (015-oracle-plugin-system)
+    "ALTER TABLE user_settings ADD COLUMN plugin_settings_json TEXT DEFAULT '{}'",
 )
 
 

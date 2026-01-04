@@ -19,6 +19,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
 import { NotificationSettings as NotificationSettingsComponent } from '@/components/NotificationSettings';
+import { RuleSettings } from '@/components/RuleSettings';
 import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
 import { getIndexHealth, rebuildIndex, type RebuildResponse } from '@/services/api';
 import { getModels, getModelSettings, saveModelSettings } from '@/services/models';
@@ -393,10 +394,11 @@ export function Settings() {
         )}
 
         <Tabs defaultValue="account" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="models">Models</TabsTrigger>
             <TabsTrigger value="context">Context</TabsTrigger>
+            <TabsTrigger value="rules">Rules</TabsTrigger>
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
           </TabsList>
 
@@ -1029,6 +1031,14 @@ export function Settings() {
             description="Configure Oracle conversation tree behavior"
           />
         )}
+          </TabsContent>
+
+          <TabsContent value="rules" className="space-y-6 mt-6">
+            {/* Rule Settings */}
+            <RuleSettings
+              isDemoMode={isDemoMode}
+              canTestRules={user?.user_id === 'demo-user'}
+            />
           </TabsContent>
 
           <TabsContent value="notifications" className="space-y-6 mt-6">

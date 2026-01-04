@@ -1,0 +1,22 @@
+# Token Budget Warning Rule
+# Notifies the agent when token usage exceeds 80%
+
+[rule]
+id = "token-budget-warning"
+name = "Token Budget Warning"
+description = "Warn when token usage exceeds 80% of budget"
+version = "1.0.0"
+trigger = "on_turn_start"
+priority = 100
+enabled = true
+core = true
+
+[condition]
+expression = "context.turn.token_usage > 0.8"
+
+[action]
+type = "notify_self"
+message = "Token budget at {{ (context.turn.token_usage * 100) | int }}%. Consider wrapping up or summarizing."
+category = "warning"
+priority = "high"
+deliver_at = "turn_start"

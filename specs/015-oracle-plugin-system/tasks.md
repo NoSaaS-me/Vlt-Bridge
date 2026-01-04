@@ -19,10 +19,10 @@
 
 **Purpose**: Project initialization, dependencies, and directory structure
 
-- [ ] T001 Add lupa and simpleeval dependencies to backend/pyproject.toml
-- [ ] T002 [P] Create plugins service directory structure in backend/src/services/plugins/
-- [ ] T003 [P] Create built-in rules directory in backend/src/services/plugins/rules/
-- [ ] T004 [P] Create scripts directory with README in backend/src/services/plugins/scripts/
+- [X] T001 Add lupa and simpleeval dependencies to backend/pyproject.toml
+- [X] T002 [P] Create plugins service directory structure in backend/src/services/plugins/
+- [X] T003 [P] Create built-in rules directory in backend/src/services/plugins/rules/
+- [X] T004 [P] Create scripts directory with README in backend/src/services/plugins/scripts/
 
 ---
 
@@ -32,20 +32,20 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 Add QUERY_START and SESSION_END event types to backend/src/services/ans/event.py
-- [ ] T006 Create plugin_state table migration in backend/src/services/database.py
-- [ ] T007 Add disabled_rules_json column to user_settings table in backend/src/services/database.py
-- [ ] T008 [P] Create HookPoint enum in backend/src/services/plugins/rule.py
-- [ ] T009 [P] Create ActionType enum in backend/src/services/plugins/rule.py
-- [ ] T010 Create Rule dataclass with validation in backend/src/services/plugins/rule.py
-- [ ] T011 Create RuleAction dataclass in backend/src/services/plugins/rule.py
-- [ ] T012 [P] Create TurnState dataclass in backend/src/services/plugins/context.py
-- [ ] T013 [P] Create HistoryState dataclass in backend/src/services/plugins/context.py
-- [ ] T014 [P] Create UserState dataclass in backend/src/services/plugins/context.py
-- [ ] T015 [P] Create ProjectState dataclass in backend/src/services/plugins/context.py
-- [ ] T016 Create PluginState dataclass with get() method in backend/src/services/plugins/context.py
-- [ ] T017 Create RuleContext dataclass combining all state in backend/src/services/plugins/context.py
-- [ ] T018 Create plugins __init__.py with public exports in backend/src/services/plugins/__init__.py
+- [X] T005 Add QUERY_START and SESSION_END event types to backend/src/services/ans/event.py
+- [X] T006 Create plugin_state table migration in backend/src/services/database.py
+- [X] T007 Add disabled_rules_json column to user_settings table in backend/src/services/database.py
+- [X] T008 [P] Create HookPoint enum in backend/src/services/plugins/rule.py
+- [X] T009 [P] Create ActionType enum in backend/src/services/plugins/rule.py
+- [X] T010 Create Rule dataclass with validation in backend/src/services/plugins/rule.py
+- [X] T011 Create RuleAction dataclass in backend/src/services/plugins/rule.py
+- [X] T012 [P] Create TurnState dataclass in backend/src/services/plugins/context.py
+- [X] T013 [P] Create HistoryState dataclass in backend/src/services/plugins/context.py
+- [X] T014 [P] Create UserState dataclass in backend/src/services/plugins/context.py
+- [X] T015 [P] Create ProjectState dataclass in backend/src/services/plugins/context.py
+- [X] T016 Create PluginState dataclass with get() method in backend/src/services/plugins/context.py
+- [X] T017 Create RuleContext dataclass combining all state in backend/src/services/plugins/context.py
+- [X] T018 Create plugins __init__.py with public exports in backend/src/services/plugins/__init__.py
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -59,21 +59,21 @@
 
 ### Tests for User Story 1
 
-- [ ] T019 [P] [US1] Unit test for RuleLoader TOML parsing in backend/tests/unit/services/plugins/test_loader.py
-- [ ] T020 [P] [US1] Unit test for ExpressionEvaluator in backend/tests/unit/services/plugins/test_expression.py
-- [ ] T021 [P] [US1] Unit test for Rule validation in backend/tests/unit/services/plugins/test_loader.py
+- [X] T019 [P] [US1] Unit test for RuleLoader TOML parsing in backend/tests/unit/services/plugins/test_loader.py
+- [X] T020 [P] [US1] Unit test for ExpressionEvaluator in backend/tests/unit/services/plugins/test_expression.py
+- [X] T021 [P] [US1] Unit test for Rule validation in backend/tests/unit/services/plugins/test_loader.py
 
 ### Implementation for User Story 1
 
-- [ ] T022 [US1] Implement ExpressionEvaluator using simpleeval in backend/src/services/plugins/expression.py
-- [ ] T023 [US1] Implement RuleLoader with TOML discovery and validation in backend/src/services/plugins/loader.py
-- [ ] T024 [P] [US1] Create token-budget-warning.toml built-in rule in backend/src/services/plugins/rules/token_budget.toml
-- [ ] T025 [P] [US1] Create iteration-budget-warning.toml built-in rule in backend/src/services/plugins/rules/iteration_budget.toml
-- [ ] T026 [P] [US1] Create large-result-hint.toml built-in rule in backend/src/services/plugins/rules/large_result.toml
-- [ ] T027 [P] [US1] Create repeated-failure-warning.toml built-in rule in backend/src/services/plugins/rules/repeated_failure.toml
-- [ ] T028 [US1] Implement ActionDispatcher for notify_self action in backend/src/services/plugins/actions.py
-- [ ] T029 [US1] Add log and set_state actions to ActionDispatcher in backend/src/services/plugins/actions.py
-- [ ] T030 [US1] Add emit_event action to ActionDispatcher in backend/src/services/plugins/actions.py
+- [X] T022 [US1] Implement ExpressionEvaluator using simpleeval in backend/src/services/plugins/expression.py
+- [X] T023 [US1] Implement RuleLoader with TOML discovery and validation in backend/src/services/plugins/loader.py
+- [X] T024 [P] [US1] Create token-budget-warning.toml built-in rule in backend/src/services/plugins/rules/token_budget.toml
+- [X] T025 [P] [US1] Create iteration-budget-warning.toml built-in rule in backend/src/services/plugins/rules/iteration_budget.toml
+- [X] T026 [P] [US1] Create large-result-hint.toml built-in rule in backend/src/services/plugins/rules/large_result.toml
+- [X] T027 [P] [US1] Create repeated-failure-warning.toml built-in rule in backend/src/services/plugins/rules/repeated_failure.toml
+- [X] T028 [US1] Implement ActionDispatcher for notify_self action in backend/src/services/plugins/actions.py
+- [X] T029 [US1] Add log and set_state actions to ActionDispatcher in backend/src/services/plugins/actions.py
+- [X] T030 [US1] Add emit_event action to ActionDispatcher in backend/src/services/plugins/actions.py
 
 **Checkpoint**: User Story 1 complete - rules can be defined and expressions evaluated
 
@@ -87,18 +87,18 @@
 
 ### Tests for User Story 2
 
-- [ ] T031 [P] [US2] Unit test for RuleEngine event subscription in backend/tests/unit/services/plugins/test_engine.py
-- [ ] T032 [P] [US2] Integration test for hook point firing in backend/tests/integration/test_rules_hooks.py
+- [X] T031 [P] [US2] Unit test for RuleEngine event subscription in backend/tests/unit/services/plugins/test_engine.py
+- [X] T032 [P] [US2] Integration test for hook point firing in backend/tests/integration/test_rules_hooks.py
 
 ### Implementation for User Story 2
 
-- [ ] T033 [US2] Implement RuleEngine with EventBus subscription in backend/src/services/plugins/engine.py
-- [ ] T034 [US2] Add rule evaluation logic to RuleEngine in backend/src/services/plugins/engine.py
-- [ ] T035 [US2] Add priority-ordered execution to RuleEngine in backend/src/services/plugins/engine.py
-- [ ] T036 [US2] Emit QUERY_START event in oracle_agent.py query() method
-- [ ] T037 [US2] Emit SESSION_END event in oracle_agent.py finally block
-- [ ] T038 [US2] Wire RuleEngine initialization in oracle_agent.py __init__
-- [ ] T039 [US2] Add rule context building from agent state in oracle_agent.py
+- [X] T033 [US2] Implement RuleEngine with EventBus subscription in backend/src/services/plugins/engine.py
+- [X] T034 [US2] Add rule evaluation logic to RuleEngine in backend/src/services/plugins/engine.py
+- [X] T035 [US2] Add priority-ordered execution to RuleEngine in backend/src/services/plugins/engine.py
+- [X] T036 [US2] Emit QUERY_START event in oracle_agent.py query() method
+- [X] T037 [US2] Emit SESSION_END event in oracle_agent.py finally block
+- [X] T038 [US2] Wire RuleEngine initialization in oracle_agent.py __init__
+- [X] T039 [US2] Add rule context building from agent state in oracle_agent.py
 
 **Checkpoint**: User Story 2 complete - rules fire on lifecycle events
 
@@ -112,18 +112,18 @@
 
 ### Tests for User Story 3
 
-- [ ] T040 [P] [US3] Unit test for RuleContextBuilder in backend/tests/unit/services/plugins/test_context.py
-- [ ] T041 [P] [US3] Unit test for PluginState persistence in backend/tests/unit/services/plugins/test_context.py
+- [X] T040 [P] [US3] Unit test for RuleContextBuilder in backend/tests/unit/services/plugins/test_context.py
+- [X] T041 [P] [US3] Unit test for PluginState persistence in backend/tests/unit/services/plugins/test_context.py
 
 ### Implementation for User Story 3
 
-- [ ] T042 [US3] Implement RuleContextBuilder in backend/src/services/plugins/context.py
-- [ ] T043 [US3] Add TurnState population from agent state in context.py
-- [ ] T044 [US3] Add HistoryState population from collected tool calls in context.py
-- [ ] T045 [US3] Add UserState population from user_settings in context.py
-- [ ] T046 [US3] Add ProjectState population from project settings in context.py
-- [ ] T047 [US3] Implement PluginStateService for SQLite persistence in backend/src/services/plugins/state.py
-- [ ] T048 [US3] Wire PluginState with database service in context.py
+- [X] T042 [US3] Implement RuleContextBuilder in backend/src/services/plugins/context.py
+- [X] T043 [US3] Add TurnState population from agent state in context.py
+- [X] T044 [US3] Add HistoryState population from collected tool calls in context.py
+- [X] T045 [US3] Add UserState population from user_settings in context.py
+- [X] T046 [US3] Add ProjectState population from project settings in context.py
+- [X] T047 [US3] Implement PluginStateService for SQLite persistence in backend/src/services/plugins/state.py
+- [X] T048 [US3] Wire PluginState with database service in context.py
 
 **Checkpoint**: User Story 3 complete - rules have full context access
 
@@ -137,19 +137,19 @@
 
 ### Tests for User Story 4
 
-- [ ] T049 [P] [US4] Unit test for LuaSandbox execution in backend/tests/unit/services/plugins/test_lua_sandbox.py
-- [ ] T050 [P] [US4] Unit test for LuaSandbox timeout in backend/tests/unit/services/plugins/test_lua_sandbox.py
-- [ ] T051 [P] [US4] Unit test for LuaSandbox sandboxing in backend/tests/unit/services/plugins/test_lua_sandbox.py
+- [X] T049 [P] [US4] Unit test for LuaSandbox execution in backend/tests/unit/services/plugins/test_lua_sandbox.py
+- [X] T050 [P] [US4] Unit test for LuaSandbox timeout in backend/tests/unit/services/plugins/test_lua_sandbox.py
+- [X] T051 [P] [US4] Unit test for LuaSandbox sandboxing in backend/tests/unit/services/plugins/test_lua_sandbox.py
 
 ### Implementation for User Story 4
 
-- [ ] T052 [US4] Implement LuaSandbox with lupa wrapper in backend/src/services/plugins/lua_sandbox.py
-- [ ] T053 [US4] Add environment whitelisting to LuaSandbox in lua_sandbox.py
-- [ ] T054 [US4] Add threading-based timeout enforcement in lua_sandbox.py
-- [ ] T055 [US4] Add memory limit enforcement (max_memory) in lua_sandbox.py
-- [ ] T056 [US4] Implement context exposure to Lua scripts in lua_sandbox.py
-- [ ] T057 [US4] Add script execution path to RuleEngine in engine.py
-- [ ] T058 [US4] Add error handling and propagation for Lua errors in engine.py
+- [X] T052 [US4] Implement LuaSandbox with lupa wrapper in backend/src/services/plugins/lua_sandbox.py
+- [X] T053 [US4] Add environment whitelisting to LuaSandbox in lua_sandbox.py
+- [X] T054 [US4] Add threading-based timeout enforcement in lua_sandbox.py
+- [X] T055 [US4] Add memory limit enforcement (max_memory) in lua_sandbox.py
+- [X] T056 [US4] Implement context exposure to Lua scripts in lua_sandbox.py
+- [X] T057 [US4] Add script execution path to RuleEngine in engine.py
+- [X] T058 [US4] Add error handling and propagation for Lua errors in engine.py
 
 **Checkpoint**: User Story 4 complete - complex logic via Lua scripts
 
@@ -163,23 +163,23 @@
 
 ### Tests for User Story 5
 
-- [ ] T059 [P] [US5] Integration test for Rules API endpoints in backend/tests/integration/test_rules_api.py
+- [X] T059 [P] [US5] Integration test for Rules API endpoints in backend/tests/integration/test_rules_api.py
 
 ### Implementation for User Story 5
 
-- [ ] T060 [US5] Create Pydantic models for Rules API in backend/src/models/rule.py
-- [ ] T061 [US5] Implement GET /api/rules endpoint in backend/src/api/routes/rules.py
-- [ ] T062 [US5] Implement GET /api/rules/{rule_id} endpoint in backend/src/api/routes/rules.py
-- [ ] T063 [US5] Implement POST /api/rules/{rule_id}/toggle endpoint in backend/src/api/routes/rules.py
-- [ ] T064 [US5] Implement POST /api/rules/{rule_id}/test endpoint in backend/src/api/routes/rules.py
-- [ ] T065 [US5] Register rules router in backend/src/api/main.py
-- [ ] T066 [US5] Add disabled_rules handling to RuleEngine in engine.py
-- [ ] T067 [P] [US5] Create TypeScript types for Rules in frontend/src/types/rules.ts
-- [ ] T068 [P] [US5] Create Rules API client functions in frontend/src/services/rules.ts
-- [ ] T069 [US5] Create RuleSettings component with rule list in frontend/src/components/RuleSettings.tsx
-- [ ] T070 [US5] Add rule toggle functionality to RuleSettings.tsx
-- [ ] T071 [US5] Add test button for demo users in RuleSettings.tsx
-- [ ] T072 [US5] Add Rules tab to Settings page in frontend/src/pages/Settings.tsx
+- [X] T060 [US5] Create Pydantic models for Rules API in backend/src/models/rule.py
+- [X] T061 [US5] Implement GET /api/rules endpoint in backend/src/api/routes/rules.py
+- [X] T062 [US5] Implement GET /api/rules/{rule_id} endpoint in backend/src/api/routes/rules.py
+- [X] T063 [US5] Implement POST /api/rules/{rule_id}/toggle endpoint in backend/src/api/routes/rules.py
+- [X] T064 [US5] Implement POST /api/rules/{rule_id}/test endpoint in backend/src/api/routes/rules.py
+- [X] T065 [US5] Register rules router in backend/src/api/main.py
+- [X] T066 [US5] Add disabled_rules handling to RuleEngine in engine.py
+- [X] T067 [P] [US5] Create TypeScript types for Rules in frontend/src/types/rules.ts
+- [X] T068 [P] [US5] Create Rules API client functions in frontend/src/services/rules.ts
+- [X] T069 [US5] Create RuleSettings component with rule list in frontend/src/components/RuleSettings.tsx
+- [X] T070 [US5] Add rule toggle functionality to RuleSettings.tsx
+- [X] T071 [US5] Add test button for demo users in RuleSettings.tsx
+- [X] T072 [US5] Add Rules tab to Settings page in frontend/src/pages/Settings.tsx
 
 **Checkpoint**: User Story 5 complete - rules manageable via UI
 
@@ -193,25 +193,25 @@
 
 ### Tests for User Story 6
 
-- [ ] T073 [P] [US6] Unit test for PluginLoader manifest parsing in backend/tests/unit/services/plugins/test_plugin_loader.py
-- [ ] T074 [P] [US6] Unit test for Plugin dependency validation in backend/tests/unit/services/plugins/test_plugin_loader.py
+- [X] T073 [P] [US6] Unit test for PluginLoader manifest parsing in backend/tests/unit/services/plugins/test_plugin_loader.py
+- [X] T074 [P] [US6] Unit test for Plugin dependency validation in backend/tests/unit/services/plugins/test_plugin_loader.py
 
 ### Implementation for User Story 6
 
-- [ ] T075 [US6] Create Plugin dataclass in backend/src/services/plugins/plugin.py
-- [ ] T076 [US6] Create PluginSetting dataclass in backend/src/services/plugins/plugin.py
-- [ ] T077 [US6] Implement PluginLoader with manifest parsing in backend/src/services/plugins/plugin_loader.py
-- [ ] T078 [US6] Add dependency validation to PluginLoader in plugin_loader.py
-- [ ] T079 [US6] Add plugin directory scanning to PluginLoader in plugin_loader.py
-- [ ] T080 [US6] Create plugins directory in backend/src/services/plugins/plugins/
-- [ ] T081 [US6] Implement GET /api/plugins endpoint in backend/src/api/routes/rules.py
-- [ ] T082 [US6] Implement GET /api/plugins/{plugin_id} endpoint in rules.py
-- [ ] T083 [US6] Implement GET/PUT /api/plugins/{plugin_id}/settings endpoints in rules.py
-- [ ] T084 [US6] Implement GET/DELETE /api/plugins/{plugin_id}/state endpoints in rules.py
-- [ ] T085 [US6] Add plugin_settings_json column handling in user_settings.py
-- [ ] T086 [P] [US6] Add Plugin types to frontend/src/types/rules.ts
-- [ ] T087 [P] [US6] Add Plugin API functions to frontend/src/services/rules.ts
-- [ ] T088 [US6] Add plugin section to RuleSettings component
+- [X] T075 [US6] Create Plugin dataclass in backend/src/services/plugins/plugin.py
+- [X] T076 [US6] Create PluginSetting dataclass in backend/src/services/plugins/plugin.py
+- [X] T077 [US6] Implement PluginLoader with manifest parsing in backend/src/services/plugins/plugin_loader.py
+- [X] T078 [US6] Add dependency validation to PluginLoader in plugin_loader.py
+- [X] T079 [US6] Add plugin directory scanning to PluginLoader in plugin_loader.py
+- [X] T080 [US6] Create plugins directory in backend/src/services/plugins/plugins/
+- [X] T081 [US6] Implement GET /api/plugins endpoint in backend/src/api/routes/rules.py
+- [X] T082 [US6] Implement GET /api/plugins/{plugin_id} endpoint in rules.py
+- [X] T083 [US6] Implement GET/PUT /api/plugins/{plugin_id}/settings endpoints in rules.py
+- [X] T084 [US6] Implement GET/DELETE /api/plugins/{plugin_id}/state endpoints in rules.py
+- [X] T085 [US6] Add plugin_settings_json column handling in user_settings.py
+- [X] T086 [P] [US6] Add Plugin types to frontend/src/types/rules.ts
+- [X] T087 [P] [US6] Add Plugin API functions to frontend/src/services/rules.ts
+- [X] T088 [US6] Add plugin section to RuleSettings component
 
 **Checkpoint**: User Story 6 complete - full plugin system
 
@@ -221,25 +221,25 @@
 
 **Purpose**: Documentation, optimization, and refinements
 
-- [ ] T089 [P] Create docs/plugin-api/README.md overview documentation
-- [ ] T090 [P] Create docs/plugin-api/architecture/overview.md
-- [ ] T091 [P] Create docs/plugin-api/architecture/performance.md
-- [ ] T092 [P] Create docs/plugin-api/architecture/roadmap.md with stretch goals
-- [ ] T093 [P] Create docs/plugin-api/rules/format.md TOML schema documentation
-- [ ] T094 [P] Create docs/plugin-api/rules/conditions.md expression language guide
-- [ ] T095 [P] Create docs/plugin-api/rules/actions.md action types documentation
-- [ ] T096 [P] Create docs/plugin-api/rules/examples.md common patterns
-- [ ] T097 [P] Create docs/plugin-api/context-api/reference.md full API reference
-- [ ] T098 [P] Create docs/plugin-api/hooks/lifecycle.md hook point documentation
-- [ ] T099 [P] Create docs/plugin-api/scripting/lua-guide.md Lua scripting guide
-- [ ] T100 [P] Create docs/plugin-api/scripting/sandbox.md security model
-- [ ] T101 [P] Create docs/plugin-api/built-ins/token-budget.md
-- [ ] T102 [P] Create docs/plugin-api/built-ins/iteration-budget.md
-- [ ] T103 [P] Create docs/plugin-api/built-ins/large-result.md
-- [ ] T104 [P] Create docs/plugin-api/built-ins/repeated-failure.md
-- [ ] T105 Run quickstart.md validation and fix any issues
-- [ ] T106 Performance optimization: rule evaluation caching
-- [ ] T107 Add logging for rule evaluation timing
+- [X] T089 [P] Create docs/plugin-api/README.md overview documentation
+- [X] T090 [P] Create docs/plugin-api/architecture/overview.md
+- [X] T091 [P] Create docs/plugin-api/architecture/performance.md
+- [X] T092 [P] Create docs/plugin-api/architecture/roadmap.md with stretch goals
+- [X] T093 [P] Create docs/plugin-api/rules/format.md TOML schema documentation
+- [X] T094 [P] Create docs/plugin-api/rules/conditions.md expression language guide
+- [X] T095 [P] Create docs/plugin-api/rules/actions.md action types documentation
+- [X] T096 [P] Create docs/plugin-api/rules/examples.md common patterns
+- [X] T097 [P] Create docs/plugin-api/context-api/reference.md full API reference
+- [X] T098 [P] Create docs/plugin-api/hooks/lifecycle.md hook point documentation
+- [X] T099 [P] Create docs/plugin-api/scripting/lua-guide.md Lua scripting guide
+- [X] T100 [P] Create docs/plugin-api/scripting/sandbox.md security model
+- [X] T101 [P] Create docs/plugin-api/built-ins/token-budget.md
+- [X] T102 [P] Create docs/plugin-api/built-ins/iteration-budget.md
+- [X] T103 [P] Create docs/plugin-api/built-ins/large-result.md
+- [X] T104 [P] Create docs/plugin-api/built-ins/repeated-failure.md
+- [X] T105 Run quickstart.md validation and fix any issues
+- [X] T106 Performance optimization: rule evaluation caching
+- [X] T107 Add logging for rule evaluation timing
 
 ---
 

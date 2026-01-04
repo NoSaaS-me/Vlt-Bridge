@@ -1,0 +1,24 @@
+# Iteration Budget Warning Rule
+# Notifies the agent when iteration count approaches the maximum
+
+[rule]
+id = "iteration-budget-warning"
+name = "Iteration Budget Warning"
+description = "Warn when iteration count exceeds 70% of maximum allowed"
+version = "1.0.0"
+trigger = "on_turn_start"
+priority = 90
+enabled = true
+core = true
+
+[condition]
+# Check if iteration_count / max_iterations > 0.7
+# Using a reasonable default of 10 iterations max if not configured
+expression = "context.turn.iteration_count > 7"
+
+[action]
+type = "notify_self"
+message = "Iteration {{ context.turn.iteration_count }} of 10. Consider completing current task or breaking it down."
+category = "warning"
+priority = "high"
+deliver_at = "turn_start"
