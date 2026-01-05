@@ -22,7 +22,7 @@ import { NotificationSettings as NotificationSettingsComponent } from '@/compone
 import { RuleSettings } from '@/components/RuleSettings';
 import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
 import { getIndexHealth, rebuildIndex, type RebuildResponse } from '@/services/api';
-import { getModels, getModelSettings, saveModelSettings } from '@/services/models';
+import { getModels, getModelSettings, saveModelSettings, testTavilyConnection } from '@/services/models';
 import { getContextSettings, updateContextSettings } from '@/services/context';
 import type { User } from '@/types/user';
 import type { IndexHealth } from '@/types/search';
@@ -53,6 +53,10 @@ export function Settings() {
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
   const [isSavingModels, setIsSavingModels] = useState(false);
   const [modelsSaved, setModelsSaved] = useState(false);
+
+  // Tavily test state
+  const [isTestingTavily, setIsTestingTavily] = useState(false);
+  const [tavilyTestResult, setTavilyTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Context settings state
   const [contextSettings, setContextSettings] = useState<ContextSettings | null>(null);
@@ -171,6 +175,9 @@ export function Settings() {
           librarian_timeout: 1200,
           openrouter_api_key: null,
           openrouter_api_key_set: false,
+          search_provider: 'none',
+          tavily_api_key: null,
+          tavily_api_key_set: false,
         });
       }
 
@@ -311,6 +318,33 @@ export function Settings() {
       console.error('Error saving model settings:', err);
     } finally {
       setIsSavingModels(false);
+    }
+  };
+
+  const handleTestTavily = async () => {
+    if (isDemoMode) {
+      setError('Demo mode is read-only. Sign in to test connections.');
+      return;
+    }
+
+    setIsTestingTavily(true);
+    setTavilyTestResult(null);
+    setError(null);
+
+    try {
+      const result = await testTavilyConnection();
+      setTavilyTestResult({
+        success: result.success,
+        message: result.message
+      });
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to test Tavily connection';
+      setTavilyTestResult({
+        success: false,
+        message: errorMessage
+      });
+    } finally {
+      setIsTestingTavily(false);
     }
   };
 
@@ -1070,10 +1104,104 @@ export function Settings() {
                 </div>
                 {modelSettings.openrouter_api_key_set && (
                   <p className="text-xs text-green-600 dark:text-green-400">
-                    ✓ API key is configured
+                    API key is configured
                   </p>
                 )}
               </div>
+
+              <Separator />
+
+              {/* Search Provider */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Web Search Provider</label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Select a search provider for deep research and web search capabilities
+                </p>
+                <Select
+                  value={modelSettings.search_provider}
+                  onValueChange={(value: 'tavily' | 'openrouter' | 'none') =>
+                    setModelSettings({ ...modelSettings, search_provider: value })
+                  }
+                >
+                  <SelectTrigger className="w-[280px]">
+                    <SelectValue placeholder="Select a search provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None (Disabled)</SelectItem>
+                    <SelectItem value="tavily">Tavily</SelectItem>
+                    <SelectItem value="openrouter">OpenRouter (via API)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Tavily API Key - only shown when Tavily is selected */}
+              {modelSettings.search_provider === 'tavily' && (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Tavily API Key</label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Required for Tavily search. Get your key at{' '}
+                      <a
+                        href="https://tavily.com/#api"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        tavily.com
+                      </a>
+                    </p>
+                    <div className="flex gap-2">
+                      <Input
+                        type="password"
+                        placeholder={modelSettings.tavily_api_key_set ? '••••••••••••••••' : 'tvly-...'}
+                        value={modelSettings.tavily_api_key || ''}
+                        onChange={(e) =>
+                          setModelSettings({ ...modelSettings, tavily_api_key: e.target.value })
+                        }
+                        className="font-mono text-xs"
+                      />
+                      {modelSettings.tavily_api_key_set && !modelSettings.tavily_api_key && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setModelSettings({ ...modelSettings, tavily_api_key: '' })}
+                          title="Clear saved API key"
+                        >
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {modelSettings.tavily_api_key_set && (
+                        <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                          <Check className="h-3 w-3" />
+                          API key is configured
+                        </span>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleTestTavily}
+                        disabled={isDemoMode || isTestingTavily || !modelSettings.tavily_api_key_set}
+                      >
+                        {isTestingTavily ? (
+                          <>
+                            <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                            Testing...
+                          </>
+                        ) : (
+                          'Test Connection'
+                        )}
+                      </Button>
+                    </div>
+                    {tavilyTestResult && (
+                      <p className={`text-xs ${tavilyTestResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                        {tavilyTestResult.message}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
 
               {modelsSaved && (
                 <Alert>

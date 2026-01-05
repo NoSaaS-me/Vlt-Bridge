@@ -324,6 +324,9 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     # Add GitHub OAuth columns to user_settings (016-github-integration)
     "ALTER TABLE user_settings ADD COLUMN github_token_encrypted TEXT",
     "ALTER TABLE user_settings ADD COLUMN github_username TEXT",
+    # Add search provider settings columns to user_settings
+    "ALTER TABLE user_settings ADD COLUMN search_provider TEXT DEFAULT 'none'",
+    "ALTER TABLE user_settings ADD COLUMN tavily_api_key TEXT",
 )
 
 

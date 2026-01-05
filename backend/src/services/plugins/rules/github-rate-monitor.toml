@@ -1,0 +1,16 @@
+[rule]
+id = "github-rate-monitor"
+name = "GitHub Rate Monitor"
+description = "Track GitHub API usage for rate limit awareness"
+trigger = "on_tool_complete"
+priority = 65
+core = false
+
+[condition]
+expression = "tool_completed('github_read') or tool_completed('github_search')"
+
+[action]
+type = "notify_self"
+message = "GitHub API used. Rate limit status: {{ context.result.rate_limit_remaining | default('unknown') }} remaining."
+category = "context"
+priority = "low"

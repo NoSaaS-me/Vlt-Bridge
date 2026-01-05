@@ -1,0 +1,19 @@
+[rule]
+id = "vault-save-reminder"
+name = "Vault Save Reminder"
+description = "Remind agent to save important findings to vault"
+trigger = "on_turn_end"
+priority = 55
+core = false
+
+[condition]
+expression = "plugin.settings.auto_save_reminder and context.history.tool_count > 5 and not context.state.get('vault_save_reminded', false)"
+
+[action]
+type = "notify_self"
+message = "You've gathered significant information. Consider saving key findings to the vault for future reference."
+category = "reminder"
+priority = "low"
+
+[action.state_update]
+vault_save_reminded = true

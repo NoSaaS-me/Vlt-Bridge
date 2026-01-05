@@ -1,0 +1,15 @@
+[rule]
+id = "turn-checkpoint"
+name = "Turn Checkpoint"
+description = "Emit checkpoint events every 5 turns"
+trigger = "on_turn_end"
+priority = 40
+core = false
+
+[condition]
+expression = "context.turn.number % 5 == 0"
+
+[action]
+type = "emit_event"
+event_type = "agent.checkpoint"
+payload = { turn = "{{ context.turn.number }}", timestamp = "{{ now() }}" }

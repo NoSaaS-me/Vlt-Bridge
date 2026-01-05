@@ -533,6 +533,40 @@
       },
       "agent_scope": ["oracle"],
       "category": "github"
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "deep_research",
+        "description": "Trigger comprehensive web research on a topic. Spawns parallel researchers to gather information from multiple sources, synthesizes findings, and returns the FULL REPORT directly in the response. You do NOT need to read from vault after calling this - the response includes: report.executive_summary, report.sections (with citations), key_findings, and sources with URLs. Optionally saves to vault for persistence. REQUIRES a search provider (Tavily or OpenRouter) configured in Settings > Models.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The research topic or question to investigate (e.g., 'Best practices for implementing OAuth 2.0 in microservices')"
+            },
+            "depth": {
+              "type": "string",
+              "enum": ["quick", "standard", "thorough"],
+              "default": "standard",
+              "description": "Research depth: 'quick' (2-3 sources, fast), 'standard' (5-8 sources, balanced), 'thorough' (10+ sources, comprehensive)"
+            },
+            "save_to_vault": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to save the final research report to the vault"
+            },
+            "output_folder": {
+              "type": "string",
+              "description": "Custom folder name within vault/research/ for output. If not specified, uses the research ID."
+            }
+          },
+          "required": ["query"]
+        }
+      },
+      "agent_scope": ["oracle"],
+      "category": "research"
     }
   ],
   "agent_definitions": {
@@ -545,7 +579,7 @@
         "vault_read", "vault_write", "vault_search", "vault_list",
         "thread_push", "thread_read", "thread_seek", "thread_list",
         "web_search", "web_fetch", "delegate_librarian", "notify_self",
-        "github_read", "github_search"
+        "github_read", "github_search", "deep_research"
       ],
       "max_turns": 15
     },

@@ -121,7 +121,7 @@ async def update_model_settings(
     Update user's model preferences.
 
     Allows partial updates - only provided fields will be updated.
-    Returns the updated settings (API key is never returned, only openrouter_api_key_set flag).
+    Returns the updated settings (API keys are never returned, only *_api_key_set flags).
     """
     try:
         updated_settings = settings_service.update_settings(
@@ -133,7 +133,9 @@ async def update_model_settings(
             thinking_enabled=request.thinking_enabled,
             chat_center_mode=request.chat_center_mode,
             librarian_timeout=request.librarian_timeout,
-            openrouter_api_key=request.openrouter_api_key
+            openrouter_api_key=request.openrouter_api_key,
+            search_provider=request.search_provider,
+            tavily_api_key=request.tavily_api_key
         )
         return updated_settings
     except Exception as e:
@@ -215,3 +217,59 @@ async def update_notification_settings(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update notification settings: {str(e)}"
         )
+
+
+@router.post("/settings/test-tavily")
+async def test_tavily_connection(
+    auth: AuthContext = Depends(get_auth_context),
+    settings_service: UserSettingsService = Depends(get_user_settings_service)
+):
+    """
+    Test the user's Tavily API key by making a simple search request.
+
+    Returns success if the key is valid, or an error message if not.
+    """
+    from ...services.tavily_service import TavilySearchService
+
+    try:
+        # Get user's Tavily API key
+        api_key = settings_service.get_tavily_api_key(auth.user_id)
+
+        if not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No Tavily API key configured"
+            )
+
+        # Test the key with a simple search
+        service = TavilySearchService(api_key=api_key)
+        result = await service.search("test query", max_results=1)
+
+        return {
+            "success": True,
+            "message": "Tavily API key is valid",
+            "results_count": len(result.results)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"Tavily test failed for user {auth.user_id}: {error_message}")
+
+        # Check for common error patterns
+        if "Invalid API Key" in error_message or "401" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Tavily API key"
+            )
+        elif "rate limit" in error_message.lower():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded"
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to test Tavily connection: {error_message}"
+            )

@@ -27,9 +27,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..models.project import DEFAULT_PROJECT_ID
+from ..models.research import ResearchDepth, ResearchRequest
 from ..models.thread import ThreadEntry
 from .database import DatabaseService
 from .github_service import GitHubService, get_github_service, GitHubError, GitHubNotFoundError
+from .research import ResearchOrchestrator, create_research_orchestrator
 from .indexer import IndexerService
 from .librarian_service import LibrarianService, get_librarian_service
 from .oracle_bridge import OracleBridge
@@ -94,6 +96,8 @@ class ToolExecutor:
         # GitHub operations - network latency dependent
         "github_read": 30.0,
         "github_search": 45.0,  # Search can be slower
+        # Deep research - can take significant time for thorough research
+        "deep_research": 1800.0,  # 30 minutes for thorough research
     }
 
     def __init__(
@@ -164,6 +168,8 @@ class ToolExecutor:
             # GitHub tools
             "github_read": self._github_read,
             "github_search": self._github_search,
+            # Research tools
+            "deep_research": self._deep_research,
         }
 
         # Cache for tool schemas
@@ -2304,6 +2310,217 @@ class ToolExecutor:
                 "error": f"Search failed: {str(e)}",
                 "error_type": "unknown",
                 "query": query,
+            }
+
+    # =========================================================================
+    # Research Tool Implementations
+    # =========================================================================
+
+    async def _deep_research(
+        self,
+        user_id: str,
+        query: str,
+        depth: str = "standard",
+        save_to_vault: bool = True,
+        output_folder: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Trigger deep research on a topic using the research orchestrator.
+
+        This tool initiates comprehensive web research that:
+        1. Generates a research brief from the query
+        2. Plans subtopics and spawns parallel researchers
+        3. Aggregates and synthesizes findings from multiple sources
+        4. Generates a final report with citations
+        5. Optionally saves the report to the vault
+
+        Args:
+            user_id: User ID for vault access and settings
+            query: Research topic or question to investigate
+            depth: Research depth - "quick" (2-3 sources), "standard" (5-8 sources),
+                   or "thorough" (10+ sources)
+            save_to_vault: Whether to save the final report to the vault
+            output_folder: Custom folder name within vault/research/ for output
+            **kwargs: Additional arguments (project_id, etc.)
+
+        Returns:
+            Dict with:
+                - research_id: Unique identifier for the research
+                - status: Final status ("completed" or "failed")
+                - report_path: Path to saved report (if save_to_vault=True)
+                - executive_summary: Brief summary of findings
+                - sources_count: Number of sources consulted
+                - error: Error message if failed
+        """
+        import os
+
+        logger.info(
+            f"Starting deep research: query='{query[:100]}...', depth={depth}, "
+            f"save_to_vault={save_to_vault}, output_folder={output_folder}",
+            extra={"user_id": user_id},
+        )
+
+        # Validate and convert depth
+        try:
+            research_depth = ResearchDepth(depth.lower())
+        except ValueError:
+            valid_depths = [d.value for d in ResearchDepth]
+            return {
+                "error": f"Invalid depth '{depth}'. Must be one of: {valid_depths}",
+                "error_type": "validation_error",
+                "query": query,
+            }
+
+        # Get vault path for the user
+        vault_base = os.environ.get("VAULT_BASE_DIR", "./data/vaults")
+        project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
+        vault_path = os.path.join(vault_base, user_id, project_id) if save_to_vault else None
+
+        # Get user's search settings
+        from .user_settings import UserSettingsService
+        user_settings = UserSettingsService()
+        search_provider = user_settings.get_search_provider(user_id)
+        tavily_api_key = user_settings.get_tavily_api_key(user_id)
+        openrouter_api_key = user_settings.get_openrouter_api_key(user_id)
+
+        # Validate search provider is configured
+        if search_provider == "none":
+            return {
+                "error": "No search provider configured",
+                "error_type": "configuration_error",
+                "query": query,
+                "suggestion": (
+                    "Deep research requires a search provider. "
+                    "Go to Settings > Models and configure either Tavily or OpenRouter as your search provider."
+                ),
+            }
+        elif search_provider == "tavily" and not tavily_api_key:
+            return {
+                "error": "Tavily API key not configured",
+                "error_type": "configuration_error",
+                "query": query,
+                "suggestion": (
+                    "You've selected Tavily as your search provider but haven't set an API key. "
+                    "Go to Settings > Models and enter your Tavily API key, or switch to OpenRouter."
+                ),
+            }
+        elif search_provider == "openrouter" and not openrouter_api_key:
+            return {
+                "error": "OpenRouter API key not configured",
+                "error_type": "configuration_error",
+                "query": query,
+                "suggestion": (
+                    "You've selected OpenRouter as your search provider but haven't set an API key. "
+                    "Go to Settings > Models and enter your OpenRouter API key."
+                ),
+            }
+
+        # Create the research request
+        request = ResearchRequest(
+            query=query,
+            depth=research_depth,
+            save_to_vault=save_to_vault,
+            output_folder=output_folder,
+        )
+
+        # Create the orchestrator with search configuration
+        orchestrator = create_research_orchestrator(
+            user_id=user_id,
+            vault_path=vault_path,
+            search_provider=search_provider,
+            tavily_api_key=tavily_api_key,
+            openrouter_api_key=openrouter_api_key,
+        )
+
+        try:
+            # Run research and get full state with report
+            state = await orchestrator.run_research(request)
+
+            research_id = state.research_id
+            final_status = state.status.value
+            sources_count = len(state.all_sources)
+
+            # Build the result with FULL REPORT CONTENT
+            result: Dict[str, Any] = {
+                "research_id": research_id,
+                "status": final_status,
+                "query": query,
+                "depth": depth,
+                "sources_count": sources_count,
+                "success": final_status == "completed",
+            }
+
+            # Include the full report content so agent doesn't need vault reads
+            if state.report:
+                result["report"] = {
+                    "title": state.report.title,
+                    "executive_summary": state.report.executive_summary,
+                    "sections": state.report.sections,
+                    "recommendations": state.report.recommendations,
+                    "limitations": state.report.limitations,
+                    "quality_metrics": {
+                        "comprehensiveness": state.report.comprehensiveness,
+                        "analytical_depth": state.report.analytical_depth,
+                        "source_diversity": state.report.source_diversity,
+                        "citation_density": state.report.citation_density,
+                    },
+                }
+
+                # Include sources with their content
+                result["sources"] = [
+                    {
+                        "id": s.id,
+                        "url": s.url,
+                        "title": s.title,
+                        "content_summary": s.content_summary,
+                        "relevance_score": s.relevance_score,
+                        "key_quotes": s.key_quotes,
+                    }
+                    for s in state.all_sources[:20]  # Limit to top 20 sources
+                ]
+
+                # Include key findings
+                result["key_findings"] = [
+                    {
+                        "claim": f.claim,
+                        "source_ids": f.source_ids,
+                        "confidence": f.confidence,
+                    }
+                    for f in state.compressed_findings[:15]  # Limit to top 15 findings
+                ]
+
+            # Add vault path if saved (for reference, not primary delivery)
+            if save_to_vault and state.vault_folder:
+                result["vault_path"] = state.vault_folder
+                result["message"] = "Research completed. Full report included below. Also saved to vault for future reference."
+            elif final_status == "completed":
+                result["message"] = "Research completed. Full report included below."
+            else:
+                result["message"] = f"Research ended with status: {final_status}"
+
+            logger.info(
+                f"Deep research completed: research_id={research_id}, status={final_status}, "
+                f"sources={sources_count}",
+                extra={"user_id": user_id},
+            )
+
+            return result
+
+        except Exception as e:
+            logger.exception(f"Deep research failed: {e}")
+            return {
+                "error": f"Research failed: {str(e)}",
+                "error_type": "research_error",
+                "query": query,
+                "depth": depth,
+                "success": False,
+                "suggestion": (
+                    "The research operation encountered an error. This could be due to: "
+                    "(1) network issues with search services, "
+                    "(2) LLM API errors, "
+                    "(3) rate limiting. Consider retrying with a simpler query or lower depth."
+                ),
             }
 
 

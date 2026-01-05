@@ -1,0 +1,16 @@
+[rule]
+id = "conversation-length-warning"
+name = "Conversation Length Warning"
+description = "Warn when conversation exceeds message threshold"
+trigger = "on_turn_start"
+priority = 60
+core = false
+
+[condition]
+expression = "message_count_above(30)"
+
+[action]
+type = "notify_self"
+message = "Long conversation detected. Consider starting fresh for better coherence."
+category = "reminder"
+priority = "normal"

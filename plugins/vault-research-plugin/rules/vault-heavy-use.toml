@@ -1,0 +1,16 @@
+[rule]
+id = "vault-heavy-use"
+name = "Vault Heavy Use Warning"
+description = "Warn when vault operations exceed configured threshold"
+trigger = "on_tool_complete"
+priority = 70
+core = false
+
+[condition]
+expression = "(tool_completed('vault_search') or tool_completed('vault_read')) and context.state.get('vault_op_count', 0) >= plugin.settings.heavy_use_threshold"
+
+[action]
+type = "notify_self"
+message = "Heavy vault usage detected: {{ context.state.get('vault_op_count', 0) }} operations. Consider consolidating or summarizing findings."
+category = "warning"
+priority = "normal"
