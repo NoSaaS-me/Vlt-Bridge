@@ -243,6 +243,16 @@ expires: {{ expiration_date }}
 - **Vault Path**: {{ vault_path or 'Default' }}
 - **Active Threads**: {{ active_threads or 'None loaded' }}
 
+## GitHub Repository Context
+
+When using `github_read` or `github_search` tools to access this project's codebase:
+
+- **Repository**: `{{ github_repo or 'NoSaaS-me/Vlt-Bridge' }}`
+- **Current Branch**: `{{ github_branch or 'master' }}`
+- **Default Branch**: `master`
+
+**Important**: When reading files from this project's repo, use the correct `owner/repo` format above. Do not guess or fabricate repository names.
+
 ---
 ### META 
 
