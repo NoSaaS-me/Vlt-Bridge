@@ -407,7 +407,7 @@ export function MainApp() {
   // T093: Handle edit button click
   const handleEdit = () => {
     if (isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in with Hugging Face to edit notes.');
+      toast.error('Demo mode is read-only. Sign in with GitHub to edit notes.');
       return;
     }
     setIsEditMode(true);
@@ -482,7 +482,7 @@ export function MainApp() {
   // Handle note dialog open change
   const handleDialogOpenChange = (open: boolean) => {
     if (open && isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in with Hugging Face to create notes.');
+      toast.error('Demo mode is read-only. Sign in with GitHub to create notes.');
       return;
     }
     setIsNewNoteDialogOpen(open);
@@ -495,7 +495,7 @@ export function MainApp() {
   // Handle folder dialog open change
   const handleFolderDialogOpenChange = (open: boolean) => {
     if (open && isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in with Hugging Face to create folders.');
+      toast.error('Demo mode is read-only. Sign in with GitHub to create folders.');
       return;
     }
     setIsNewFolderDialogOpen(open);
@@ -720,7 +720,7 @@ export function MainApp() {
                 variant="default"
                 size="sm"
                 onClick={() => login()}
-                title="Sign in with Hugging Face"
+                title="Sign in with GitHub"
               >
                 Sign in
               </Button>

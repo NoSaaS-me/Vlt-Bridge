@@ -4,11 +4,11 @@ from .auth import JWTPayload, TokenResponse
 from .index import IndexHealth, Tag, Wikilink
 from .note import Note, NoteCreate, NoteMetadata, NoteSummary, NoteUpdate
 from .search import SearchRequest, SearchResult
-from .user import HFProfile, User
+from .user import GHProfile, User
 
 __all__ = [
     "User",
-    "HFProfile",
+    "GHProfile",
     "Note",
     "NoteMetadata",
     "NoteCreate",

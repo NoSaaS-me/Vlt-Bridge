@@ -289,7 +289,7 @@ All API requests require a `Bearer` token in the `Authorization` header:
 Authorization: Bearer <your-jwt-token>
 ```
 
-Get your token from [[Settings]] after signing in with Hugging Face OAuth.
+Get your token from [[Settings]] after signing in with GitHub.
 
 ## Endpoints
 
@@ -627,7 +627,7 @@ A: **No, this is a demo instance.** All data is ephemeral and resets on server r
 
 **Q: How do I sign in?**
 
-A: Click "Sign in with Hugging Face" on the login page. You'll authenticate via HF OAuth and get isolated vault access.
+A: Click "Sign in with GitHub" on the login page. You'll authenticate via GitHub OAuth and get isolated vault access.
 
 ## ChatGPT Integration
 
@@ -1532,7 +1532,7 @@ WELCOME_NOTE_FILENAME = "Welcome.md"
 WELCOME_NOTE_TITLE = "Welcome to Your Vault"
 WELCOME_NOTE_TEMPLATE = """# Welcome to Your Vault
 
-Thanks for signing in with Hugging Face! This workspace is private to **{user_id}**.
+Thanks for signing in with GitHub! This workspace is private to **{user_id}**.
 
 ## Next steps
 

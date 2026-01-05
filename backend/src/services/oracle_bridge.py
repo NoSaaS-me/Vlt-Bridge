@@ -153,14 +153,17 @@ class OracleBridge:
                 args.extend(["--project", project])
             args.append("--json")
 
+            logger.debug(f"Checking CodeRAG status with args: {args}")
             result = subprocess.run(
                 [self.vlt_command] + args,
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
+            logger.debug(f"CodeRAG status result: returncode={result.returncode}, stdout={result.stdout[:200] if result.stdout else 'empty'}, stderr={result.stderr[:200] if result.stderr else 'empty'}")
 
             if result.returncode != 0:
+                logger.warning(f"CodeRAG status check failed: returncode={result.returncode}, stderr={result.stderr}")
                 self._coderag_initialized = False
                 return False
 

@@ -910,15 +910,33 @@ async def request_summarize(thread_id: str, request: SummarizeRequest):
 # Entry Point
 # =============================================================================
 
-def run_server(host: str = "127.0.0.1", port: int = 8765):
-    """Run the daemon server."""
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    profile_name: Optional[str] = None,
+):
+    """
+    Run the daemon server.
+
+    Args:
+        host: Host to bind to (default: 127.0.0.1)
+        port: Port to listen on (default: 8765)
+        profile_name: Profile to use for settings. If None, uses active profile.
+    """
     import uvicorn
+
+    # Set up profile before loading settings
+    if profile_name:
+        import os
+        os.environ["VLT_PROFILE"] = profile_name
 
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    logger.info(f"Starting daemon for profile: {profile_name or 'default'}")
 
     # Handle signals for graceful shutdown
     def handle_signal(signum, frame):
@@ -939,4 +957,25 @@ def run_server(host: str = "127.0.0.1", port: int = 8765):
 
 
 if __name__ == "__main__":
-    run_server()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="VLT Daemon Server")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host to bind to (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Port to listen on (default: 8765)",
+    )
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Profile to use (default: active profile)",
+    )
+
+    args = parser.parse_args()
+    run_server(host=args.host, port=args.port, profile_name=args.profile)

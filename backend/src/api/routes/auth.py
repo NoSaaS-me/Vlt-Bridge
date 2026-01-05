@@ -1,4 +1,4 @@
-"""OAuth and authentication routes for Hugging Face integration."""
+"""OAuth and authentication routes with GitHub OAuth as primary login."""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ import secrets
 import time
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
 from ...models.auth import TokenResponse
-from ...models.user import HFProfile, User
+from ...models.user import GHProfile, User
 from ...services.auth import AuthError, AuthService
 from ...services.config import get_config
 from ...services.github_service import get_github_service, GitHubError
@@ -27,35 +27,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 OAUTH_STATE_TTL_SECONDS = 300
-oauth_states: dict[str, float] = {}
-github_oauth_states: dict[str, tuple[float, str]] = {}  # state -> (timestamp, user_id)
+# GitHub OAuth states for primary login (no user_id yet)
+github_login_states: dict[str, float] = {}  # state -> timestamp
+# GitHub OAuth states for connecting GitHub to existing account (has user_id)
+github_connect_states: dict[str, tuple[float, str]] = {}  # state -> (timestamp, user_id)
 
 auth_service = AuthService()
 
 
-def _create_oauth_state() -> str:
-    """Generate a state token and store it with a timestamp."""
+def _create_github_login_state() -> str:
+    """Generate a state token for GitHub login and store it with a timestamp."""
     now = time.time()
     # Garbage collect expired states
     expired = [
         state
-        for state, ts in oauth_states.items()
+        for state, ts in github_login_states.items()
         if now - ts > OAUTH_STATE_TTL_SECONDS
     ]
     for state in expired:
-        oauth_states.pop(state, None)
+        github_login_states.pop(state, None)
 
     state = secrets.token_urlsafe(32)
-    oauth_states[state] = now
+    github_login_states[state] = now
     return state
 
 
-def _consume_oauth_state(state: str | None) -> None:
-    """Validate and remove the state token; raise if invalid."""
-    if not state or state not in oauth_states:
+def _consume_github_login_state(state: str | None) -> None:
+    """Validate and remove the GitHub login state token; raise if invalid."""
+    if not state or state not in github_login_states:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state.")
     # Remove to prevent reuse
-    del oauth_states[state]
+    del github_login_states[state]
 
 
 def get_base_url(request: Request) -> str:
@@ -94,43 +96,41 @@ def get_base_url(request: Request) -> str:
 
 @router.get("/auth/login")
 async def login(request: Request):
-    """Redirect to Hugging Face OAuth authorization page."""
-    config = get_config()
-
-    if not config.hf_oauth_client_id:
+    """Redirect to GitHub OAuth authorization page for primary login."""
+    try:
+        github_service = get_github_service()
+    except GitHubError as e:
+        logger.error(f"GitHub service initialization error: {e}")
         raise HTTPException(
             status_code=501,
-            detail="OAuth not configured. Set HF_OAUTH_CLIENT_ID and HF_OAUTH_CLIENT_SECRET environment variables.",
+            detail="GitHub OAuth not configured. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET environment variables.",
         )
 
-    # Get base URL from request (handles HF Spaces proxy)
+    # Get base URL from request
     base_url = get_base_url(request)
     redirect_uri = f"{base_url}/auth/callback"
 
-    state = _create_oauth_state()
+    state = _create_github_login_state()
 
-    # Construct HF OAuth URL
-    oauth_base = "https://huggingface.co/oauth/authorize"
-    params = {
-        "client_id": config.hf_oauth_client_id,
-        "redirect_uri": redirect_uri,
-        "scope": "openid profile email",
-        "response_type": "code",
-        "state": state,
-    }
+    # Get GitHub OAuth URL
+    try:
+        oauth_url = github_service.get_oauth_url(state=state, redirect_uri=redirect_uri)
+    except GitHubError as e:
+        logger.error(f"Failed to get GitHub OAuth URL: {e}")
+        raise HTTPException(
+            status_code=501,
+            detail="GitHub OAuth not configured. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET environment variables.",
+        )
 
-    auth_url = f"{oauth_base}?{urlencode(params)}"
     logger.info(
-        "Initiating OAuth flow",
+        "Initiating GitHub OAuth login flow",
         extra={
             "redirect_uri": redirect_uri,
-            "auth_url": auth_url,
-            "client_id": config.hf_oauth_client_id[:8] + "...",
             "state": state,
         },
     )
 
-    return RedirectResponse(url=auth_url, status_code=302)
+    return RedirectResponse(url=oauth_url, status_code=302)
 
 
 @router.get("/auth/callback")
@@ -141,21 +141,18 @@ async def callback(
         None, description="State parameter for CSRF protection"
     ),
 ):
-    """Handle OAuth callback from Hugging Face."""
-    config = get_config()
+    """Handle OAuth callback from GitHub for primary login."""
+    github_service = get_github_service()
 
-    if not config.hf_oauth_client_id or not config.hf_oauth_client_secret:
-        raise HTTPException(status_code=501, detail="OAuth not configured")
-
-    # Get base URL from request (must match the one sent to HF)
+    # Get base URL from request (must match the one sent to GitHub)
     base_url = get_base_url(request)
     redirect_uri = f"{base_url}/auth/callback"
 
     # Validate state token to prevent CSRF and replay attacks
-    _consume_oauth_state(state)
+    _consume_github_login_state(state)
 
     logger.info(
-        "OAuth callback received",
+        "GitHub OAuth login callback received",
         extra={
             "redirect_uri": redirect_uri,
             "state": state,
@@ -164,112 +161,75 @@ async def callback(
     )
 
     try:
-        # Exchange authorization code for access token
-        async with httpx.AsyncClient() as client:
-            token_response = await client.post(
-                "https://huggingface.co/oauth/token",
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": redirect_uri,
-                    "client_id": config.hf_oauth_client_id,
-                    "client_secret": config.hf_oauth_client_secret,
-                },
-            )
+        # Exchange code for token using GitHub service
+        access_token, github_username = await github_service.exchange_code_for_token(
+            code=code,
+            redirect_uri=redirect_uri,
+        )
 
-            if token_response.status_code != 200:
-                logger.error(f"Token exchange failed: {token_response.text}")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Failed to exchange authorization code for token",
-                )
+        # Use GitHub username (prefixed with "gh-") as user_id
+        user_id = f"gh-{github_username}"
 
-            token_data = token_response.json()
-            access_token = token_data.get("access_token")
+        # Store the GitHub token for the user (for github_read/github_search tools)
+        github_service.store_token(user_id, access_token, github_username)
 
-            if not access_token:
-                raise HTTPException(
-                    status_code=400, detail="No access token in response"
-                )
-
-            # Get user profile from HF
-            user_response = await client.get(
-                "https://huggingface.co/api/whoami-v2",
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-
-            if user_response.status_code != 200:
-                logger.error(f"User profile fetch failed: {user_response.text}")
-                raise HTTPException(
-                    status_code=400, detail="Failed to fetch user profile"
-                )
-
-            user_data = user_response.json()
-            username = user_data.get("name")
-            email = user_data.get("email")
-
-            if not username:
-                raise HTTPException(
-                    status_code=400, detail="No username in user profile"
-                )
-
-            # Create JWT for our application
-            import jwt
-            from datetime import datetime, timedelta, timezone
-
-            user_id = username  # Use HF username as user_id
-
-            # Ensure the user has an initialized vault with a welcome note
-            try:
-                created = ensure_welcome_note(user_id)
-                logger.info(
-                    "Ensured welcome note for user",
-                    extra={"user_id": user_id, "created": created},
-                )
-            except Exception as seed_exc:
-                logger.exception(
-                    "Failed to seed welcome note for user",
-                    extra={"user_id": user_id},
-                )
-
-            payload = {
-                "sub": user_id,
-                "username": username,
-                "email": email,
-                "exp": datetime.now(timezone.utc) + timedelta(days=7),
-                "iat": datetime.now(timezone.utc),
-            }
-
-            try:
-                jwt_secret = auth_service._require_secret()
-            except AuthError as exc:
-                raise HTTPException(status_code=exc.status_code, detail=exc.message)
-
-            jwt_token = jwt.encode(payload, jwt_secret, algorithm="HS256")
-
+        # Ensure the user has an initialized vault with a welcome note
+        try:
+            created = ensure_welcome_note(user_id)
             logger.info(
-                "OAuth successful",
-                extra={
-                    "username": username,
-                    "user_id": user_id,
-                    "email": email,
-                },
+                "Ensured welcome note for user",
+                extra={"user_id": user_id, "created": created},
+            )
+        except Exception as seed_exc:
+            logger.exception(
+                "Failed to seed welcome note for user",
+                extra={"user_id": user_id},
             )
 
-            # Redirect to frontend with token in URL hash
-            frontend_url = base_url
-            redirect_url = f"{frontend_url}/#token={jwt_token}"
-            logger.info(f"Redirecting to frontend: {redirect_url}")
-            return RedirectResponse(url=redirect_url, status_code=302)
+        # Create JWT for our application
+        import jwt
+        from datetime import timedelta
 
-    except httpx.HTTPError as e:
-        logger.exception(f"HTTP error during OAuth: {e}")
-        raise HTTPException(
-            status_code=500, detail="OAuth flow failed due to network error"
+        payload = {
+            "sub": user_id,
+            "username": github_username,
+            "github_username": github_username,
+            "exp": datetime.now(timezone.utc) + timedelta(days=7),
+            "iat": datetime.now(timezone.utc),
+        }
+
+        try:
+            jwt_secret = auth_service._require_secret()
+        except AuthError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+        jwt_token = jwt.encode(payload, jwt_secret, algorithm="HS256")
+
+        logger.info(
+            "GitHub OAuth login successful",
+            extra={
+                "github_username": github_username,
+                "user_id": user_id,
+            },
+        )
+
+        # Redirect to frontend with token in URL hash
+        redirect_url = f"{base_url}/#token={jwt_token}"
+        logger.info(f"Redirecting to frontend: {redirect_url}")
+        return RedirectResponse(url=redirect_url, status_code=302)
+
+    except GitHubError as e:
+        logger.error(f"GitHub OAuth error: {e}")
+        return RedirectResponse(
+            url=f"{base_url}/#login=error&message={quote(e.message)}",
+            status_code=302,
         )
     except Exception as e:
-        logger.exception(f"Unexpected error during OAuth: {e}")
-        raise HTTPException(status_code=500, detail="OAuth flow failed")
+        logger.exception(f"Unexpected error during GitHub OAuth login: {e}")
+        return RedirectResponse(
+            url=f"{base_url}/#login=error&message={quote('Login failed')}",
+            status_code=302,
+        )
 
 
 @router.post("/api/tokens", response_model=TokenResponse)
@@ -293,62 +253,69 @@ async def get_current_user(auth: AuthContext = Depends(require_auth_context)):
     except Exception:
         created_dt = datetime.now(timezone.utc)
 
-    profile: Optional[HFProfile] = None
-    if user_id.startswith("hf-"):
-        username = user_id[len("hf-") :]
-        profile = HFProfile(
+    profile: Optional[GHProfile] = None
+    if user_id.startswith("gh-"):
+        username = user_id[len("gh-") :]
+        profile = GHProfile(
             username=username,
             name=username.replace("-", " ").title(),
-            avatar_url=f"https://api.dicebear.com/7.x/initials/svg?seed={username}",
+            avatar_url=f"https://github.com/{username}.png",
         )
     elif user_id not in {"local-dev", "demo-user"}:
-        profile = HFProfile(username=user_id)
+        # Fallback for other user types
+        profile = GHProfile(
+            username=user_id,
+            avatar_url=f"https://api.dicebear.com/7.x/initials/svg?seed={user_id}",
+        )
 
     return User(
         user_id=user_id,
-        hf_profile=profile,
+        gh_profile=profile,
         vault_path=str(vault_path),
         created=created_dt,
     )
 
 
 # =========================================================================
-# GitHub OAuth Routes
+# GitHub OAuth Routes (for re-connecting/refreshing GitHub token)
 # =========================================================================
 
 
-def _create_github_oauth_state(user_id: str) -> str:
-    """Generate a state token for GitHub OAuth and store it with user_id."""
+def _create_github_connect_state(user_id: str) -> str:
+    """Generate a state token for GitHub connect and store it with user_id."""
     now = time.time()
     # Garbage collect expired states
     expired = [
         state
-        for state, (ts, _) in github_oauth_states.items()
+        for state, (ts, _) in github_connect_states.items()
         if now - ts > OAUTH_STATE_TTL_SECONDS
     ]
     for state in expired:
-        github_oauth_states.pop(state, None)
+        github_connect_states.pop(state, None)
 
     state = secrets.token_urlsafe(32)
-    github_oauth_states[state] = (now, user_id)
+    github_connect_states[state] = (now, user_id)
     return state
 
 
-def _consume_github_oauth_state(state: str | None) -> str:
-    """Validate and remove the GitHub state token; return user_id or raise."""
-    if not state or state not in github_oauth_states:
+def _consume_github_connect_state(state: str | None) -> str:
+    """Validate and remove the GitHub connect state token; return user_id or raise."""
+    if not state or state not in github_connect_states:
         raise HTTPException(status_code=400, detail="Invalid or expired GitHub OAuth state.")
-    ts, user_id = github_oauth_states.pop(state)
+    ts, user_id = github_connect_states.pop(state)
     return user_id
 
 
 @router.get("/api/auth/github")
-async def github_login(
+async def github_reconnect(
     request: Request,
     token: Optional[str] = Query(None, description="JWT token for authentication (required for browser navigation)"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
 ):
-    """Initiate GitHub OAuth flow to connect GitHub account.
+    """Initiate GitHub OAuth flow to reconnect/refresh GitHub token.
+
+    This endpoint is for users who are already logged in but need to
+    reconnect their GitHub account (e.g., token expired, or to update permissions).
 
     Accepts authentication via either:
     - Authorization header (for programmatic API calls)
@@ -365,7 +332,6 @@ async def github_login(
 
     def error_redirect(message: str) -> RedirectResponse:
         """Redirect to settings with error message in hash."""
-        from urllib.parse import quote
         encoded_message = quote(message)
         return RedirectResponse(
             url=f"{base_url}/settings#github=error&message={encoded_message}",
@@ -408,13 +374,13 @@ async def github_login(
         redirect_uri = f"{base_url}/api/auth/github/callback"
 
         # Create state with user_id for linking after callback
-        state = _create_github_oauth_state(user_id)
+        state = _create_github_connect_state(user_id)
 
         # Get OAuth URL - this may raise GitHubError if not configured
         oauth_url = github_service.get_oauth_url(state=state, redirect_uri=redirect_uri)
 
         logger.info(
-            "Initiating GitHub OAuth flow",
+            "Initiating GitHub OAuth reconnect flow",
             extra={
                 "user_id": user_id,
                 "redirect_uri": redirect_uri,
@@ -429,23 +395,23 @@ async def github_login(
 
 
 @router.get("/api/auth/github/callback")
-async def github_callback(
+async def github_reconnect_callback(
     request: Request,
     code: str = Query(..., description="GitHub OAuth authorization code"),
     state: Optional[str] = Query(None, description="State parameter for CSRF protection"),
 ):
-    """Handle GitHub OAuth callback."""
+    """Handle GitHub OAuth callback for reconnecting GitHub token."""
     github_service = get_github_service()
 
     # Validate state and get user_id
-    user_id = _consume_github_oauth_state(state)
+    user_id = _consume_github_connect_state(state)
 
     # Get redirect URI (must match the one sent to GitHub)
     base_url = get_base_url(request)
     redirect_uri = f"{base_url}/api/auth/github/callback"
 
     logger.info(
-        "GitHub OAuth callback received",
+        "GitHub OAuth reconnect callback received",
         extra={
             "user_id": user_id,
             "redirect_uri": redirect_uri,
@@ -464,7 +430,7 @@ async def github_callback(
         github_service.store_token(user_id, access_token, github_username)
 
         logger.info(
-            f"GitHub connected successfully for user {user_id} (GitHub: {github_username})"
+            f"GitHub reconnected successfully for user {user_id} (GitHub: {github_username})"
         )
 
         # Redirect back to settings page with success message
@@ -476,13 +442,13 @@ async def github_callback(
     except GitHubError as e:
         logger.error(f"GitHub OAuth error: {e}")
         return RedirectResponse(
-            url=f"{base_url}/settings#github=error&message={e.message}",
+            url=f"{base_url}/settings#github=error&message={quote(e.message)}",
             status_code=302,
         )
     except Exception as e:
         logger.exception(f"Unexpected error during GitHub OAuth: {e}")
         return RedirectResponse(
-            url=f"{base_url}/settings#github=error&message=OAuth+failed",
+            url=f"{base_url}/settings#github=error&message={quote('OAuth failed')}",
             status_code=302,
         )
 

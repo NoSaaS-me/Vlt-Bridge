@@ -69,7 +69,7 @@ def widget_resource() -> str:
             
         # Replace relative asset paths with absolute URLs for ChatGPT iframe
         config = get_config()
-        base_url = config.hf_space_url.rstrip("/")
+        base_url = config.base_url.rstrip("/")
         logger.info(f"Injecting base URL: {base_url}")
         
         # Inject API_BASE_URL global for the widget to use

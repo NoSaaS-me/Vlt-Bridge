@@ -5,7 +5,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Copy, RefreshCw, Check, Save, Github, Unlink } from 'lucide-react';
+import { ArrowLeft, Copy, RefreshCw, Check, Save, Github } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -31,7 +31,7 @@ import type { ContextSettings } from '@/types/context';
 import type { CodeRAGStatusResponse } from '@/types/coderag';
 import type { GitHubStatus } from '@/types/github';
 import { getCodeRAGStatus, initCodeRAG } from '@/services/coderag';
-import { getGitHubStatus, disconnectGitHub, getGitHubConnectUrl } from '@/services/github';
+import { getGitHubStatus, getGitHubConnectUrl } from '@/services/github';
 import { SystemLogs } from '@/components/SystemLogs';
 import { useProjectContext } from '@/contexts/ProjectContext';
 
@@ -66,7 +66,6 @@ export function Settings() {
 
   // GitHub connection state
   const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
-  const [isDisconnectingGithub, setIsDisconnectingGithub] = useState(false);
   const [githubMessage, setGithubMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
@@ -233,26 +232,6 @@ export function Settings() {
       return;
     }
     window.location.href = getGitHubConnectUrl();
-  };
-
-  const handleDisconnectGitHub = async () => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to disconnect GitHub.');
-      return;
-    }
-
-    setIsDisconnectingGithub(true);
-    try {
-      await disconnectGitHub();
-      setGithubStatus({ connected: false, username: null });
-      setGithubMessage({ type: 'success', text: 'GitHub disconnected successfully' });
-      setTimeout(() => setGithubMessage(null), 3000);
-    } catch (err) {
-      console.error('Error disconnecting GitHub:', err);
-      setError('Failed to disconnect GitHub');
-    } finally {
-      setIsDisconnectingGithub(false);
-    }
   };
 
   const handleGenerateToken = async () => {
@@ -452,7 +431,7 @@ export function Settings() {
         {isDemoMode && (
           <Alert variant="destructive">
             <AlertDescription>
-              You are viewing the shared demo vault. Sign in with Hugging Face from the main app to enable token generation and index management.
+              You are viewing the shared demo vault. Sign in with GitHub from the main app to enable token generation and index management.
             </AlertDescription>
           </Alert>
         )}
@@ -482,12 +461,12 @@ export function Settings() {
             <CardContent>
               <div className="flex items-center gap-4">
                 <Avatar className="h-16 w-16">
-                  <AvatarImage src={user.hf_profile?.avatar_url} />
+                  <AvatarImage src={user.gh_profile?.avatar_url} />
                   <AvatarFallback>{getUserInitials(user.user_id)}</AvatarFallback>
                 </Avatar>
                 <div className="flex-1">
                   <div className="font-semibold text-lg">
-                    {user.hf_profile?.name || user.hf_profile?.username || user.user_id}
+                    {user.gh_profile?.name || user.gh_profile?.username || user.user_id}
                   </div>
                   <div className="text-sm text-muted-foreground">
                     User ID: {user.user_id}
@@ -769,7 +748,7 @@ export function Settings() {
           />
         )}
 
-        {/* GitHub Connection */}
+        {/* GitHub Integration */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -777,7 +756,7 @@ export function Settings() {
               GitHub Integration
             </CardTitle>
             <CardDescription>
-              Connect GitHub to access private repositories and enable code search
+              Your GitHub account for authentication and repository access
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -802,11 +781,12 @@ export function Settings() {
                   </div>
                   <Button
                     variant="outline"
-                    onClick={handleDisconnectGitHub}
-                    disabled={isDemoMode || isDisconnectingGithub}
+                    onClick={handleConnectGitHub}
+                    disabled={isDemoMode}
+                    title="Refresh GitHub token if you have permission issues"
                   >
-                    <Unlink className="h-4 w-4 mr-2" />
-                    {isDisconnectingGithub ? 'Disconnecting...' : 'Disconnect'}
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Refresh Token
                   </Button>
                 </div>
 
@@ -833,7 +813,7 @@ export function Settings() {
             ) : (
               <>
                 <p className="text-sm text-muted-foreground">
-                  Connect your GitHub account to:
+                  GitHub access enables you to:
                 </p>
                 <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
                   <li>Read files from private repositories</li>
@@ -843,14 +823,14 @@ export function Settings() {
 
                 <Button onClick={handleConnectGitHub} disabled={isDemoMode}>
                   <Github className="h-4 w-4 mr-2" />
-                  Connect GitHub
+                  Reconnect GitHub
                 </Button>
               </>
             )}
 
             <div className="text-xs text-muted-foreground mt-4">
               Your GitHub token is stored securely and only used for repository access.
-              You can disconnect at any time. Public repositories are accessible without authentication.
+              If you experience permission issues, try refreshing your token.
             </div>
           </CardContent>
         </Card>
