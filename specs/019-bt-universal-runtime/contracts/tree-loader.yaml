@@ -1,0 +1,495 @@
+# Behavior Tree Universal Runtime - Tree Loader Contracts
+# Defines TreeRegistry, TreeLoader, TreeBuilder, TreeValidator, and hot reload
+
+version: "1.0.0"
+
+# Enums
+enums:
+  TreeStatus:
+    description: "Current status of a behavior tree"
+    values:
+      IDLE:
+        description: "Tree is not executing"
+      RUNNING:
+        description: "Tree is mid-execution"
+      COMPLETED:
+        description: "Last execution completed with SUCCESS"
+      FAILED:
+        description: "Last execution completed with FAILURE"
+      YIELDED:
+        description: "Tree yielded due to tick budget"
+
+  ReloadPolicy:
+    description: "How to handle tree reload when tree is running"
+    values:
+      LET_FINISH_THEN_SWAP:
+        description: "Queue reload, apply after current execution completes"
+        safe: true
+        recommended: true
+      CANCEL_AND_RESTART:
+        description: "Cancel current execution, apply reload, restart"
+        safe: true
+        notes: "Cancels in-flight async operations"
+      # IMMEDIATE removed - too dangerous per footgun audit
+
+# TreeRegistry Interface
+interfaces:
+  TreeRegistry:
+    description: |
+      Central registry for all loaded behavior trees.
+      Handles hot reload with file watching.
+
+    invariants:
+      - "All tree IDs in _trees are unique"
+      - "All loaded trees have valid root nodes"
+      - "Hot reload queue depth <= 1 (latest wins)"
+      - "No tree in registry has circular references"
+
+    configuration:
+      tree_dir:
+        type: Path
+        required: true
+        description: "Root directory for tree .lua files"
+
+      default_reload_policy:
+        type: ReloadPolicy
+        default: "LET_FINISH_THEN_SWAP"
+
+      debounce_ms:
+        type: int
+        default: 500
+        description: "Debounce rapid file changes"
+
+      validate_on_load:
+        type: bool
+        default: true
+        description: "Run TreeValidator on every load"
+
+    constructor:
+      signature: "__init__(tree_dir: Path, default_reload_policy: ReloadPolicy = LET_FINISH_THEN_SWAP) -> None"
+      preconditions:
+        - condition: "tree_dir exists and is directory"
+          error_on_violation: "FileNotFoundError"
+        - condition: "tree_dir is readable"
+          error_on_violation: "PermissionError"
+      postconditions:
+        - "_trees = {}"
+        - "_reload_queue = {}"
+        - "_watcher = None (not started)"
+
+    methods:
+      load:
+        signature: "load(path: Path) -> BehaviorTree"
+        description: "Load tree from Lua file and register"
+        preconditions:
+          - condition: "path exists and is .lua file"
+            error_on_violation: E4001
+          - condition: "path is within tree_dir (no traversal)"
+            error_on_violation: E7002
+        postconditions:
+          - "Tree validated (syntax, refs, schema)"
+          - "Tree registered in _trees"
+          - "Returns loaded tree"
+        errors:
+          - code: E4001
+            condition: "File not found"
+          - code: E4002
+            condition: "Invalid tree definition"
+          - code: E4003
+            condition: "Function reference not found"
+          - code: E4004
+            condition: "Subtree reference not found"
+          - code: E3002
+            condition: "Circular reference detected"
+          - code: E7002
+            condition: "Path traversal attempt"
+        implementation: |
+          def load(self, path: Path) -> BehaviorTree:
+              # Validate path
+              if not path.exists():
+                  raise TreeLoadError(E4001, path=path)
+              if not self._is_safe_path(path):
+                  raise SecurityError(E7002, path=path)
+
+              # Load definition
+              loader = TreeLoader()
+              definition = loader.load(path)
+
+              # Validate
+              validator = TreeValidator()
+              errors = validator.validate(definition, self)
+              if errors:
+                  raise TreeValidationError(E4002, errors=errors)
+
+              # Build
+              builder = TreeBuilder(self)
+              tree = builder.build(definition)
+
+              # Register
+              self._trees[tree.id] = tree
+              return tree
+
+      load_all:
+        signature: "load_all() -> Dict[str, BehaviorTree]"
+        description: "Load all .lua files in tree_dir"
+        postconditions:
+          - "All valid trees loaded"
+          - "Invalid trees logged but don't block others"
+        returns:
+          type: "Dict[str, BehaviorTree]"
+          description: "Map of tree_id -> tree"
+
+      get:
+        signature: "get(tree_id: str) -> Optional[BehaviorTree]"
+        description: "Get tree by ID"
+        returns:
+          success: "Tree instance"
+          failure: "None if not found"
+
+      reload:
+        signature: "reload(tree_id: str, policy: Optional[ReloadPolicy] = None) -> None"
+        description: "Reload tree from source file"
+        preconditions:
+          - condition: "tree_id exists in registry"
+            error_on_violation: E3001
+        behavior: |
+          if tree.status == RUNNING:
+              if policy == LET_FINISH_THEN_SWAP:
+                  self._reload_queue[tree_id] = path
+                  # Will be applied after completion
+              elif policy == CANCEL_AND_RESTART:
+                  tree.cancel()
+                  self._apply_reload(tree_id)
+          else:
+              self._apply_reload(tree_id)
+        errors:
+          - code: E3001
+            condition: "Tree not found"
+          - code: E3005
+            condition: "New definition invalid"
+        postconditions:
+          - "If tree IDLE: reload applied immediately"
+          - "If tree RUNNING: reload queued or cancelled per policy"
+          - "ANS event tree.reloaded emitted on success"
+
+      unload:
+        signature: "unload(tree_id: str) -> None"
+        description: "Remove tree from registry"
+        preconditions:
+          - condition: "Tree status != RUNNING"
+            error_on_violation: "TreeInUseError"
+        postconditions:
+          - "Tree removed from _trees"
+          - "Associated blackboard cleaned up"
+
+      list_trees:
+        signature: "list_trees() -> List[str]"
+        description: "Return all registered tree IDs"
+
+      # Hot Reload
+      start_watching:
+        signature: "start_watching() -> None"
+        description: "Start file watcher for tree_dir"
+        postconditions:
+          - "File changes trigger reload"
+          - "Multiple rapid changes batched (debounce)"
+          - "Only .lua files trigger reload"
+
+      stop_watching:
+        signature: "stop_watching() -> None"
+        description: "Stop file watcher"
+
+      on_file_changed:
+        signature: "on_file_changed(path: Path) -> None"
+        description: "Internal callback for file changes"
+        behavior: |
+          # Debounce
+          if path in self._pending_changes:
+              self._pending_changes[path].cancel()
+          self._pending_changes[path] = schedule(
+              self._apply_file_change,
+              delay=self.debounce_ms
+          )
+
+      # Lifecycle
+      check_pending_reloads:
+        signature: "check_pending_reloads() -> None"
+        description: "Apply any pending reloads for completed trees"
+        notes: "Called after tree tick completes"
+
+  TreeLoader:
+    description: |
+      Loads behavior tree definitions from Lua DSL files.
+      Returns TreeDefinition (not built tree).
+
+    configuration:
+      sandbox_timeout:
+        type: float
+        default: 5.0
+        description: "Timeout for Lua execution"
+
+    constructor:
+      signature: "__init__(sandbox_timeout: float = 5.0) -> None"
+      preconditions:
+        - condition: "lupa library available"
+          error_on_violation: "ImportError"
+      postconditions:
+        - "LuaSandbox configured"
+        - "BT.* functions registered in sandbox"
+
+    methods:
+      load:
+        signature: "load(path: Path) -> TreeDefinition"
+        description: "Load tree definition from Lua file"
+        preconditions:
+          - condition: "path exists and is readable"
+            error_on_violation: E4001
+          - condition: "path is .lua file"
+            error_on_violation: "ValueError"
+        errors:
+          - code: E5001
+            condition: "Lua syntax error"
+          - code: E5003
+            condition: "Script timeout"
+          - code: E4002
+            condition: "Invalid structure (no BT.tree() call)"
+        returns:
+          type: TreeDefinition
+          description: "Parsed tree definition (not yet built)"
+
+      load_string:
+        signature: "load_string(lua_code: str, source_name: str = '<string>') -> TreeDefinition"
+        description: "Load tree from Lua string (for testing)"
+
+      _inject_bt_api:
+        signature: "_inject_bt_api(env: Dict[str, Any]) -> None"
+        description: "Inject BT.* functions into Lua environment"
+        internal: true
+        registers:
+          - "BT.tree(name, config)"
+          - "BT.sequence(children)"
+          - "BT.selector(children)"
+          - "BT.parallel(config, children)"
+          - "BT.action(name, config)"
+          - "BT.condition(name, config)"
+          - "BT.llm_call(config)"
+          - "BT.subtree_ref(name, config?)"
+          - "BT.for_each(key, config)"
+          - "BT.script(name, config)"
+          - "BT.timeout(ms, child)"
+          - "BT.retry(max, child)"
+          - "BT.guard(condition, child)"
+          - "BT.cooldown(ms, child)"
+          - "BT.inverter(child)"
+          - "BT.always_succeed(child)"
+          - "BT.always_fail(child)"
+          - "BT.contract(config)"
+
+  TreeBuilder:
+    description: |
+      Builds executable BehaviorTree from TreeDefinition.
+      Resolves all references and creates node instances.
+
+    constructor:
+      signature: "__init__(registry: TreeRegistry) -> None"
+
+    methods:
+      build:
+        signature: "build(definition: TreeDefinition) -> BehaviorTree"
+        description: "Build executable tree from definition"
+        preconditions:
+          - condition: "definition is valid TreeDefinition"
+            error_on_violation: "TypeError"
+          - condition: "All subtree refs exist in registry (unless lazy)"
+            error_on_violation: E4004
+          - condition: "All fn paths resolve to callable"
+            error_on_violation: E4003
+        postconditions:
+          - "Returns BehaviorTree with all nodes instantiated"
+          - "Tree blackboard has schema registered"
+          - "All node IDs unique within tree"
+          - "Parent/child relationships set"
+        errors:
+          - code: E4003
+            condition: "Function path doesn't resolve"
+          - code: E4004
+            condition: "Subtree not found"
+          - code: E2005
+            condition: "Duplicate node ID"
+
+  TreeValidator:
+    description: |
+      Validates tree definitions before building.
+      Run at load time to catch errors early.
+
+    methods:
+      validate:
+        signature: "validate(definition: TreeDefinition, registry: TreeRegistry) -> List[ValidationError]"
+        description: "Validate tree definition"
+        checks:
+          - "All fn paths resolve to callables"
+          - "All subtree_refs exist or are marked lazy"
+          - "No circular subtree references"
+          - "Required node properties present"
+          - "Blackboard schema valid"
+          - "Node IDs unique"
+          - "Node types have correct child counts"
+        returns:
+          success: "Empty list"
+          failure: "List of ValidationError with code, location, message"
+
+# TreeDefinition Structure
+dataclasses:
+  TreeDefinition:
+    description: "Intermediate representation from Lua parsing"
+    fields:
+      name:
+        type: str
+        required: true
+      description:
+        type: str
+        default: '""'
+      root:
+        type: NodeDefinition
+        required: true
+      blackboard_schema:
+        type: "Dict[str, str]"
+        description: "Key -> Pydantic model path"
+      config:
+        type: "Dict[str, Any]"
+        description: "Tree-level configuration"
+      source_path:
+        type: str
+        required: true
+      source_hash:
+        type: str
+        description: "SHA256 of source file"
+
+  NodeDefinition:
+    description: "Intermediate node representation"
+    fields:
+      type:
+        type: str
+        required: true
+        description: "sequence, selector, parallel, action, etc."
+      id:
+        type: "Optional[str]"
+        description: "If not provided, auto-generated"
+      name:
+        type: "Optional[str]"
+      config:
+        type: "Dict[str, Any]"
+      children:
+        type: "List[NodeDefinition]"
+        default: "[]"
+      source_line:
+        type: int
+        description: "Line number in Lua file"
+
+  ValidationError:
+    description: "Error from tree validation"
+    fields:
+      code:
+        type: str
+        description: "Error code (E4xxx)"
+      location:
+        type: str
+        description: "tree_id:node_id:line_number"
+      message:
+        type: str
+
+# BehaviorTree Instance
+interfaces:
+  BehaviorTree:
+    description: "Executable behavior tree instance"
+
+    properties:
+      id:
+        type: str
+        readonly: true
+      name:
+        type: str
+        readonly: true
+      description:
+        type: str
+        readonly: true
+      root:
+        type: BehaviorNode
+        readonly: true
+      blackboard:
+        type: TypedBlackboard
+        readonly: true
+        description: "Tree-scoped blackboard"
+      status:
+        type: TreeStatus
+        readonly: true
+      tick_count:
+        type: int
+        readonly: true
+      source_path:
+        type: str
+        readonly: true
+      source_hash:
+        type: str
+        readonly: true
+      reload_pending:
+        type: bool
+        readonly: true
+        description: "True if reload queued"
+
+    configuration:
+      max_tick_duration_ms:
+        type: int
+        default: 60000
+        description: "Watchdog timeout for stuck detection"
+      tick_budget:
+        type: int
+        default: 1000
+        description: "Max ticks per event before yield"
+
+    methods:
+      tick:
+        signature: "tick(ctx: TickContext) -> RunStatus"
+        description: "Execute one tick cycle"
+        postconditions:
+          - "tick_count incremented"
+          - "status updated"
+          - "If budget exceeded: status = YIELDED"
+
+      reset:
+        signature: "reset() -> None"
+        description: "Reset tree to initial state"
+        postconditions:
+          - "status = IDLE"
+          - "All nodes reset"
+          - "Blackboard cleared (except global)"
+
+      cancel:
+        signature: "cancel(reason: str = 'user_request') -> None"
+        description: "Cancel current execution"
+        postconditions:
+          - "ctx.cancellation_requested = True"
+          - "In-flight async operations cancelled"
+          - "E3006 event emitted"
+
+      debug_info:
+        signature: "debug_info() -> Dict[str, Any]"
+
+# File Name Validation
+file_validation:
+  tree_name_pattern: "^[a-zA-Z][a-zA-Z0-9_-]*$"
+  description: |
+    Tree names (and thus file names without .lua) must:
+    - Start with letter
+    - Contain only letters, numbers, underscore, hyphen
+    - No dots, slashes, or special characters
+  examples:
+    valid:
+      - "oracle-agent"
+      - "research_runner"
+      - "MyTree123"
+    invalid:
+      - "../parent"
+      - "my.tree"
+      - "tree/sub"
+      - "123start"

@@ -1,0 +1,361 @@
+# Behavior Tree Universal Runtime - Blackboard Contract
+# Defines TypedBlackboard interface, methods, error conditions, and type coercion rules
+
+version: "1.0.0"
+
+# Interface: TypedBlackboard
+interface:
+  name: TypedBlackboard
+  description: |
+    Type-safe hierarchical blackboard with schema enforcement.
+    Primary state management mechanism for behavior trees.
+
+  invariants:
+    - description: "All keys in _data have corresponding entry in _schemas"
+      violation_code: E1005
+    - description: "All values in _data are valid instances of their schema"
+      violation_code: E1002
+    - description: "Parent chain is acyclic (no circular references)"
+      violation_code: E1005
+    - description: "scope_name is non-empty string"
+      violation_code: null  # Constructor validates
+    - description: "Total size does not exceed max_size_bytes"
+      violation_code: E1004
+
+  configuration:
+    max_size_bytes:
+      type: integer
+      default: 104857600  # 100MB
+      description: "Maximum total blackboard size"
+    max_key_length:
+      type: integer
+      default: 256
+      description: "Maximum key name length"
+    reserved_prefix:
+      type: string
+      default: "_"
+      description: "Prefix reserved for system keys"
+
+  constructor:
+    signature: "__init__(parent: Optional[TypedBlackboard] = None, scope_name: str = 'root') -> None"
+    preconditions:
+      - condition: "scope_name is non-empty string"
+        error_on_violation: "ValueError: scope_name cannot be empty"
+      - condition: "parent is None or valid TypedBlackboard instance"
+        error_on_violation: "TypeError: parent must be TypedBlackboard or None"
+      - condition: "No circular parent references (checked dynamically)"
+        error_on_violation: E1005
+    postconditions:
+      - "_data is empty dict"
+      - "_schemas inherited from parent (if any)"
+      - "_reads and _writes are empty sets"
+      - "_size_bytes = 0"
+
+  methods:
+    # Schema Registration
+    register:
+      signature: "register(key: str, schema: Type[BaseModel]) -> None"
+      description: "Register expected type for a key"
+      preconditions:
+        - condition: "key is non-empty string"
+          error_on_violation: "ValueError"
+        - condition: "key does not start with '_'"
+          error_on_violation: E1003
+        - condition: "len(key) <= max_key_length"
+          error_on_violation: "ValueError: key too long"
+        - condition: "schema is subclass of pydantic.BaseModel"
+          error_on_violation: "TypeError"
+      postconditions:
+        - "_schemas[key] = schema"
+        - "Does NOT affect _data"
+      errors: []  # Only ValueError/TypeError, no BT errors
+      idempotent: true
+      notes: "Re-registering same key with same schema is allowed"
+
+    register_many:
+      signature: "register_many(schemas: Dict[str, Type[BaseModel]]) -> None"
+      description: "Register multiple schemas atomically"
+      preconditions:
+        - condition: "All keys and schemas valid per register()"
+          error_on_violation: "Same as register()"
+      postconditions:
+        - "All schemas registered"
+        - "ATOMIC: if any fails, none are registered"
+      errors: []
+      idempotent: true
+
+    # Data Access
+    get:
+      signature: "get(key: str, schema: Type[T], default: Optional[T] = None) -> Optional[T]"
+      description: "Get typed value with scope chain lookup"
+      preconditions:
+        - condition: "key is non-empty string"
+          error_on_violation: "ValueError"
+        - condition: "schema matches registered schema (if registered)"
+          error_on_violation: E1002
+      postconditions:
+        - "key added to _reads"
+        - "Returns value from this scope or nearest parent"
+        - "Returns default if not found"
+        - "Returns None if not found and no default"
+      errors:
+        - code: E1001
+          condition: "key not registered AND no default provided"
+        - code: E1002
+          condition: "schema param doesn't match registered schema"
+      notes: "Lookup order: this scope -> parent -> parent.parent -> ... -> root"
+      returns:
+        type: "Optional[T]"
+        null_when: "Key not found in scope chain"
+
+    set:
+      signature: "set(key: str, value: Union[BaseModel, Dict[str, Any]]) -> ErrorResult"
+      description: "Set validated value in current scope"
+      preconditions:
+        - condition: "key is non-empty string"
+          error_on_violation: "ValueError"
+        - condition: "key is registered in _schemas"
+          error_on_violation: E1001
+        - condition: "value matches schema (validated via Pydantic)"
+          error_on_violation: E1002
+        - condition: "key does not start with '_' (unless internal=True)"
+          error_on_violation: E1003
+        - condition: "total size after write <= max_size_bytes"
+          error_on_violation: E1004
+      postconditions:
+        - "_data[key] = validated_value"
+        - "key added to _writes"
+        - "_size_bytes updated"
+      errors:
+        - code: E1001
+          condition: "key not registered"
+          recovery: "Register key before writing"
+        - code: E1002
+          condition: "Pydantic validation fails"
+          recovery: "Fix value to match schema"
+        - code: E1003
+          condition: "key starts with '_'"
+          recovery: "Use different key name"
+        - code: E1004
+          condition: "Size limit exceeded"
+          recovery: "Delete old keys or reduce value size"
+      returns:
+        type: "ErrorResult"
+        description: "Use if result.is_error to check success"
+
+    set_internal:
+      signature: "set_internal(key: str, value: Any) -> None"
+      description: "Set system-reserved key (bypasses _ check)"
+      preconditions:
+        - condition: "key starts with '_'"
+          error_on_violation: "ValueError: internal keys must start with _"
+        - condition: "Called by runtime, not user code"
+          error_on_violation: "Security violation"
+      postconditions:
+        - "_data[key] = value"
+        - "key added to _writes"
+      notes: "For _failure_trace, _parallel_conflicts, etc."
+
+    set_global:
+      signature: "set_global(key: str, value: Union[BaseModel, Dict[str, Any]]) -> ErrorResult"
+      description: "Set value in root (global) scope"
+      preconditions:
+        - condition: "Same as set()"
+          error_on_violation: "Same as set()"
+      postconditions:
+        - "Value set in root scope (follows parent chain to top)"
+        - "key added to THIS scope's _writes (for tracking)"
+      errors:
+        - "Same as set()"
+      notes: "Useful for global state like session_id, user preferences"
+
+    has:
+      signature: "has(key: str) -> bool"
+      description: "Check if key exists in this scope or parents"
+      postconditions:
+        - "Does NOT add to _reads (peek only)"
+        - "Returns True if key has value anywhere in scope chain"
+      returns:
+        type: bool
+
+    delete:
+      signature: "delete(key: str) -> bool"
+      description: "Delete key from this scope only"
+      postconditions:
+        - "Key removed from _data (not parent scopes)"
+        - "Returns True if key was present in THIS scope"
+        - "Does NOT affect _schemas (schema remains registered)"
+        - "_size_bytes updated"
+      notes: "Parent scope values still visible after delete in child"
+
+    # Scope Management
+    create_child_scope:
+      signature: "create_child_scope(scope_name: str) -> TypedBlackboard"
+      description: "Create isolated child scope for parallel children"
+      preconditions:
+        - condition: "scope_name is non-empty"
+          error_on_violation: "ValueError"
+      postconditions:
+        - "New blackboard with self as parent"
+        - "Inherits all schemas from parent chain"
+        - "Empty _data (no value copying)"
+        - "Empty _reads and _writes"
+      notes: "Child can read parent values, writes stay in child until merge"
+
+    # Access Tracking
+    get_reads:
+      signature: "get_reads() -> Set[str]"
+      description: "Get keys read since last clear"
+      notes: "Used for NodeContract validation"
+
+    get_writes:
+      signature: "get_writes() -> Set[str]"
+      description: "Get keys written since last clear"
+      notes: "Used for NodeContract validation and merge detection"
+
+    clear_access_tracking:
+      signature: "clear_access_tracking() -> None"
+      description: "Reset read/write tracking"
+      postconditions:
+        - "_reads = set()"
+        - "_writes = set()"
+      notes: "Called at tick start"
+
+    # Debugging
+    snapshot:
+      signature: "snapshot() -> Dict[str, Any]"
+      description: "Create serializable snapshot of all data including parents"
+      postconditions:
+        - "Returns merged dict of all scopes (child wins on conflict)"
+        - "Values are Pydantic model_dump() output"
+      notes: "For debugging and persistence"
+
+    get_size_bytes:
+      signature: "get_size_bytes() -> int"
+      description: "Get current size of this scope's data"
+
+    debug_info:
+      signature: "debug_info() -> Dict[str, Any]"
+      description: "Return debug information"
+      returns:
+        type: dict
+        fields:
+          scope_name: string
+          parent_scope: string | null
+          size_bytes: integer
+          key_count: integer
+          registered_schemas: list[string]
+          reads_this_tick: list[string]
+          writes_this_tick: list[string]
+
+# Type Coercion Rules (Lua <-> Python)
+type_coercion:
+  description: |
+    Rules for converting values between Lua and Python.
+    These rules MUST be followed to ensure type safety.
+
+  lua_to_python:
+    - lua_type: "nil"
+      python_type: "None"
+      notes: "Always converts to Python None"
+
+    - lua_type: "boolean"
+      python_type: "bool"
+      notes: "true -> True, false -> False"
+
+    - lua_type: "number"
+      python_type: "float"
+      notes: |
+        ALL Lua numbers become Python float.
+        Even 1.0 stays as 1.0 (not int 1).
+        Use int(value) in Python if int required.
+        Pydantic schemas should use float for Lua-sourced numeric fields.
+      example:
+        lua: "42"
+        python: "42.0"
+
+    - lua_type: "string"
+      python_type: "str"
+      notes: "Direct conversion"
+
+    - lua_type: "table (array-like)"
+      python_type: "list"
+      condition: "Table has sequential integer keys starting at 1 with no gaps"
+      notes: |
+        {1: "a", 2: "b", 3: "c"} -> ["a", "b", "c"]
+        {} with no keys -> []
+      example:
+        lua: "{'a', 'b', 'c'}"
+        python: "['a', 'b', 'c']"
+
+    - lua_type: "table (dict-like)"
+      python_type: "dict"
+      condition: "Table has string keys or non-sequential integer keys"
+      notes: |
+        {name="foo", value=42} -> {"name": "foo", "value": 42.0}
+        Keys are converted to strings.
+      example:
+        lua: "{name='test', count=5}"
+        python: "{'name': 'test', 'count': 5.0}"
+
+    - lua_type: "function"
+      python_type: "NOT ALLOWED"
+      notes: "Functions cannot be stored in blackboard"
+      error_code: E1002
+
+    - lua_type: "userdata"
+      python_type: "NOT ALLOWED"
+      notes: "Userdata cannot be stored in blackboard"
+      error_code: E1002
+
+  python_to_lua:
+    - python_type: "None"
+      lua_type: "nil"
+
+    - python_type: "bool"
+      lua_type: "boolean"
+
+    - python_type: "int"
+      lua_type: "number"
+      notes: "Python int becomes Lua number (no distinction in Lua)"
+
+    - python_type: "float"
+      lua_type: "number"
+
+    - python_type: "str"
+      lua_type: "string"
+
+    - python_type: "list"
+      lua_type: "table (array)"
+      notes: "Python list becomes Lua table with 1-indexed integer keys"
+
+    - python_type: "dict"
+      lua_type: "table"
+      notes: "Python dict becomes Lua table. Keys must be strings."
+
+    - python_type: "BaseModel (Pydantic)"
+      lua_type: "table"
+      notes: "Converted via model_dump() then dict conversion"
+
+# Schema Examples
+schema_examples:
+  - name: "ConversationContext"
+    python: |
+      class ConversationContext(BaseModel):
+          session_id: str
+          user_id: str
+          turn_number: int  # Will accept float from Lua
+          history: List[Dict[str, str]]
+          metadata: Optional[Dict[str, Any]] = None
+    lua_compatible: true
+    notes: "turn_number uses int but accepts Lua float via Pydantic coercion"
+
+  - name: "ToolResult"
+    python: |
+      class ToolResult(BaseModel):
+          tool_name: str
+          success: bool
+          result: Any  # Flexible, accepts any Lua value
+          error: Optional[str] = None
+          duration_ms: float
+    lua_compatible: true

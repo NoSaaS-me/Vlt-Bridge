@@ -1,0 +1,601 @@
+# Behavior Tree Universal Runtime - Integration Contracts
+# Defines MCP Tool and CodeRAG integration as leaf nodes
+
+version: "1.0.0"
+
+# Overview
+# ========
+# The BT runtime integrates with two critical systems:
+# 1. FastMCP Tools - All 12 MCP tools callable as leaf nodes
+# 2. CodeRAG - Code search via vlt CLI/daemon
+#
+# Design Principle: Every FastMCP tool MUST be callable as a BT leaf node.
+# This enables behavior trees to orchestrate AI agent workflows that use tools.
+
+---
+
+# MCP Tool Registry
+mcp_tools:
+  description: |
+    All FastMCP tools from backend/src/mcp/server.py exposed as BT leaf nodes.
+    Tools are invoked via the ToolExecutorService in the DI container.
+
+  # Vault Management Tools
+  vault:
+    list_notes:
+      signature: "list_notes(folder: Optional[str] = None) -> List[NoteSummary]"
+      async: false
+      leaf_type: ToolLeaf
+      contract:
+        inputs: {}
+        optional_inputs:
+          folder: { type: str, description: "Folder path to scope listing" }
+        outputs:
+          notes: { type: "List[NoteSummary]", description: "List of note summaries" }
+      errors:
+        - E4001  # Folder not found
+
+    read_note:
+      signature: "read_note(path: str) -> NoteContent"
+      async: false
+      leaf_type: ToolLeaf
+      contract:
+        inputs:
+          path: { type: str, description: "Note path relative to vault root" }
+        outputs:
+          note: { type: NoteContent, description: "Note with metadata and body" }
+      errors:
+        - E4001  # Note not found
+
+    write_note:
+      signature: "write_note(path: str, body: str, title: Optional[str], metadata: Optional[Dict]) -> WriteResult"
+      async: false
+      leaf_type: ToolLeaf
+      contract:
+        inputs:
+          path: { type: str }
+          body: { type: str }
+        optional_inputs:
+          title: { type: str }
+          metadata: { type: "Dict[str, Any]" }
+        outputs:
+          result: { type: WriteResult, description: "Success with version number" }
+      errors:
+        - E1004  # Size limit exceeded
+        - E7002  # Path traversal attempt
+
+    delete_note:
+      signature: "delete_note(path: str) -> bool"
+      async: false
+      leaf_type: ToolLeaf
+      contract:
+        inputs:
+          path: { type: str }
+        outputs:
+          deleted: { type: bool }
+      errors:
+        - E4001  # Note not found
+
+    search_notes:
+      signature: "search_notes(query: str, limit: int = 10, tags: Optional[List[str]] = None) -> List[SearchResult]"
+      async: false
+      leaf_type: ToolLeaf
+      contract:
+        inputs:
+          query: { type: str, description: "BM25 search query" }
+        optional_inputs:
+          limit: { type: int, default: 10 }
+          tags: { type: "List[str]", description: "Filter by tags" }
+        outputs:
+          results: { type: "List[SearchResult]", description: "Ranked search results" }
+
+    get_backlinks:
+      signature: "get_backlinks(path: str) -> List[BacklinkInfo]"
+      async: false
+      leaf_type: ToolLeaf
+      contract:
+        inputs:
+          path: { type: str }
+        outputs:
+          backlinks: { type: "List[BacklinkInfo]" }
+
+    get_tags:
+      signature: "get_tags() -> Dict[str, int]"
+      async: false
+      leaf_type: ToolLeaf
+      contract:
+        inputs: {}
+        outputs:
+          tags: { type: "Dict[str, int]", description: "Tag -> count mapping" }
+
+  # Oracle & Code Intelligence Tools
+  oracle:
+    ask_oracle:
+      signature: |
+        ask_oracle(
+          question: str,
+          sources: Optional[List[str]] = None,
+          explain: bool = False
+        ) -> OracleResponse
+      async: true
+      streaming: true
+      leaf_type: OracleLeaf
+      contract:
+        inputs:
+          question: { type: str, description: "Natural language question" }
+        optional_inputs:
+          sources: { type: "List[str]", description: "Filter: code, vault, threads" }
+          explain: { type: bool, default: false, description: "Include reasoning" }
+        outputs:
+          response: { type: OracleResponse }
+          stream_chunks: { type: "List[str]", optional: true }
+      timeout_default: 120
+      errors:
+        - E6001  # Timeout
+        - E6003  # API error
+
+    search_code:
+      signature: |
+        search_code(
+          query: str,
+          limit: int = 10,
+          language: Optional[str] = None,
+          file_pattern: Optional[str] = None
+        ) -> List[CodeSearchResult]
+      async: true
+      leaf_type: CodeSearchLeaf
+      contract:
+        inputs:
+          query: { type: str, description: "Semantic or keyword query" }
+        optional_inputs:
+          limit: { type: int, default: 10 }
+          language: { type: str, description: "Filter by language: python, typescript, etc." }
+          file_pattern: { type: str, description: "Glob pattern for files" }
+        outputs:
+          results: { type: "List[CodeSearchResult]" }
+      timeout_default: 60
+
+    find_definition:
+      signature: |
+        find_definition(
+          symbol: str,
+          scope: Optional[str] = None,
+          kind: Optional[str] = None
+        ) -> DefinitionResult
+      async: true
+      leaf_type: CodeSearchLeaf
+      contract:
+        inputs:
+          symbol: { type: str, description: "Symbol name to find" }
+        optional_inputs:
+          scope: { type: str, description: "Scope to search within" }
+          kind: { type: str, description: "function, class, method, variable" }
+        outputs:
+          definition: { type: DefinitionResult }
+
+    find_references:
+      signature: |
+        find_references(
+          symbol: str,
+          limit: int = 20,
+          include_definition: bool = True,
+          reference_type: str = "all"
+        ) -> List[ReferenceResult]
+      async: true
+      leaf_type: CodeSearchLeaf
+      contract:
+        inputs:
+          symbol: { type: str }
+        optional_inputs:
+          limit: { type: int, default: 20 }
+          include_definition: { type: bool, default: true }
+          reference_type: { type: str, enum: [all, call, import, assignment] }
+        outputs:
+          references: { type: "List[ReferenceResult]" }
+
+    get_repo_map:
+      signature: |
+        get_repo_map(
+          scope: Optional[str] = None,
+          max_tokens: int = 4000,
+          include_signatures: bool = True,
+          include_docstrings: bool = False
+        ) -> RepoMapResult
+      async: true
+      leaf_type: CodeSearchLeaf
+      cacheable: true
+      cache_key: "repo_map_{scope}_{max_tokens}"
+      contract:
+        inputs: {}
+        optional_inputs:
+          scope: { type: str, description: "Directory scope" }
+          max_tokens: { type: int, default: 4000 }
+          include_signatures: { type: bool, default: true }
+          include_docstrings: { type: bool, default: false }
+        outputs:
+          repo_map: { type: RepoMapResult }
+
+---
+
+# CodeRAG Service Interface
+coderag_service:
+  description: |
+    Direct CodeRAG access via vlt-cli/daemon.
+    Exposed as a service in the DI container for low-level access.
+    Most trees should use the MCP tool wrappers above instead.
+
+  interface:
+    name: CodeRAGService
+    location: "ctx.services.coderag"
+
+    methods:
+      search_bm25:
+        signature: |
+          search_bm25(
+            query: str,
+            limit: int = 20,
+            project_id: Optional[str] = None
+          ) -> List[CodeChunk]
+        description: "Direct BM25 search over code chunks"
+        returns:
+          type: "List[CodeChunk]"
+          fields:
+            - chunk_id: str
+            - file_path: str
+            - qualified_name: str
+            - signature: Optional[str]
+            - docstring: Optional[str]
+            - body: str
+            - lineno: int
+            - score: float
+
+      get_project_status:
+        signature: "get_project_status(project_id: str) -> ProjectStatus"
+        description: "Check if project is indexed"
+        returns:
+          type: ProjectStatus
+          fields:
+            - indexed: bool
+            - chunks_count: int
+            - last_indexed_at: Optional[datetime]
+            - status: str  # pending, running, completed, failed
+
+      trigger_reindex:
+        signature: "trigger_reindex(project_id: str, force: bool = False) -> JobId"
+        description: "Trigger background reindexing via daemon"
+        async: true
+
+---
+
+# New Leaf Node Types
+leaf_nodes:
+  ToolLeaf:
+    description: |
+      Generic leaf node that wraps any MCP tool.
+      Automatically handles async tools with RUNNING status.
+
+    lua_api: |
+      BT.tool("search_notes", {
+        query = "${bb.user_query}",
+        limit = 10,
+        output = "search_results"
+      })
+
+    config:
+      tool_name:
+        type: str
+        required: true
+        description: "MCP tool name from registry"
+      params:
+        type: "Dict[str, Any]"
+        description: "Tool parameters (supports ${bb.key} interpolation)"
+      output:
+        type: str
+        required: true
+        description: "Blackboard key for result"
+      timeout:
+        type: int
+        description: "Override default timeout"
+
+    behavior: |
+      1. First tick: validate params, start tool execution
+      2. If sync tool: execute, write result, return SUCCESS/FAILURE
+      3. If async tool: return RUNNING, track request_id
+      4. Subsequent ticks: check completion, return result when done
+
+    contract:
+      inputs:
+        # Dynamic based on tool's contract
+      outputs:
+        output: { type: Any, description: "Tool result" }
+        _tool_error: { type: str, optional: true }
+        _tool_duration_ms: { type: float }
+
+    errors:
+      - code: E4003
+        condition: "Tool not found in registry"
+      - code: E6001
+        condition: "Tool timeout"
+      - code: E2001
+        condition: "Missing required tool parameter"
+
+  OracleLeaf:
+    description: |
+      Specialized leaf for ask_oracle with streaming support.
+      Writes partial responses to blackboard during execution.
+
+    lua_api: |
+      BT.oracle({
+        question = "${bb.user_question}",
+        sources = {"code", "vault"},
+        stream_to = "partial_response",
+        output = "oracle_answer"
+      })
+
+    config:
+      question:
+        type: str
+        required: true
+      sources:
+        type: "List[str]"
+        default: ["code", "vault", "threads"]
+      explain:
+        type: bool
+        default: false
+      stream_to:
+        type: str
+        description: "Blackboard key for streaming chunks"
+      output:
+        type: str
+        required: true
+
+    behavior: |
+      1. First tick: initiate oracle request, return RUNNING
+      2. During streaming: update stream_to key with chunks
+      3. On completion: write full response to output key
+      4. Emit llm.request.complete event with token usage
+
+    contract:
+      inputs:
+        question: { type: str }
+      optional_inputs:
+        sources: { type: "List[str]" }
+      outputs:
+        output: { type: OracleResponse }
+        stream_to: { type: str, optional: true }
+        _oracle_tokens_used: { type: int }
+
+  CodeSearchLeaf:
+    description: |
+      Specialized leaf for code search operations.
+      Supports semantic search, definition lookup, and references.
+
+    lua_api: |
+      BT.code_search({
+        operation = "search",  -- search, definition, references, repo_map
+        query = "${bb.search_query}",
+        limit = 20,
+        output = "code_results"
+      })
+
+    config:
+      operation:
+        type: str
+        required: true
+        enum: [search, definition, references, repo_map]
+      query:
+        type: str
+        description: "Search query or symbol name"
+      limit:
+        type: int
+        default: 10
+      language:
+        type: str
+      file_pattern:
+        type: str
+      output:
+        type: str
+        required: true
+
+    contract:
+      inputs:
+        query: { type: str }
+      outputs:
+        output: { type: "Union[List[CodeSearchResult], DefinitionResult, RepoMapResult]" }
+        _code_search_duration_ms: { type: float }
+
+---
+
+# Services DI Container Extension
+services_extension:
+  description: "Additional services for BT runtime DI container"
+
+  services:
+    tool_registry:
+      type: ToolRegistry
+      description: "Registry of all MCP tools with metadata"
+      methods:
+        - "get_tool(name: str) -> ToolDefinition"
+        - "list_tools() -> List[str]"
+        - "get_contract(name: str) -> NodeContract"
+
+    tool_executor:
+      type: ToolExecutorService
+      description: "Executes MCP tools with proper context"
+      methods:
+        - "execute(tool_name: str, params: Dict, ctx: TickContext) -> ToolResult"
+        - "execute_async(tool_name: str, params: Dict, ctx: TickContext) -> str"  # Returns request_id
+        - "check_completion(request_id: str) -> Optional[ToolResult]"
+        - "cancel(request_id: str) -> None"
+
+    coderag:
+      type: CodeRAGService
+      description: "Direct CodeRAG access"
+      methods:
+        - "search_bm25(query, limit, project_id) -> List[CodeChunk]"
+        - "get_project_status(project_id) -> ProjectStatus"
+        - "trigger_reindex(project_id, force) -> JobId"
+
+    oracle_bridge:
+      type: OracleBridge
+      description: "Oracle multi-source query bridge"
+      methods:
+        - "ask_oracle(question, sources, explain) -> OracleResponse"
+        - "ask_oracle_stream(question, sources, explain) -> AsyncGenerator[str]"
+
+---
+
+# Parameter Interpolation
+interpolation:
+  description: |
+    Tool parameters support blackboard interpolation via ${bb.key} syntax.
+    This allows dynamic parameter binding at runtime.
+
+  syntax:
+    - pattern: "${bb.key}"
+      description: "Read value from blackboard"
+      example: "${bb.user_query}"
+
+    - pattern: "${bb.key.nested}"
+      description: "Read nested value"
+      example: "${bb.context.session_id}"
+
+    - pattern: "${bb.key | default:value}"
+      description: "Default if key missing"
+      example: "${bb.limit | default:10}"
+
+  implementation: |
+    def interpolate_params(params: Dict, bb: TypedBlackboard) -> Dict:
+        result = {}
+        for key, value in params.items():
+            if isinstance(value, str) and value.startswith("${bb."):
+                bb_key = extract_bb_key(value)
+                default = extract_default(value)
+                result[key] = bb.get(bb_key, Any, default)
+            else:
+                result[key] = value
+        return result
+
+---
+
+# Events
+events:
+  tool:
+    execute:
+      start:
+        description: "Tool execution started"
+        severity: debug
+        payload:
+          tree_id: { type: string }
+          node_id: { type: string }
+          tool_name: { type: string }
+          params_preview: { type: string }
+
+      complete:
+        description: "Tool execution completed"
+        severity: info
+        payload:
+          tree_id: { type: string }
+          node_id: { type: string }
+          tool_name: { type: string }
+          duration_ms: { type: number }
+          success: { type: boolean }
+
+      error:
+        description: "Tool execution failed"
+        severity: error
+        payload:
+          tree_id: { type: string }
+          node_id: { type: string }
+          tool_name: { type: string }
+          error_type: { type: string }
+          error_message: { type: string }
+
+  coderag:
+    search:
+      complete:
+        description: "CodeRAG search completed"
+        severity: info
+        payload:
+          tree_id: { type: string }
+          query_preview: { type: string }
+          results_count: { type: integer }
+          duration_ms: { type: number }
+
+    index:
+      triggered:
+        description: "CodeRAG reindex triggered"
+        severity: info
+        payload:
+          project_id: { type: string }
+          job_id: { type: string }
+
+---
+
+# Example Tree Using Tools
+examples:
+  research_tree: |
+    return BT.tree("code-researcher", {
+      description = "Research code and answer questions",
+      root = BT.sequence {
+        -- Search code for relevant context
+        BT.code_search {
+          operation = "search",
+          query = "${bb.user_question}",
+          limit = 10,
+          output = "code_context"
+        },
+
+        -- Get repo structure for overview
+        BT.code_search {
+          operation = "repo_map",
+          max_tokens = 2000,
+          output = "repo_structure"
+        },
+
+        -- Search vault for related docs
+        BT.tool("search_notes", {
+          query = "${bb.user_question}",
+          limit = 5,
+          output = "vault_context"
+        }),
+
+        -- Ask oracle with all context
+        BT.oracle {
+          question = "${bb.user_question}",
+          sources = {"code", "vault"},
+          stream_to = "partial_answer",
+          output = "final_answer"
+        }
+      }
+    })
+
+  tool_fallback_tree: |
+    return BT.tree("resilient-search", {
+      description = "Search with fallback on failure",
+      root = BT.selector {
+        -- Try code search first
+        BT.sequence {
+          BT.code_search {
+            operation = "search",
+            query = "${bb.query}",
+            output = "results"
+          },
+          BT.condition("has_results", {
+            check = "bb.results and #bb.results > 0"
+          })
+        },
+
+        -- Fallback to vault search
+        BT.tool("search_notes", {
+          query = "${bb.query}",
+          output = "results"
+        }),
+
+        -- Last resort: direct oracle
+        BT.oracle {
+          question = "Find information about: ${bb.query}",
+          output = "results"
+        }
+      }
+    })

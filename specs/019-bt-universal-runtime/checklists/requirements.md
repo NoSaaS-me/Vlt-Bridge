@@ -33,7 +33,7 @@
 
 - Spec incorporates feedback from bot framework expert review (HonorBuddy/OpenBot experience)
 - Key additions from review: Blackboard scoping, stuck detection, hot reload, parallel semantics, LLM-aware nodes, tick loop semantics, observability
-- LISP shown in examples is illustrative of structure, not prescriptive syntax
+- Lua DSL shown in examples is illustrative of structure, using the `BT.*` API pattern
 - Runtime semantics pseudocode in FR-4 defines expected behavior, not implementation
 
 ## Validation Status

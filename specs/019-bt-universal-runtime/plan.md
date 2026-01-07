@@ -20,7 +20,8 @@
 
 | Area | Decision | Rationale |
 |------|----------|-----------|
-| LISP Parser | **Lark** (LALR) | Excellent error messages with line/column tracking, fast (~3ms for 100 nodes), grammar-as-data for extensibility, pure Python. See research/07. |
+| Tree Definition | **Lua DSL** via `BT.*` API | LLMs are fluent in Lua. No new parser needed. Better error messages. Familiar table syntax. |
+| Lua Engine | **lupa** (existing) | LuaJIT2 bindings already used by ScriptNode. Extend with `BT.*` namespace for tree definition. 593 lines in lua_sandbox.py. |
 | Blackboard Storage | SQLite via **PluginStateService** | Global blackboard persists to existing DB using plugin_state table. Tree/subtree scopes are in-memory only. |
 | Async Runtime | asyncio | Consistent with existing codebase |
 | File Watching | watchdog | Standard Python hot reload library |
@@ -32,7 +33,7 @@
 2. **Tree → Tool Executor**: Tools become leaf nodes
 3. **Tree → LLM Service**: Special LLM nodes with streaming
 4. **Tree → ANS**: Trees emit events for observability
-5. **LISP Files → Tree Runtime**: Parsed at load time
+5. **Lua Files → Tree Runtime**: Executed through `LuaSandbox` to produce tree definition
 
 ---
 
@@ -64,24 +65,28 @@
 | # | Topic | File | Status | Key Finding |
 |---|-------|------|--------|-------------|
 | 01 | Behavior Tree Audit | `research/01-behavior-tree-audit.md` | ✅ Complete | 3,602 lines existing BT is solid foundation. Gaps: hierarchical blackboard, async support, parallel memory mode. 8-13 days enhancement. |
-| 02 | Oracle Agent Audit | `research/02-oracle-agent-audit.md` | ✅ Complete | 2,765 lines maps to ~300-400 lines LISP. Key complexity: streaming LLM, context management. 10 E2E tests defined. |
-| 03 | Research System Audit | `research/03-research-system-audit.md` | ✅ Complete | 2,301 lines custom behavior pattern. No tick semantics, no parallel policy control. Full subtree LISP design provided. |
+| 02 | Oracle Agent Audit | `research/02-oracle-agent-audit.md` | ✅ Complete | 2,765 lines maps to ~300-400 lines Lua DSL. Key complexity: streaming LLM, context management. 10 E2E tests defined. |
+| 03 | Research System Audit | `research/03-research-system-audit.md` | ✅ Complete | 2,301 lines custom behavior pattern. No tick semantics, no parallel policy control. Full subtree Lua design provided. |
 | 04 | Tool Executor Audit | `research/04-tool-executor-audit.md` | ✅ Complete | 2,539 lines, 19 tools (17 implemented). Missing ANS events for tool.call.success/failure. Complete blackboard contracts per tool. |
 | 05 | ANS EventBus Audit | `research/05-ans-eventbus-audit.md` | ✅ Complete | Mature pub/sub with batching, deferred delivery, cross-session persistence. 20+ new event types needed for BT. Tick-event loop prevention design. |
-| 06 | Plugin System Audit | `research/06-plugin-system-audit.md` | ✅ Complete | ~5,200 lines total. BT already exists! RuleEngine, Lua sandbox, expression evaluator all work. Main work: LISP loader, LLM nodes, hierarchical blackboard. |
-| 07 | LISP Parser Research | `research/07-lisp-parser-research.md` | ✅ Complete | **Lark** recommended over sexpdata/Hy/pyparsing. Full grammar, AST classes, transformer, validator, builder implementations provided. |
+| 06 | Plugin System Audit | `research/06-plugin-system-audit.md` | ✅ Complete | ~5,200 lines total. BT already exists! RuleEngine, Lua sandbox, expression evaluator all work. Main work: `BT.*` Lua API, LLM nodes, hierarchical blackboard. |
+| 07 | Lua DSL Design | `research/07-lua-dsl-design.md` | ✅ Complete | Lua DSL chosen over LISP. `lupa` already in codebase. LLMs fluent in Lua. No parser needed - just `BT.*` API design. |
 
 ### Key Decisions (from research)
 
 1. **Blackboard Implementation**: Extend existing `Blackboard` class with parent chain for scope hierarchy. Use `PluginStateService` for global blackboard persistence. Tree/subtree scopes are in-memory only, cleared on completion.
 
-2. **LISP Parser Choice**: **Lark LALR parser** with custom grammar. Provides line/column tracking for error messages (required by FR-2), fast enough for hot reload (~3ms parse), pure Python. Full implementation in research/07.
+2. **Lua DSL Choice**: **Lua via `lupa`** with `BT.*` fluent API. Rationale: (a) `lupa` already exists in codebase for `LuaSandbox`, (b) LLMs are significantly more fluent in Lua than LISP, (c) no new parser needed - just good API design, (d) better error messages out of the box, (e) familiar table syntax for configuration.
 
 3. **Tick Trigger Strategy**: **Event-driven + polling hybrid**. Events (query.start, tool.success, tool.failure) trigger initial tick. Poll at 100ms while tree is RUNNING. Buffer events during tick to prevent loops.
 
 4. **LLM Node Design**: New `LLMCallNode` class extending Leaf. Features: model selection, streaming with blackboard writes, token budget tracking, interruptible, timeout, retry policy. First tick initiates request (RUNNING), subsequent ticks check completion.
 
-5. **Hot Reload Policy**: Default to `let-finish-then-swap` (safest). Support `cancel-and-restart` for urgent changes. Watch `.lisp` files with watchdog library. Preserve global blackboard, optionally preserve tree-local if schema compatible.
+5. **Hot Reload Policy**: Default to `let-finish-then-swap` (safest). Support `cancel-and-restart` for urgent changes. Watch `.lua` files with watchdog library. Preserve global blackboard, optionally preserve tree-local if schema compatible.
+
+6. **Lua Integration**: Existing `LuaSandbox` (593 lines, 5s timeout, secure) extended with `BT.*` namespace for tree definition. Features: (a) `BT.tree()`, `BT.sequence()`, `BT.selector()`, etc. for tree structure, (b) blackboard read/write from Lua, (c) RUNNING status return capability, (d) async operation support. Lua is both the tree definition language AND the escape hatch for complex conditions/actions.
+
+7. **State Architecture**: **TypedBlackboard** with Pydantic models replaces `Dict[str, Any]`. Nodes declare **contracts** (inputs/outputs) validated at load time. State types form inheritance hierarchy: `IdentityState` → `ConversationState` → `OracleState`. Bridges connect to existing `RuleContext` and Lua. See `state-architecture.md` for full design.
 
 ### Consolidated Findings
 
@@ -106,33 +111,43 @@ The existing behavior tree in `backend/src/services/plugins/behavior_tree/` (~3,
 The Oracle agent (2,765 lines) maps to BT as:
 ```
 Oracle.query()           → tree.tick(query.start event)
-Agent loop               → Repeater(:until-failure)
-Model selection          → Action leaf + blackboard
-LLM streaming           → LLMCallNode with callbacks
-Tool execution          → Parallel with tool leaves
+Agent loop               → BT.repeater({ until_failure = true })
+Model selection          → BT.action() leaf + blackboard
+LLM streaming           → BT.llm_call() with callbacks
+Tool execution          → BT.parallel() with tool leaves
 Context management      → Blackboard hierarchical state
-Error handling          → Selector fallback pattern
+Error handling          → BT.selector() fallback pattern
 ```
 
-**Estimated LISP**: 300-400 lines for oracle-agent.lisp
+**Estimated Lua DSL**: 300-400 lines for oracle-agent.lua
 
 #### Research System Subtree (research/03)
 
 The research system (2,301 lines) has a custom behavior pattern that maps to:
-```lisp
-(subtree "deep-research"
-  (sequence
-    (llm-call generate-brief ...)
-    (action plan-subtopics ...)
-    (parallel :policy :require-all :on-child-fail :continue
-      (for-each [:researchers]
-        (subtree-ref "single-researcher")))
-    (llm-call compress-findings ...)
-    (llm-call generate-report ...)
-    (selector (sequence (condition should-persist?) (action persist-to-vault)) ...)))
+```lua
+return BT.subtree("deep-research", {
+    root = BT.sequence {
+        BT.llm_call { name = "generate-brief", ... },
+        BT.action("plan-subtopics", { fn = "research.plan_subtopics" }),
+        BT.parallel({ policy = "require-all", on_child_fail = "continue" }, {
+            BT.for_each("researchers", {
+                BT.subtree_ref("single-researcher")
+            })
+        }),
+        BT.llm_call { name = "compress-findings", ... },
+        BT.llm_call { name = "generate-report", ... },
+        BT.selector {
+            BT.sequence {
+                BT.condition("should-persist?"),
+                BT.action("persist-to-vault", { fn = "research.persist" })
+            },
+            BT.action("skip-persist", { fn = "research.noop" })
+        }
+    }
+})
 ```
 
-Full LISP design provided in research/03.
+Full Lua DSL design provided in research/03.
 
 #### ANS EventBus Integration (research/05)
 
@@ -161,6 +176,57 @@ Full LISP design provided in research/03.
 
 Complete blackboard contracts per tool documented in research/04.
 
+#### Lua Sandbox Integration (research/06)
+
+The existing Lua sandbox (`backend/src/services/plugins/lua_sandbox.py`, 593 lines) provides:
+- **Secure execution**: Blocked globals (os, io, debug, require, etc.)
+- **Allowed modules**: string, table, math (filtered functions only)
+- **Timeout enforcement**: 5s default via threading
+- **Context exposure**: RuleContext converted to Lua tables
+
+**Current ScriptNode integration**:
+```python
+class ScriptNode(Leaf):
+    def _tick(self, context: TickContext) -> RunStatus:
+        result = self._sandbox.execute(script, context.rule_context)
+        return self._map_result(result)  # nil→FAILURE, true→SUCCESS, table→action
+```
+
+**Gaps for BT**:
+1. Cannot write to blackboard from Lua (only read via context)
+2. Cannot return RUNNING status (only SUCCESS/FAILURE)
+3. No async operation support
+4. No blackboard access (only RuleContext)
+
+**Enhancement plan**:
+```lua
+-- Lua API for BT (available in all scripts and tree definitions)
+blackboard.get("key")           -- Read from blackboard
+blackboard.set("key", value)    -- Write to blackboard
+blackboard.has("key")           -- Check existence
+
+-- Return RUNNING for async operations
+return {status = "running", async_id = "my_operation"}
+
+-- Return with blackboard writes
+return {
+    status = "success",
+    blackboard = {["result"] = computed_value}
+}
+```
+
+**Inline script in tree definition**:
+```lua
+BT.script("check-complex-condition", {
+    lua = [[
+        return context.turn.token_usage > 0.8 and #context.history.tools > 5
+    ]]
+})
+
+-- External Lua file
+BT.script("custom-logic", { file = "scripts/custom.lua" })
+```
+
 ---
 
 ## Phase 1: Architecture Design
@@ -169,14 +235,14 @@ Complete blackboard contracts per tool documented in research/04.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              LISP Tree Files                                │
-│  trees/oracle-agent.lisp | trees/research.lisp | trees/recovery.lisp       │
+│                              Lua Tree Files                                 │
+│  trees/oracle-agent.lua | trees/research.lua | trees/recovery.lua          │
 └─────────────────────────────────────────┬───────────────────────────────────┘
-                                          │ parse
+                                          │ execute via LuaSandbox
                                           ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           LISP Parser (07)                                  │
-│  Tokenize → Parse → Validate → Build BehaviorTree                          │
+│                           Lua DSL Runtime                                   │
+│  BT.* API → Validate → Build BehaviorTree                                  │
 └─────────────────────────────────────────┬───────────────────────────────────┘
                                           │
                                           ▼
@@ -213,14 +279,12 @@ backend/src/
 │   ├── hot_reload.py                # File watching, reload (FR-6)
 │   ├── debug.py                     # Observability (FR-8)
 │   ├── scheduler.py                 # Event-driven tick scheduling
-│   ├── lisp/
+│   ├── lua/
 │   │   ├── __init__.py
-│   │   ├── grammar.lark             # Lark LALR grammar (research/07)
-│   │   ├── parser.py                # Lark-based parser
-│   │   ├── ast.py                   # AST node classes
-│   │   ├── transformer.py           # Parse tree → AST
-│   │   ├── validator.py             # Reference validation
-│   │   ├── builder.py               # AST → BehaviorTree
+│   │   ├── bt_api.py                # BT.* Lua API implementation
+│   │   ├── loader.py                # Load .lua tree files via LuaSandbox
+│   │   ├── validator.py             # Reference validation (fn, subtree_ref)
+│   │   ├── builder.py               # Lua table → BehaviorTree
 │   │   └── errors.py                # Custom error classes
 │   ├── nodes/
 │   │   ├── __init__.py
@@ -228,10 +292,10 @@ backend/src/
 │   │   ├── llm.py                   # LLM-aware nodes (FR-3)
 │   │   ├── tool.py                  # Tool leaf nodes
 │   │   └── subtree.py               # Subtree composition
-│   └── trees/                       # LISP tree definitions
-│       ├── oracle-agent.lisp
-│       ├── research.lisp
-│       └── recovery.lisp
+│   └── trees/                       # Lua tree definitions
+│       ├── oracle-agent.lua
+│       ├── research.lua
+│       └── recovery.lua
 ├── services/
 │   ├── plugins/behavior_tree/       # EXISTING: Keep, extend
 │   ├── oracle_agent.py              # MIGRATE: Thin wrapper over tree
@@ -268,15 +332,16 @@ backend/src/
 | 1.5 | Extend existing BT nodes | TickContext | 2 days |
 | 1.6 | Unit tests for core runtime | All above | 2 days |
 
-### Milestone 2: LISP Integration (Week 2-3)
+### Milestone 2: Lua DSL Integration (Week 2-3)
 
 | Task | Description | Dependencies | Estimate |
 |------|-------------|--------------|----------|
-| 2.1 | Implement LISP parser | Research 07 | 2 days |
-| 2.2 | Implement tree validator | Parser | 1 day |
-| 2.3 | Implement AST → BehaviorTree | Validator | 2 days |
-| 2.4 | Implement hot reload | Parser | 2 days |
-| 2.5 | Unit tests for LISP | All above | 1 day |
+| 2.1 | Implement `BT.*` Lua API | LuaSandbox | 2 days |
+| 2.2 | Implement tree loader (execute .lua via sandbox) | BT.* API | 1 day |
+| 2.3 | Implement validator (fn refs, subtree refs) | Loader | 1 day |
+| 2.4 | Implement Lua table → BehaviorTree builder | Validator | 2 days |
+| 2.5 | Implement hot reload (watch .lua files) | Builder | 1 day |
+| 2.6 | Unit tests for Lua DSL | All above | 1 day |
 
 ### Milestone 3: LLM Nodes (Week 3-4)
 
@@ -300,7 +365,7 @@ backend/src/
 
 | Task | Description | Dependencies | Estimate |
 |------|-------------|--------------|----------|
-| 5.1 | Write oracle-agent.lisp | LISP, LLM, Tools | 3 days |
+| 5.1 | Write oracle-agent.lua | Lua DSL, LLM, Tools | 3 days |
 | 5.2 | Create Oracle tree wrapper | Tree definition | 2 days |
 | 5.3 | Parallel operation (old + new) | Wrapper | 2 days |
 | 5.4 | E2E testing | All above | 3 days |
@@ -310,7 +375,7 @@ backend/src/
 
 | Task | Description | Dependencies | Estimate |
 |------|-------------|--------------|----------|
-| 6.1 | Write research.lisp | Oracle complete | 2 days |
+| 6.1 | Write research.lua | Oracle complete | 2 days |
 | 6.2 | Integrate as subtree | Tree definition | 1 day |
 | 6.3 | E2E testing | All above | 2 days |
 
@@ -356,7 +421,7 @@ backend/src/
 | Risk | Mitigation |
 |------|------------|
 | Migration breaks existing | Feature flag, parallel operation |
-| LISP parsing complexity | Start with minimal subset |
+| Lua sandbox security | Reuse proven `LuaSandbox` (blocked globals, timeouts) |
 | Hot reload state corruption | Conservative default policy |
 | LLM node complexity | Extensive testing, fallback |
 | Performance regression | Benchmark, optimize hot paths |
@@ -365,7 +430,7 @@ backend/src/
 
 ## Success Metrics
 
-1. Oracle agent: 2,765 lines → ~500 lines LISP + runtime
+1. Oracle agent: 2,765 lines → ~500 lines Lua DSL + runtime
 2. Research as subtree: Invokable from Oracle
 3. Hot reload: <1 second
 4. Tick overhead: <1ms
@@ -380,7 +445,6 @@ backend/src/
 
 ```toml
 # Add to pyproject.toml [project.dependencies]
-lark = "^1.3.1"          # LISP parser (MIT license)
 watchdog = "^4.0.0"      # File system watcher for hot reload
 ```
 
@@ -389,14 +453,15 @@ watchdog = "^4.0.0"      # File system watcher for hot reload
 - `asyncio` - Async runtime (stdlib)
 - `sqlite3` - Blackboard persistence (stdlib)
 - `threading` - Watchdog thread (stdlib)
-- `simpleeval` - Expression evaluation (already in plugins)
-- `lupa` - Lua sandbox (already in plugins)
+- `simpleeval` - Expression evaluation (already in plugins for ConditionNode)
+- `lupa` - Lua sandbox (already in plugins for ScriptNode, LuaJIT2 bindings) - **Now also used for tree definition DSL**
 
 ---
 
 ## Appendices
 
-- `research/` - Detailed component audits from subagents
+- `research/` - Detailed component audits from subagents (7 documents)
 - `data-model.md` - Full entity specifications
+- `state-architecture.md` - Unified state management design (TypedBlackboard, contracts, bridges)
 - `contracts/` - API contracts for debug endpoints
 - `quickstart.md` - Developer onboarding guide

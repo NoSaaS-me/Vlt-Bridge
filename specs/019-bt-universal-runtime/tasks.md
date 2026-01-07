@@ -10,23 +10,92 @@ This document provides a dependency-ordered task checklist for implementing the 
 
 ## Prerequisites
 
-- [ ] **P1**: Add `lark` dependency to pyproject.toml
-- [ ] **P2**: Add `watchdog` dependency to pyproject.toml
-- [ ] **P3**: Create `backend/src/bt/` package structure
+- [ ] **P1**: Add `watchdog` dependency to pyproject.toml
+- [ ] **P2**: Create `backend/src/bt/` package structure
+
+---
+
+## Milestone 0: State Architecture (Foundation)
+
+> See `state-architecture.md` for full design. This must be completed before other milestones.
+
+### 0.1 State Type Hierarchy
+**Dependencies**: P2
+
+- [ ] **0.1.1**: Create `backend/src/bt/state/` package
+- [ ] **0.1.2**: Implement `BaseState` protocol (Pydantic base)
+- [ ] **0.1.3**: Implement `IdentityState` (user_id, project_id, session_id)
+- [ ] **0.1.4**: Implement `ConversationState` (messages, context_tokens)
+- [ ] **0.1.5**: Implement `BudgetState` (token_budget, iterations, timeout)
+- [ ] **0.1.6**: Implement `ToolState` (pending, running, completed tools)
+- [ ] **0.1.7**: Implement `ExecutionState` (BT-specific tick/path tracking)
+- [ ] **0.1.8**: Unit tests for each state type
+
+### 0.2 Composite State Types
+**Dependencies**: 0.1
+
+- [ ] **0.2.1**: Implement `OracleState` (Identity + Conversation + Budget + Tool)
+- [ ] **0.2.2**: Implement `ResearchState` (Identity + Budget + Research-specific)
+- [ ] **0.2.3**: Implement `OracleStateSlice` factory for extracting slices
+- [ ] **0.2.4**: Unit tests for composite state types
+
+### 0.3 TypedBlackboard Implementation
+**Dependencies**: 0.1
+
+- [ ] **0.3.1**: Implement `TypedBlackboard` class with schema registry
+- [ ] **0.3.2**: Implement `register()` and `register_many()` methods
+- [ ] **0.3.3**: Implement type-safe `get[T]()` with overloads
+- [ ] **0.3.4**: Implement validating `set()` method
+- [ ] **0.3.5**: Implement `create_child_scope()` for hierarchy
+- [ ] **0.3.6**: Implement access tracking (`get_reads()`, `get_writes()`)
+- [ ] **0.3.7**: Implement `snapshot()` for debugging
+- [ ] **0.3.8**: Unit tests for TypedBlackboard
+
+### 0.4 Node Contracts
+**Dependencies**: 0.3
+
+- [ ] **0.4.1**: Implement `NodeContract` dataclass (inputs, outputs, optional)
+- [ ] **0.4.2**: Implement `ContractedNode` mixin with `contract()` method
+- [ ] **0.4.3**: Implement `validate_inputs()` for pre-tick validation
+- [ ] **0.4.4**: Implement `validate_access()` for post-tick verification
+- [ ] **0.4.5**: Implement `ContractViolationError` exception
+- [ ] **0.4.6**: Unit tests for contract validation
+
+### 0.5 State Bridges
+**Dependencies**: 0.2, 0.3
+
+- [ ] **0.5.1**: Implement `RuleContextBridge.from_rule_context()` (RuleContext → OracleState)
+- [ ] **0.5.2**: Implement `RuleContextBridge.to_rule_context()` (OracleState → RuleContext)
+- [ ] **0.5.3**: Implement `LuaStateBridge.to_lua_table()` (TypedBlackboard → Lua dict)
+- [ ] **0.5.4**: Implement `LuaStateBridge.from_lua_result()` (Lua result → TypedBlackboard)
+- [ ] **0.5.5**: Integration tests for bridges
+
+### 0.6 Parallel Merge Strategies (Consistency)
+**Dependencies**: 0.3
+
+- [ ] **0.6.1**: Implement `MergeStrategy` enum (LAST_WINS, FIRST_WINS, COLLECT, MERGE_DICT, FAIL_ON_CONFLICT)
+- [ ] **0.6.2**: Implement `ParallelMerger` class with per-key strategy configuration
+- [ ] **0.6.3**: Implement `merge()` method with conflict detection
+- [ ] **0.6.4**: Implement `ConflictEvent` for ANS emission on conflicts
+- [ ] **0.6.5**: Update Parallel node to create child scopes per child
+- [ ] **0.6.6**: Update Parallel node to use ParallelMerger at completion
+- [ ] **0.6.7**: Add `merge_strategy` and `merge` Lua properties to BT.* API
+- [ ] **0.6.8**: Unit tests for each merge strategy
+- [ ] **0.6.9**: Integration test: parallel researchers with COLLECT strategy
 
 ---
 
 ## Milestone 1: Core Runtime
 
 ### 1.1 Hierarchical Blackboard (FR-1)
-**Dependencies**: P3
+**Dependencies**: 0.3 (TypedBlackboard)
 
-- [ ] **1.1.1**: Extend existing `Blackboard` class with `parent` field
-- [ ] **1.1.2**: Implement scope hierarchy lookup (`get()` searches up chain)
-- [ ] **1.1.3**: Implement `set_global()` to write to root scope
-- [ ] **1.1.4**: Implement `snapshot()` for debugging
-- [ ] **1.1.5**: Add `BlackboardScope` enum (GLOBAL, TREE, SUBTREE)
-- [ ] **1.1.6**: Integrate with `PluginStateService` for global persistence
+- [ ] **1.1.1**: Extend `TypedBlackboard` with global scope persistence
+- [ ] **1.1.2**: Implement scope hierarchy lookup (child → parent chain)
+- [ ] **1.1.3**: Implement `set_global()` to write directly to root scope
+- [ ] **1.1.4**: Add `BlackboardScope` enum (GLOBAL, TREE, SUBTREE)
+- [ ] **1.1.5**: Integrate with `PluginStateService` for GLOBAL persistence
+- [ ] **1.1.6**: Auto-register standard schemas (Identity, Budget, Tool, etc.)
 - [ ] **1.1.7**: Unit tests for hierarchical blackboard
 
 ### 1.2 Extended TickContext (FR-4)
@@ -71,58 +140,94 @@ This document provides a dependency-ordered task checklist for implementing the 
 
 ---
 
-## Milestone 2: LISP Integration
+## Milestone 2: Lua DSL Integration
 
-### 2.1 Lark Parser (FR-2)
-**Dependencies**: P1, P3
+### 2.1 BT.* Lua API (FR-2)
+**Dependencies**: P2 (existing `lupa`/`LuaSandbox` already in codebase)
 
-- [ ] **2.1.1**: Create `grammar.lark` with BT LISP grammar
-- [ ] **2.1.2**: Create `ast.py` with Symbol, Keyword, BTList, BTVector, BTMap
-- [ ] **2.1.3**: Create `errors.py` with custom error classes
-- [ ] **2.1.4**: Create `transformer.py` (parse tree → AST)
-- [ ] **2.1.5**: Create `parser.py` with `BTLispParser` class
-- [ ] **2.1.6**: Implement error pattern matching for helpful messages
-- [ ] **2.1.7**: Unit tests for parser (valid trees, syntax errors, line numbers)
+- [ ] **2.1.1**: Create `backend/src/bt/lua/` package
+- [ ] **2.1.2**: Implement `BT.tree(name, config)` function
+- [ ] **2.1.3**: Implement `BT.sequence(children)` function
+- [ ] **2.1.4**: Implement `BT.selector(children)` function
+- [ ] **2.1.5**: Implement `BT.parallel(config, children)` function
+- [ ] **2.1.6**: Implement `BT.action(name, config)` function
+- [ ] **2.1.7**: Implement `BT.condition(name, config)` function
+- [ ] **2.1.8**: Implement `BT.llm_call(config)` function
+- [ ] **2.1.9**: Implement `BT.repeater(config, children)` function
+- [ ] **2.1.10**: Implement `BT.subtree_ref(name)` function
+- [ ] **2.1.11**: Implement `BT.for_each(key, children)` function
+- [ ] **2.1.12**: Implement `BT.script(name, config)` function
+- [ ] **2.1.13**: Implement decorator functions (timeout, retry, guard, etc.)
+- [ ] **2.1.14**: Unit tests for BT.* API
 
-### 2.2 AST Node Classes
+### 2.2 Lua Tree Loader
 **Dependencies**: 2.1
 
-- [ ] **2.2.1**: Create `TreeDef` AST node
-- [ ] **2.2.2**: Create `SequenceNode`, `SelectorNode`, `ParallelNode`
-- [ ] **2.2.3**: Create `ActionNode`, `ConditionNode`
-- [ ] **2.2.4**: Create `LLMCallNode` AST (not BT node yet)
-- [ ] **2.2.5**: Create `SubtreeNode` AST
-- [ ] **2.2.6**: Create decorator AST nodes (Repeater, Timeout, Retry, etc.)
+- [ ] **2.2.1**: Create `LuaTreeLoader` class extending `LuaSandbox`
+- [ ] **2.2.2**: Inject `BT` namespace into Lua environment
+- [ ] **2.2.3**: Implement `load_tree(path)` method
+- [ ] **2.2.4**: Capture Lua syntax errors with line numbers
+- [ ] **2.2.5**: Unit tests for loader
 
 ### 2.3 Validator (FR-2)
 **Dependencies**: 2.2
 
 - [ ] **2.3.1**: Create `BTValidator` class
-- [ ] **2.3.2**: Implement `:fn` reference resolution checking
+- [ ] **2.3.2**: Implement `fn = "module.function"` reference resolution checking
 - [ ] **2.3.3**: Implement circular subtree detection
 - [ ] **2.3.4**: Implement required property validation per node type
 - [ ] **2.3.5**: Implement schema validation for blackboard
 - [ ] **2.3.6**: Unit tests for validator
 
-### 2.4 AST → BehaviorTree Builder
+### 2.4 Lua Table → BehaviorTree Builder
 **Dependencies**: 2.3, 1.1
 
 - [ ] **2.4.1**: Create `BTBuilder` class
-- [ ] **2.4.2**: Implement AST → existing Composite nodes
-- [ ] **2.4.3**: Implement AST → existing Decorator nodes
-- [ ] **2.4.4**: Implement AST → Action/Condition leaves (fn resolution)
+- [ ] **2.4.2**: Implement Lua table → existing Composite nodes
+- [ ] **2.4.3**: Implement Lua table → existing Decorator nodes
+- [ ] **2.4.4**: Implement Lua table → Action/Condition leaves (fn resolution)
 - [ ] **2.4.5**: Implement subtree reference linking
 - [ ] **2.4.6**: Unit tests for builder
 
 ### 2.5 Hot Reload (FR-6)
-**Dependencies**: P2, 2.4, 1.3
+**Dependencies**: P1, 2.4, 1.3
 
 - [ ] **2.5.1**: Create `TreeRegistry` class
-- [ ] **2.5.2**: Implement file watcher with watchdog
+- [ ] **2.5.2**: Implement `.lua` file watcher with watchdog
 - [ ] **2.5.3**: Implement `let-finish-then-swap` policy
 - [ ] **2.5.4**: Implement `cancel-and-restart` policy
 - [ ] **2.5.5**: Implement reload logging with tree diff
 - [ ] **2.5.6**: Unit tests for hot reload
+
+---
+
+## Milestone 2.5: Lua Sandbox Enhancements
+
+### 2.6 Blackboard Access from Lua
+**Dependencies**: 1.1 (Hierarchical Blackboard)
+
+- [ ] **2.6.1**: Expose `blackboard` table to Lua context
+- [ ] **2.6.2**: Implement `blackboard.get(key)` in Lua
+- [ ] **2.6.3**: Implement `blackboard.set(key, value)` in Lua
+- [ ] **2.6.4**: Implement `blackboard.has(key)` in Lua
+- [ ] **2.6.5**: Ensure hierarchical scope lookup works from Lua
+- [ ] **2.6.6**: Unit tests for Lua blackboard access
+
+### 2.7 RUNNING Status Support
+**Dependencies**: 2.6
+
+- [ ] **2.7.1**: Update `ScriptNode._map_result()` to handle `{status = "running"}`
+- [ ] **2.7.2**: Implement async_id tracking for Lua RUNNING returns
+- [ ] **2.7.3**: Implement blackboard writes from return table
+- [ ] **2.7.4**: Unit tests for RUNNING status from Lua
+
+### 2.8 Script Node Integration
+**Dependencies**: 2.4 (Builder), 2.7
+
+- [ ] **2.8.1**: Support `BT.script(name, { lua = "inline code" })` in API
+- [ ] **2.8.2**: Support `BT.script(name, { file = "path/to/script.lua" })` in API
+- [ ] **2.8.3**: Wire Lua table → existing ScriptNode leaf
+- [ ] **2.8.4**: Unit tests for script nodes
 
 ---
 
@@ -204,10 +309,10 @@ This document provides a dependency-ordered task checklist for implementing the 
 
 ## Milestone 5: Oracle Migration
 
-### 5.1 Oracle LISP Tree
+### 5.1 Oracle Lua Tree
 **Dependencies**: 2.4, 3.1, 4.1
 
-- [ ] **5.1.1**: Write `oracle-agent.lisp` tree definition
+- [ ] **5.1.1**: Write `oracle-agent.lua` tree definition
 - [ ] **5.1.2**: Define blackboard schema
 - [ ] **5.1.3**: Implement context loading action
 - [ ] **5.1.4**: Implement response emission action
@@ -255,11 +360,11 @@ This document provides a dependency-ordered task checklist for implementing the 
 
 ## Milestone 6: Research Migration
 
-### 6.1 Research LISP Tree
+### 6.1 Research Lua Tree
 **Dependencies**: 5.1 (Oracle working)
 
-- [ ] **6.1.1**: Write `research.lisp` subtree definition
-- [ ] **6.1.2**: Write `single-researcher.lisp` subtree
+- [ ] **6.1.1**: Write `research.lua` subtree definition
+- [ ] **6.1.2**: Write `single-researcher.lua` subtree
 - [ ] **6.1.3**: Define blackboard schema for research
 - [ ] **6.1.4**: Implement search actions (Tavily, OpenRouter fallback)
 - [ ] **6.1.5**: Implement compression/report generation LLM calls
@@ -342,7 +447,7 @@ Throughout implementation, add these new event types:
 
 After all milestones complete, verify:
 
-- [ ] Oracle agent LISP is ≤500 lines (spec says 300-400)
+- [ ] Oracle agent Lua DSL is ≤500 lines (spec says 300-400)
 - [ ] Research invokable as Oracle subtree
 - [ ] Hot reload completes in <1 second
 - [ ] Tick overhead <1ms for non-LLM nodes

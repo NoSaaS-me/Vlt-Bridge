@@ -10,13 +10,13 @@ The fundamental insight: **behavior trees are the universal composition pattern 
 
 ### Solution Summary
 
-Transform the existing behavior tree implementation into THE universal runtime for all agent orchestration. LISP defines tree structure (homoiconicity = trees define themselves). Python provides the core runtime, blackboard state, and leaf execution. All agents, workflows, and tools become nodes in composable trees.
+Transform the existing behavior tree implementation into THE universal runtime for all agent orchestration. Lua DSL defines tree structure using a fluent `BT.*` API (LLMs are fluent in Lua, and `lupa` already exists in the codebase). Python provides the core runtime, blackboard state, and leaf execution. All agents, workflows, and tools become nodes in composable trees.
 
 ### Scope
 
 **In Scope:**
 - Blackboard state management with proper scoping (global, tree-local, subtree-local)
-- LISP tree definition language with Python interop
+- Lua DSL for tree definition with `BT.*` fluent API and Python interop
 - LLM-aware nodes (streaming, budget, interruptibility)
 - Runtime semantics (tick loop, budget, yield points, async coordination)
 - Stuck detection and recovery heuristics
@@ -35,19 +35,19 @@ Transform the existing behavior tree implementation into THE universal runtime f
 
 ## User Scenarios & Testing
 
-### Scenario 1: Developer Defines Agent Behavior in LISP
+### Scenario 1: Developer Defines Agent Behavior in Lua DSL
 
 **User**: A developer creating a new agent workflow
 
 **Flow**:
-1. Developer writes a `.lisp` file defining the agent's behavior tree
-2. The LISP references Python functions for leaf execution
+1. Developer writes a `.lua` file defining the agent's behavior tree using `BT.*` API
+2. The Lua DSL references Python functions for leaf execution via `fn = "module.function"`
 3. System loads and validates the tree at startup
 4. Tree executes when events arrive
 
 **Acceptance**:
-- LISP syntax errors produce clear error messages with line numbers
-- Undefined Python references are caught at load time, not runtime
+- Lua syntax errors produce clear error messages with line numbers
+- Undefined Python `fn` references are caught at load time, not runtime
 - Tree can be tested in isolation with mock blackboard
 
 ### Scenario 2: LLM Call with Streaming and Budget
@@ -74,7 +74,7 @@ Transform the existing behavior tree implementation into THE universal runtime f
 
 **Flow**:
 1. Agent is running with tree in RUNNING state (e.g., waiting for LLM)
-2. Developer modifies `.lisp` file and triggers reload
+2. Developer modifies `.lua` file and triggers reload
 3. System loads new tree definition
 4. For RUNNING nodes: option to cancel-and-restart or let-finish-then-swap
 5. New tree takes effect for next tick cycle
@@ -148,55 +148,73 @@ The system provides a hierarchical blackboard for inter-node communication.
 - Global blackboard persists to database across sessions
 - Blackboard access is thread-safe for parallel nodes
 
-### FR-2: LISP Tree Definition Language
+### FR-2: Lua DSL Tree Definition Language
 
-Trees are defined in LISP S-expressions that reference Python runtime components.
+Trees are defined using a Lua DSL with a fluent `BT.*` API that references Python runtime components.
+
+**Why Lua over LISP:**
+1. `lupa` (Lua via LuaJIT2) already exists in the codebase for `LuaSandbox`
+2. LLMs are significantly more fluent in Lua than LISP
+3. No new parser needed - just good API design via `BT.*` namespace
+4. Better error messages out of the box from Lua runtime
+5. Familiar table syntax for configuration
 
 **Syntax:**
-```lisp
-(tree "oracle-agent"
-  :description "Main chat agent workflow"
-  :blackboard-schema {:context nil :response nil :tools []}
+```lua
+-- Tree definition in Lua
+return BT.tree("oracle-agent", {
+    description = "Main chat agent workflow",
+    blackboard = { context = nil, response = nil, tools = {} },
 
-  (sequence
-    (action load-context :fn "oracle.load_context")
-    (repeater :until-failure
-      (sequence
-        (llm-call :model "claude-sonnet-4"
-                  :stream-to [:partial-response]
-                  :budget 4000)
-        (selector
-          (sequence
-            (condition has-tool-calls?)
-            (parallel :policy :wait-all
-              (for-each [:tool-calls]
-                (action execute-tool :fn "tools.execute"))))
-          (action emit-response :fn "oracle.emit"))))))
+    root = BT.sequence {
+        BT.action("load-context", { fn = "oracle.load_context" }),
+        BT.repeater({ until_failure = true }, {
+            BT.sequence {
+                BT.llm_call {
+                    model = "claude-sonnet-4",
+                    stream_to = "partial-response",
+                    budget = 4000
+                },
+                BT.selector {
+                    BT.sequence {
+                        BT.condition("has-tool-calls?"),
+                        BT.parallel({ policy = "wait-all", merge = "collect" }, {
+                            BT.for_each("tool-calls", {
+                                BT.action("execute-tool", { fn = "tools.execute" })
+                            })
+                        })
+                    },
+                    BT.action("emit-response", { fn = "oracle.emit" })
+                }
+            }
+        })
+    }
+})
 ```
 
 **Python Interop:**
-- `:fn "module.function"` - References Python function by dotted path
+- `fn = "module.function"` - References Python function by dotted path
 - Python functions receive `(ctx: TickContext, blackboard: Blackboard) -> RunStatus`
 - Python functions can be async
 - Type annotations on Python functions used for validation
 
 **Acceptance Criteria:**
-- Parser produces clear errors for syntax issues
-- Undefined `:fn` references caught at load time
+- Lua syntax errors produce clear error messages with line numbers
+- Undefined `fn` references caught at load time
 - Circular tree references detected and rejected
-- Trees can import/reference other trees as subtrees
+- Trees can import/reference other trees as subtrees via `BT.subtree_ref("name")`
 
 ### FR-3: LLM-Aware Nodes
 
 LLM calls are a special node type, not regular leaves, due to their unique characteristics.
 
 **Properties:**
-- `:stream-to [blackboard-key]` - Where to write streaming chunks
-- `:budget tokens` - Maximum tokens for this call
-- `:interruptible bool` - Can this call be cancelled by higher-priority events
-- `:on-chunk callback` - LISP form or Python fn to call on each chunk
-- `:timeout seconds` - Maximum wall-clock time
-- `:retry-on [error-types]` - Which errors trigger automatic retry
+- `stream_to = "blackboard-key"` - Where to write streaming chunks
+- `budget = tokens` - Maximum tokens for this call
+- `interruptible = bool` - Can this call be cancelled by higher-priority events
+- `on_chunk = "callback"` - Python fn to call on each chunk
+- `timeout = seconds` - Maximum wall-clock time
+- `retry_on = {"error-types"}` - Which errors trigger automatic retry
 
 **Tick Behavior:**
 1. First tick: Initiate LLM call, return RUNNING
@@ -316,8 +334,8 @@ Meta-level monitoring detects and handles unexpected states.
 Trees can be reloaded at runtime without restarting the system.
 
 **Reload Process:**
-1. Watch for file changes (or explicit reload command)
-2. Parse new tree definition
+1. Watch for `.lua` file changes (or explicit reload command)
+2. Execute Lua file through `LuaSandbox` to get tree definition
 3. Validate against schema
 4. For RUNNING trees, apply configured policy:
    - `cancel-and-restart`: Cancel in-flight operations, load new tree
@@ -341,21 +359,21 @@ Trees can be reloaded at runtime without restarting the system.
 Parallel nodes execute multiple children concurrently with configurable policies.
 
 **Policies:**
-- `REQUIRE_ALL`: Succeed only if all children succeed. Fail immediately if any fails.
-- `REQUIRE_ONE`: Succeed when first child succeeds. Continue others or cancel.
-- `REQUIRE_N(n)`: Succeed when N children succeed.
+- `policy = "require-all"`: Succeed only if all children succeed. Fail immediately if any fails.
+- `policy = "require-one"`: Succeed when first child succeeds. Continue others or cancel.
+- `policy = "require-n"` with `n = N`: Succeed when N children succeed.
 
 **Failure Handling:**
-- `:on-child-fail :cancel-siblings` - Cancel running siblings on failure
-- `:on-child-fail :continue` - Let siblings finish regardless
-- `:on-child-fail :retry` - Retry failed child
+- `on_child_fail = "cancel-siblings"` - Cancel running siblings on failure
+- `on_child_fail = "continue"` - Let siblings finish regardless
+- `on_child_fail = "retry"` - Retry failed child
 
 **Memory Mode:**
-- `:memory true` - Remember which children completed across ticks
+- `memory = true` - Remember which children completed across ticks
 - Useful for long-running parallel operations
 
 **Concurrency Control:**
-- `:max-concurrent N` - Limit concurrent children (for rate limiting)
+- `max_concurrent = N` - Limit concurrent children (for rate limiting)
 
 **Acceptance Criteria:**
 - Policy enforced correctly for all combinations
@@ -395,11 +413,11 @@ Trees are inspectable at runtime for debugging and monitoring.
 
 ## Success Criteria
 
-1. **Migration completeness**: Oracle agent (2,765 lines) refactored to tree definition under 500 lines of LISP, with all current functionality preserved
+1. **Migration completeness**: Oracle agent (2,765 lines) refactored to tree definition under 500 lines of Lua DSL, with all current functionality preserved
 
 2. **Composition achieved**: Research workflow runs as subtree of Oracle, can be invoked via tool or directly
 
-3. **Hot reload works**: Developer can modify tree LISP and reload without restarting, with less than 1 second reload time
+3. **Hot reload works**: Developer can modify tree Lua file and reload without restarting, with less than 1 second reload time
 
 4. **LLM streaming works**: Partial responses visible in UI during generation, with chunks appearing within 100ms of receipt
 
@@ -449,7 +467,7 @@ A named, reusable composition of nodes.
 - `root`: Root BehaviorNode
 - `blackboard`: Tree-scoped blackboard
 - `schema`: Expected blackboard schema
-- `source_path`: Path to LISP definition
+- `source_path`: Path to Lua definition
 - `loaded_at`: When tree was loaded
 - `tick_count`: Total ticks executed
 
@@ -473,7 +491,7 @@ Specialized node for LLM API calls.
 
 **Attributes:**
 - `model`: Model identifier
-- `prompt_template`: LISP form or string template
+- `prompt_template`: String template or blackboard key
 - `stream_to`: Blackboard key for streaming
 - `budget`: Token budget
 - `interruptible`: Whether can be cancelled
@@ -493,7 +511,7 @@ Specialized node for LLM API calls.
 
 ### Assumptions
 
-- LISP parsing can use existing Python libraries (e.g., `hy` or custom s-expression parser)
+- Lua execution uses existing `lupa` library (LuaJIT2 bindings) via `LuaSandbox`
 - Hot reload is acceptable with sub-second pause, not zero-downtime
 - Parallel execution uses asyncio, not multiprocessing
 - Global blackboard persistence uses existing SQLite database
@@ -504,7 +522,7 @@ Specialized node for LLM API calls.
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| LISP parsing complexity | Medium | High | Start with minimal subset, expand incrementally |
+| Lua sandbox security | Low | High | Reuse existing `LuaSandbox` with proven security (blocked globals, timeouts) |
 | Hot reload state corruption | Medium | High | Conservative default policy (let-finish-then-swap) |
 | LLM node complexity | High | Medium | Extensive testing, fallback to simple retry |
 | Migration breaks existing behavior | Medium | High | Run old and new in parallel during migration |

@@ -121,7 +121,7 @@ class BehaviorNode:
 
     # Metadata
     metadata: Dict[str, Any]         # Arbitrary data
-    source_location: Optional[str]   # LISP file:line
+    source_location: Optional[str]   # Lua file:line
 
     # Methods (abstract)
     def tick(self, ctx: TickContext) -> RunStatus: ...
@@ -175,7 +175,7 @@ class BehaviorTree:
     tick_count: int                  # Total ticks executed
 
     # Source
-    source_path: str                 # Path to LISP file
+    source_path: str                 # Path to Lua file
     source_hash: str                 # Hash for change detection
     loaded_at: datetime              # When parsed
 
@@ -344,8 +344,16 @@ class Services:
     # LLM
     llm_client: LLMClient            # OpenRouter/Anthropic client
 
-    # Tools
-    tool_executor: ToolExecutor      # Tool execution
+    # MCP Tools (NEW)
+    tool_registry: ToolRegistry      # Registry of all MCP tools
+    tool_executor: ToolExecutor      # Tool execution with async support
+
+    # CodeRAG (NEW)
+    coderag: CodeRAGService          # Direct CodeRAG search access
+    oracle_bridge: OracleBridge      # Multi-source oracle queries
+
+    # Tree Management (NEW)
+    tree_registry: TreeRegistry      # Loaded behavior trees
 
     # Events
     event_bus: EventBus              # ANS EventBus
@@ -358,6 +366,35 @@ class Services:
 
     # Configuration
     config: Config                   # Runtime configuration
+
+
+@dataclass
+class ToolRegistry:
+    """Registry of MCP tools available as leaf nodes."""
+
+    def get_tool(self, name: str) -> ToolDefinition: ...
+    def list_tools(self) -> List[str]: ...
+    def get_contract(self, name: str) -> NodeContract: ...
+
+
+@dataclass
+class CodeRAGService:
+    """Direct CodeRAG access via vlt-cli/daemon."""
+
+    def search_bm25(
+        self,
+        query: str,
+        limit: int = 20,
+        project_id: Optional[str] = None
+    ) -> List[CodeChunk]: ...
+
+    def get_project_status(self, project_id: str) -> ProjectStatus: ...
+
+    async def trigger_reindex(
+        self,
+        project_id: str,
+        force: bool = False
+    ) -> str: ...  # Returns job_id
 ```
 
 ---
