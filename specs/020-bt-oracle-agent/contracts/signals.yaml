@@ -1,0 +1,194 @@
+# Signal Contract Schema
+# OpenAPI 3.0 compatible definitions for agent signals
+
+openapi: 3.0.0
+info:
+  title: Oracle Agent Signal Contract
+  version: 1.0.0
+  description: |
+    Defines the XML signal format embedded in Oracle agent responses.
+    Signals enable agent self-reflection and BT control flow decisions.
+
+components:
+  schemas:
+    SignalType:
+      type: string
+      enum:
+        - need_turn
+        - context_sufficient
+        - stuck
+        - need_capability
+        - partial_answer
+        - delegation_recommended
+      description: Type of signal emitted by agent
+
+    Signal:
+      type: object
+      required:
+        - type
+        - confidence
+        - fields
+        - raw_xml
+        - timestamp
+      properties:
+        type:
+          $ref: '#/components/schemas/SignalType'
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Agent confidence in signal (0.0-1.0)
+        fields:
+          type: object
+          description: Type-specific fields (see SignalFields)
+        raw_xml:
+          type: string
+          description: Original XML for debugging
+        timestamp:
+          type: string
+          format: date-time
+
+    NeedTurnFields:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+          description: Why another turn is needed
+        expected_turns:
+          type: integer
+          minimum: 1
+          description: Estimated additional turns needed
+
+    ContextSufficientFields:
+      type: object
+      required:
+        - sources_found
+      properties:
+        sources_found:
+          type: integer
+          minimum: 0
+          description: Number of relevant sources gathered
+        source_types:
+          type: array
+          items:
+            type: string
+          description: Types of sources (code, docs, web)
+
+    StuckFields:
+      type: object
+      required:
+        - attempted
+        - blocker
+      properties:
+        attempted:
+          type: array
+          items:
+            type: string
+          description: Tools/approaches already tried
+        blocker:
+          type: string
+          description: What prevents progress
+        suggestions:
+          type: array
+          items:
+            type: string
+          description: What might help if available
+
+    NeedCapabilityFields:
+      type: object
+      required:
+        - capability
+        - reason
+      properties:
+        capability:
+          type: string
+          description: What capability is needed
+        reason:
+          type: string
+          description: Why it's needed
+        workaround:
+          type: string
+          description: Partial solution without capability
+
+    PartialAnswerFields:
+      type: object
+      required:
+        - missing
+      properties:
+        missing:
+          type: string
+          description: What information is missing
+        caveat:
+          type: string
+          description: Important caveat for user
+
+    DelegationRecommendedFields:
+      type: object
+      required:
+        - reason
+        - scope
+      properties:
+        reason:
+          type: string
+          description: Why delegation is recommended
+        scope:
+          type: string
+          description: What should be delegated
+        estimated_tokens:
+          type: integer
+          description: Estimated token budget needed
+        subagent_type:
+          type: string
+          description: Recommended subagent type
+
+    QueryType:
+      type: string
+      enum:
+        - code
+        - documentation
+        - research
+        - conversational
+        - action
+      description: Classification of user query
+
+    QueryClassification:
+      type: object
+      required:
+        - query_type
+        - needs_code
+        - needs_vault
+        - needs_web
+        - confidence
+      properties:
+        query_type:
+          $ref: '#/components/schemas/QueryType'
+        needs_code:
+          type: boolean
+          description: Should search code index
+        needs_vault:
+          type: boolean
+          description: Should search vault/docs
+        needs_web:
+          type: boolean
+          description: Should search web
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+        keywords_matched:
+          type: array
+          items:
+            type: string
+          description: Keywords that triggered classification
+
+# XML Format Example
+#
+# <signal type="need_turn">
+#   <reason>Found backup API, need to test response</reason>
+#   <confidence>0.85</confidence>
+#   <expected_turns>1</expected_turns>
+# </signal>

@@ -543,9 +543,10 @@ System messages appear in ChatPanel with distinct styling:
 Users can toggle non-core subscribers via Settings > Notifications tab. Core subscribers (marked `core = true`) cannot be disabled. Settings stored in `user_settings.disabled_subscribers_json`.
 
 ## Recent Changes
+- 020-bt-oracle-agent: Added Python 3.11+ (backend), TypeScript 5.x (frontend - no changes) + FastAPI, Pydantic, lupa (Lua), existing BT runtime (019)
 - 015-oracle-plugin-system: Added Python 3.11+ (backend), TypeScript 5.x (frontend)
 - 013-agent-notification-system: Added Python 3.11+ (backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, python-toon, Jinja2 (backend); React 18+, shadcn/ui (frontend)
-- 011-coderag-project-init: Added Python 3.11+ (CLI, backend), TypeScript 5.x (frontend)
 
 ## Active Technologies
-- SQLite (extend existing schema for plugin_state table) (015-oracle-plugin-system)
+- Python 3.11+ (backend), TypeScript 5.x (frontend - no changes) + FastAPI, Pydantic, lupa (Lua), existing BT runtime (019) (020-bt-oracle-agent)
+- SQLite (existing index.db for state persistence) (020-bt-oracle-agent)
