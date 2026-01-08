@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pydantic import BaseModel
 
 # Import the module under test
-from src.bt.nodes.tools import (
+from backend.src.bt.nodes.tools import (
     Tool,
     Oracle,
     CodeSearch,
@@ -38,9 +38,9 @@ from src.bt.nodes.tools import (
     _get_bb_value,
     _parse_default,
 )
-from src.bt.state.base import RunStatus
-from src.bt.state.blackboard import TypedBlackboard
-from src.bt.core.context import TickContext
+from backend.src.bt.state.base import RunStatus
+from backend.src.bt.state.blackboard import TypedBlackboard
+from backend.src.bt.core.context import TickContext
 
 
 # =============================================================================

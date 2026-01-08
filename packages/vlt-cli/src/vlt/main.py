@@ -3858,5 +3858,501 @@ def context_cancel():
         console.print("[dim]No active query to cancel.[/dim]")
 
 
+# ============================================================================
+# Behavior Tree Commands (BT Universal Runtime - Spec 019)
+# ============================================================================
+
+BT_HELP = """
+Behavior Tree debugging and visualization commands.
+
+These commands interact with the BT Universal Runtime to inspect, validate,
+and debug behavior trees used by the Oracle agent and Research subsystem.
+
+Requires a running backend with BT debug endpoints enabled.
+"""
+
+bt_app = typer.Typer(name="bt", help=BT_HELP)
+app.add_typer(bt_app, name="bt")
+
+
+def _get_bt_client():
+    """Get HTTP client configured for BT debug API."""
+    import httpx
+    from vlt.config import Settings
+
+    settings = Settings()
+    sync_token = os.environ.get("VLT_SYNC_TOKEN") or settings.sync_token
+    vault_url = os.environ.get("VLT_VAULT_URL", "http://localhost:8000")
+
+    headers = {}
+    if sync_token:
+        headers["Authorization"] = f"Bearer {sync_token}"
+
+    return httpx.Client(base_url=vault_url, headers=headers, timeout=30.0)
+
+
+@bt_app.command("list")
+def bt_list(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """
+    List all registered behavior trees.
+
+    Shows all trees currently loaded in the BT runtime with their status
+    and basic statistics.
+
+    Example:
+        vlt bt list
+        vlt bt list --json
+    """
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            response = client.get("/api/bt/debug/trees")
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        console.print(f"[red]Error connecting to BT debug API: {e}[/red]")
+        console.print("[dim]Make sure the backend is running with BT debug enabled.[/dim]")
+        raise typer.Exit(code=1)
+
+    trees = data.get("trees", [])
+
+    if json_output:
+        console.print(json_lib.dumps(data, indent=2))
+        return
+
+    if not trees:
+        console.print("[dim]No behavior trees registered.[/dim]")
+        return
+
+    table = Table(title="Registered Behavior Trees")
+    table.add_column("ID", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Status", style="yellow")
+    table.add_column("Tick Count", justify="right")
+    table.add_column("Last Tick", style="dim")
+
+    for tree in trees:
+        status_color = {
+            "IDLE": "dim",
+            "RUNNING": "green",
+            "COMPLETED": "blue",
+            "FAILED": "red",
+        }.get(tree.get("status", "IDLE"), "white")
+
+        table.add_row(
+            tree.get("id", "?"),
+            tree.get("name", "?"),
+            f"[{status_color}]{tree.get('status', 'IDLE')}[/{status_color}]",
+            str(tree.get("tick_count", 0)),
+            tree.get("last_tick_at", "-"),
+        )
+
+    console.print(table)
+
+
+@bt_app.command("show")
+def bt_show(
+    tree_id: str = typer.Argument(..., help="Tree ID or name to display"),
+    format: str = typer.Option("ascii", "--format", "-f", help="Output format: ascii, json, dot"),
+    highlight: bool = typer.Option(True, "--highlight/--no-highlight", help="Highlight active nodes"),
+):
+    """
+    Display behavior tree structure with status.
+
+    Shows the tree structure in various formats:
+    - ascii: Human-readable tree diagram (default)
+    - json: Machine-readable JSON structure
+    - dot: Graphviz DOT format for visualization
+
+    Examples:
+        vlt bt show oracle-agent
+        vlt bt show oracle-agent --format dot > tree.dot
+        vlt bt show oracle-agent --format json
+    """
+    from rich.console import Console
+    from rich.syntax import Syntax
+    from rich.panel import Panel
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            response = client.get(
+                f"/api/bt/debug/tree/{tree_id}/visualization",
+                params={"format": format, "highlight_active": highlight}
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    visualization = data.get("visualization", "")
+
+    if format == "json":
+        console.print(Syntax(json_lib.dumps(json_lib.loads(visualization), indent=2), "json"))
+    elif format == "dot":
+        console.print(visualization)
+    else:
+        # ASCII format
+        console.print(Panel(visualization, title=f"[bold]Tree: {tree_id}[/bold]", border_style="blue"))
+
+        # Show stats if available
+        stats = data.get("stats", {})
+        if stats:
+            console.print()
+            console.print(f"[dim]Status: {stats.get('status', 'IDLE')} | "
+                         f"Ticks: {stats.get('tick_count', 0)} | "
+                         f"Active Nodes: {stats.get('active_node_count', 0)}[/dim]")
+
+
+@bt_app.command("blackboard")
+def bt_blackboard(
+    tree_id: str = typer.Argument(..., help="Tree ID to inspect"),
+    key: str = typer.Option(None, "--key", "-k", help="Filter by key pattern"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """
+    Display blackboard state for a tree.
+
+    Shows all key-value pairs in the tree's blackboard, including
+    read/write tracking information.
+
+    Examples:
+        vlt bt blackboard oracle-agent
+        vlt bt blackboard oracle-agent --key user
+        vlt bt blackboard oracle-agent --json
+    """
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            response = client.get(f"/api/bt/debug/tree/{tree_id}/blackboard")
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        console.print(json_lib.dumps(data, indent=2))
+        return
+
+    entries = data.get("entries", [])
+
+    if key:
+        entries = [e for e in entries if key.lower() in e.get("key", "").lower()]
+
+    if not entries:
+        console.print("[dim]No blackboard entries found.[/dim]")
+        return
+
+    table = Table(title=f"Blackboard: {tree_id}")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value", style="white", max_width=60)
+    table.add_column("Schema", style="dim")
+    table.add_column("R/W", style="yellow")
+
+    for entry in entries:
+        value_str = str(entry.get("value", ""))
+        if len(value_str) > 60:
+            value_str = value_str[:57] + "..."
+
+        rw = ""
+        if entry.get("was_read"):
+            rw += "R"
+        if entry.get("was_written"):
+            rw += "W"
+
+        table.add_row(
+            entry.get("key", "?"),
+            value_str,
+            entry.get("schema", "-"),
+            rw or "-",
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Size: {data.get('size_bytes', 0)} bytes | "
+                 f"Reads: {len(data.get('reads', []))} | "
+                 f"Writes: {len(data.get('writes', []))}[/dim]")
+
+
+@bt_app.command("history")
+def bt_history(
+    tree_id: str = typer.Argument(..., help="Tree ID to inspect"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of entries to show"),
+    node: str = typer.Option(None, "--node", help="Filter by node ID"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """
+    Display tick history for a tree.
+
+    Shows recent tick events with timing information and status transitions.
+
+    Examples:
+        vlt bt history oracle-agent
+        vlt bt history oracle-agent --limit 50
+        vlt bt history oracle-agent --node llm-call
+    """
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            params = {"limit": limit}
+            if node:
+                params["node_id"] = node
+            response = client.get(f"/api/bt/debug/tree/{tree_id}/history", params=params)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        console.print(json_lib.dumps(data, indent=2))
+        return
+
+    entries = data.get("entries", [])
+
+    if not entries:
+        console.print("[dim]No tick history found.[/dim]")
+        return
+
+    table = Table(title=f"Tick History: {tree_id}")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Node", style="cyan")
+    table.add_column("Status", style="yellow")
+    table.add_column("Duration", justify="right")
+    table.add_column("Timestamp", style="dim")
+
+    for i, entry in enumerate(entries):
+        status = entry.get("status", "?")
+        status_color = {
+            "SUCCESS": "green",
+            "FAILURE": "red",
+            "RUNNING": "yellow",
+            "FRESH": "dim",
+        }.get(status, "white")
+
+        duration = entry.get("duration_ms")
+        duration_str = f"{duration:.1f}ms" if duration else "-"
+
+        table.add_row(
+            str(entry.get("tick_number", i)),
+            entry.get("node_id", "?"),
+            f"[{status_color}]{status}[/{status_color}]",
+            duration_str,
+            entry.get("timestamp", "-"),
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Showing {len(entries)} of {data.get('total', len(entries))} entries[/dim]")
+
+
+@bt_app.command("validate")
+def bt_validate(
+    file_path: Path = typer.Argument(..., help="Path to Lua tree file"),
+    strict: bool = typer.Option(False, "--strict", help="Enable strict validation mode"),
+):
+    """
+    Validate a Lua behavior tree file.
+
+    Checks the tree definition for:
+    - Lua syntax errors
+    - Invalid node references
+    - Missing required properties
+    - Circular subtree references
+
+    Examples:
+        vlt bt validate trees/oracle-agent.lua
+        vlt bt validate trees/research.lua --strict
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    import json as json_lib
+
+    console = Console()
+
+    if not file_path.exists():
+        console.print(f"[red]File not found: {file_path}[/red]")
+        raise typer.Exit(code=1)
+
+    # Read the Lua file
+    lua_content = file_path.read_text()
+
+    try:
+        with _get_bt_client() as client:
+            response = client.post(
+                "/api/bt/debug/validate",
+                json={"content": lua_content, "strict": strict}
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        # If validation endpoint doesn't exist, try local validation
+        console.print(f"[yellow]Backend validation unavailable, using local validation...[/yellow]")
+
+        try:
+            # Import local validator
+            import sys
+            sys.path.insert(0, str(Path(__file__).parents[4] / "backend"))
+            from backend.src.bt.lua.validator import TreeValidator
+            from backend.src.bt.lua.loader import TreeLoader
+
+            loader = TreeLoader()
+            tree_def = loader.load_string(lua_content, str(file_path))
+
+            validator = TreeValidator(resolve_functions=not strict)
+            errors = validator.validate(tree_def)
+
+            if errors:
+                console.print(Panel(
+                    "\n".join([f"[red]• {e.code}: {e.message}[/red]" for e in errors]),
+                    title="[red]Validation Failed[/red]",
+                    border_style="red"
+                ))
+                raise typer.Exit(code=1)
+            else:
+                console.print(Panel(
+                    f"[green]✓ Tree '{tree_def.name}' is valid[/green]\n"
+                    f"  Nodes: {len(tree_def.nodes)}\n"
+                    f"  Root: {tree_def.root.id if tree_def.root else 'None'}",
+                    title="[green]Validation Passed[/green]",
+                    border_style="green"
+                ))
+                return
+
+        except ImportError:
+            console.print(f"[red]Cannot validate locally - backend modules not available[/red]")
+            raise typer.Exit(code=1)
+        except Exception as ve:
+            console.print(f"[red]Validation error: {ve}[/red]")
+            raise typer.Exit(code=1)
+
+    # Process backend validation response
+    if data.get("valid"):
+        console.print(Panel(
+            f"[green]✓ Tree is valid[/green]\n"
+            f"  Nodes: {data.get('node_count', '?')}\n"
+            f"  Warnings: {len(data.get('warnings', []))}",
+            title="[green]Validation Passed[/green]",
+            border_style="green"
+        ))
+
+        for warning in data.get("warnings", []):
+            console.print(f"  [yellow]⚠ {warning}[/yellow]")
+    else:
+        errors = data.get("errors", [])
+        console.print(Panel(
+            "\n".join([f"[red]• {e}[/red]" for e in errors]),
+            title="[red]Validation Failed[/red]",
+            border_style="red"
+        ))
+        raise typer.Exit(code=1)
+
+
+@bt_app.command("breakpoint")
+def bt_breakpoint(
+    tree_id: str = typer.Argument(..., help="Tree ID"),
+    node_id: str = typer.Argument(None, help="Node ID to set/remove breakpoint"),
+    remove: bool = typer.Option(False, "--remove", "-r", help="Remove breakpoint"),
+    condition: str = typer.Option(None, "--condition", "-c", help="Conditional expression"),
+    list_all: bool = typer.Option(False, "--list", "-l", help="List all breakpoints"),
+    clear: bool = typer.Option(False, "--clear", help="Clear all breakpoints"),
+):
+    """
+    Manage breakpoints for debugging.
+
+    Set, remove, or list breakpoints on tree nodes. When a breakpoint is hit,
+    execution pauses and waits for resume.
+
+    Examples:
+        vlt bt breakpoint oracle-agent --list
+        vlt bt breakpoint oracle-agent llm-call
+        vlt bt breakpoint oracle-agent llm-call --condition "tokens > 1000"
+        vlt bt breakpoint oracle-agent llm-call --remove
+        vlt bt breakpoint oracle-agent --clear
+    """
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            if list_all:
+                response = client.get(f"/api/bt/debug/tree/{tree_id}/breakpoint")
+                response.raise_for_status()
+                data = response.json()
+
+                breakpoints = data.get("breakpoints", [])
+                if not breakpoints:
+                    console.print("[dim]No breakpoints set.[/dim]")
+                    return
+
+                table = Table(title=f"Breakpoints: {tree_id}")
+                table.add_column("Node", style="cyan")
+                table.add_column("Condition", style="yellow")
+                table.add_column("Enabled", style="green")
+                table.add_column("Hit Count", justify="right")
+
+                for bp in breakpoints:
+                    table.add_row(
+                        bp.get("node_id", "?"),
+                        bp.get("condition", "-") or "-",
+                        "✓" if bp.get("enabled", True) else "✗",
+                        str(bp.get("hit_count", 0)),
+                    )
+
+                console.print(table)
+
+            elif clear:
+                response = client.delete(f"/api/bt/debug/tree/{tree_id}/breakpoint/all")
+                response.raise_for_status()
+                console.print("[green]All breakpoints cleared.[/green]")
+
+            elif remove and node_id:
+                response = client.delete(
+                    f"/api/bt/debug/tree/{tree_id}/breakpoint",
+                    params={"node_id": node_id}
+                )
+                response.raise_for_status()
+                console.print(f"[green]Breakpoint removed from '{node_id}'.[/green]")
+
+            elif node_id:
+                response = client.post(
+                    f"/api/bt/debug/tree/{tree_id}/breakpoint",
+                    json={"node_id": node_id, "condition": condition, "enabled": True}
+                )
+                response.raise_for_status()
+                if condition:
+                    console.print(f"[green]Conditional breakpoint set on '{node_id}'.[/green]")
+                else:
+                    console.print(f"[green]Breakpoint set on '{node_id}'.[/green]")
+            else:
+                console.print("[yellow]Specify --list, --clear, or a node ID.[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()

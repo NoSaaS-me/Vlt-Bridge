@@ -235,16 +235,17 @@ class TreeValidator:
                     ),
                 ))
 
-        # Condition nodes require 'condition' config, not 'fn'
+        # Condition nodes require 'condition' expression OR 'fn' function path
         if node.type == "condition":
             condition_expr = node.config.get("condition")
-            if not condition_expr:
+            fn_path = node.config.get("fn")
+            if not condition_expr and not fn_path:
                 errors.append(ValidationError(
                     code="E4002",
                     location=location,
                     message=(
                         f"Node '{node.id}' is type 'condition' but has no 'condition' "
-                        f"expression specified in config"
+                        f"expression or 'fn' function path specified in config"
                     ),
                 ))
 

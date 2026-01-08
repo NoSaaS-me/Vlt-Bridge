@@ -1,0 +1,595 @@
+"""
+OracleBTWrapper - Bridges BT-based Oracle to SSE streaming interface.
+
+This wrapper implements the same interface as the original OracleAgent
+but uses the behavior tree runtime internally. It provides:
+
+1. process_query() that returns an async generator
+2. Streaming bridge to yield SSE chunks
+3. Context persistence bridge
+4. Shadow mode support for parallel operation
+
+Migration from: backend/src/services/oracle_agent.py
+Target: Drop-in replacement that uses BT runtime
+
+Part of the BT Universal Runtime (spec 019).
+Tasks covered: 5.2.1-5.2.4 from tasks.md
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import (
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Optional,
+    TYPE_CHECKING,
+    Union,
+)
+
+from pydantic import BaseModel
+
+from ..core.context import TickContext
+from ..state.blackboard import TypedBlackboard
+from ..state.base import RunStatus
+from ..lua.loader import TreeLoader
+from ..lua.registry import TreeRegistry
+
+if TYPE_CHECKING:
+    from ..core.tree import BehaviorTree
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Chunk Models (matching oracle_agent.py OracleStreamChunk)
+# =============================================================================
+
+
+class OracleStreamChunk(BaseModel):
+    """SSE chunk model matching existing OracleAgent interface."""
+
+    type: str  # content, reasoning, tool_call, tool_result, error, done, etc.
+    content: Optional[str] = None
+    reasoning: Optional[str] = None
+    tool_call: Optional[Dict[str, Any]] = None
+    tool_result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    sources: Optional[List[Dict[str, Any]]] = None
+    context_id: Optional[str] = None
+    accumulated_content: Optional[str] = None
+    context_tokens: Optional[int] = None
+    max_context_tokens: Optional[int] = None
+    warning: Optional[str] = None
+    severity: Optional[str] = None
+
+
+# =============================================================================
+# OracleBTWrapper
+# =============================================================================
+
+
+class OracleBTWrapper:
+    """Wrapper that runs Oracle via behavior tree runtime.
+
+    Provides the same async generator interface as the original OracleAgent
+    but executes via the BT runtime. Supports:
+
+    - Streaming responses via async generator
+    - Context management (tree + legacy)
+    - Tool execution
+    - Budget tracking
+    - ANS event emission
+    - Shadow mode for comparison testing
+
+    Example:
+        >>> wrapper = OracleBTWrapper(user_id="user1")
+        >>> async for chunk in wrapper.process_query("Hello"):
+        ...     print(chunk.type, chunk.content)
+    """
+
+    # Path to oracle-agent.lua tree definition
+    TREE_PATH = Path(__file__).parent.parent / "trees" / "oracle-agent.lua"
+
+    def __init__(
+        self,
+        user_id: str,
+        project_id: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: int = 4096,
+        enable_shadow_mode: bool = False,
+    ) -> None:
+        """Initialize the Oracle BT wrapper.
+
+        Args:
+            user_id: User ID for context scoping.
+            project_id: Optional project ID for tool scoping.
+            model: LLM model identifier.
+            max_tokens: Maximum tokens for LLM response.
+            enable_shadow_mode: If True, run alongside old Oracle for comparison.
+        """
+        self._user_id = user_id
+        self._project_id = project_id
+        self._model = model or "deepseek/deepseek-chat"
+        self._max_tokens = max_tokens
+        self._enable_shadow_mode = enable_shadow_mode
+
+        # Tree runtime components
+        self._registry: Optional[TreeRegistry] = None
+        self._tree: Optional["BehaviorTree"] = None
+        self._blackboard: Optional[TypedBlackboard] = None
+        self._ctx: Optional[TickContext] = None
+
+        # Cancellation
+        self._cancelled = False
+
+        # Shadow mode tracking
+        self._shadow_chunks: List[OracleStreamChunk] = []
+
+    # =========================================================================
+    # Public Interface
+    # =========================================================================
+
+    async def process_query(
+        self,
+        query: str,
+        context_id: Optional[str] = None,
+    ) -> AsyncGenerator[OracleStreamChunk, None]:
+        """Process a query and yield streaming chunks.
+
+        This is the main entry point, matching OracleAgent.query() interface.
+
+        Args:
+            query: User question/query text.
+            context_id: Optional context ID to resume conversation.
+
+        Yields:
+            OracleStreamChunk objects for SSE streaming.
+        """
+        try:
+            # Load tree if not already loaded
+            await self._ensure_tree_loaded()
+
+            # Initialize blackboard with query parameters
+            self._init_blackboard(query, context_id)
+
+            # Create tick context
+            self._ctx = TickContext(
+                blackboard=self._blackboard,
+                tick_budget=1000,  # High budget for full execution
+                trace_enabled=logger.isEnabledFor(logging.DEBUG),
+            )
+
+            # Run tree until completion
+            async for chunk in self._run_tree():
+                yield chunk
+
+                # Collect chunks for shadow mode comparison
+                if self._enable_shadow_mode:
+                    self._shadow_chunks.append(chunk)
+
+        except asyncio.CancelledError:
+            logger.info("Oracle BT query cancelled")
+            yield OracleStreamChunk(
+                type="error",
+                error="cancelled",
+                content="Request was cancelled"
+            )
+        except Exception as e:
+            logger.exception(f"Oracle BT query failed: {e}")
+            yield OracleStreamChunk(
+                type="error",
+                error="internal_error",
+                content=str(e)
+            )
+
+    def cancel(self) -> None:
+        """Cancel the current query.
+
+        Matches OracleAgent.cancel() interface.
+        """
+        logger.info(f"Cancelling Oracle BT for user {self._user_id}")
+        self._cancelled = True
+
+        if self._ctx:
+            self._ctx.request_cancellation("user_request")
+
+    def is_cancelled(self) -> bool:
+        """Check if cancellation was requested."""
+        return self._cancelled
+
+    def reset_cancellation(self) -> None:
+        """Reset cancellation flag for new query."""
+        self._cancelled = False
+
+        if self._ctx:
+            self._ctx.clear_cancellation()
+
+    # =========================================================================
+    # Shadow Mode Interface
+    # =========================================================================
+
+    def get_shadow_chunks(self) -> List[OracleStreamChunk]:
+        """Get collected chunks for shadow mode comparison.
+
+        Returns:
+            List of chunks from the BT execution.
+        """
+        return self._shadow_chunks.copy()
+
+    def clear_shadow_chunks(self) -> None:
+        """Clear shadow mode chunk collection."""
+        self._shadow_chunks = []
+
+    async def compare_with_legacy(
+        self,
+        legacy_chunks: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Compare BT execution with legacy Oracle output.
+
+        Args:
+            legacy_chunks: Chunks from legacy OracleAgent.
+
+        Returns:
+            Comparison report with discrepancies.
+        """
+        bt_chunks = self._shadow_chunks
+
+        report = {
+            "bt_chunk_count": len(bt_chunks),
+            "legacy_chunk_count": len(legacy_chunks),
+            "discrepancies": [],
+            "match_rate": 0.0,
+        }
+
+        # Compare chunk types
+        bt_types = [c.type for c in bt_chunks]
+        legacy_types = [c.get("type") for c in legacy_chunks]
+
+        if bt_types != legacy_types:
+            report["discrepancies"].append({
+                "field": "chunk_types",
+                "bt": bt_types,
+                "legacy": legacy_types,
+            })
+
+        # Compare final content
+        bt_content = ""
+        legacy_content = ""
+
+        for c in bt_chunks:
+            if c.type == "done" and c.accumulated_content:
+                bt_content = c.accumulated_content
+                break
+
+        for c in legacy_chunks:
+            if c.get("type") == "done" and c.get("accumulated_content"):
+                legacy_content = c.get("accumulated_content", "")
+                break
+
+        if bt_content != legacy_content:
+            report["discrepancies"].append({
+                "field": "accumulated_content",
+                "bt_length": len(bt_content),
+                "legacy_length": len(legacy_content),
+                "bt_preview": bt_content[:200],
+                "legacy_preview": legacy_content[:200],
+            })
+
+        # Calculate match rate
+        matches = 0
+        total = max(len(bt_chunks), len(legacy_chunks))
+
+        if total > 0:
+            for i, bt_chunk in enumerate(bt_chunks):
+                if i < len(legacy_chunks):
+                    legacy = legacy_chunks[i]
+                    if bt_chunk.type == legacy.get("type"):
+                        matches += 1
+
+            report["match_rate"] = matches / total
+
+        return report
+
+    # =========================================================================
+    # Internal Methods
+    # =========================================================================
+
+    async def _ensure_tree_loaded(self) -> None:
+        """Load the oracle-agent tree if not already loaded."""
+        if self._tree is not None:
+            return
+
+        # Initialize registry
+        self._registry = TreeRegistry()
+
+        # Load tree from Lua file
+        loader = TreeLoader(registry=self._registry)
+
+        if not self.TREE_PATH.exists():
+            raise FileNotFoundError(
+                f"Oracle tree definition not found: {self.TREE_PATH}"
+            )
+
+        tree_def = loader.load_file(str(self.TREE_PATH))
+        self._tree = loader.build_tree(tree_def)
+
+        logger.info(f"Loaded oracle-agent tree: {self._tree.id}")
+
+    def _init_blackboard(
+        self,
+        query: str,
+        context_id: Optional[str],
+    ) -> None:
+        """Initialize blackboard with query parameters."""
+        self._blackboard = TypedBlackboard(scope_name="oracle_query")
+
+        # Set input parameters
+        self._blackboard.set("query", query)
+        self._blackboard.set("user_id", self._user_id)
+        self._blackboard.set("project_id", self._project_id)
+        self._blackboard.set("context_id", context_id)
+        self._blackboard.set("model", self._model)
+        self._blackboard.set("max_tokens", self._max_tokens)
+
+        # Initialize pending chunks list
+        self._blackboard.set("_pending_chunks", [])
+
+    async def _run_tree(self) -> AsyncGenerator[OracleStreamChunk, None]:
+        """Run the behavior tree and yield chunks.
+
+        This method ticks the tree repeatedly until completion,
+        yielding any pending chunks between ticks.
+        """
+        if self._tree is None or self._ctx is None:
+            logger.error("Tree or context not initialized")
+            return
+
+        status = RunStatus.RUNNING
+        tick_count = 0
+        max_ticks = 10000  # Safety limit
+
+        while status == RunStatus.RUNNING and tick_count < max_ticks:
+            # Check cancellation
+            if self._cancelled:
+                self._ctx.request_cancellation("user_request")
+                yield OracleStreamChunk(
+                    type="error",
+                    error="cancelled"
+                )
+                return
+
+            # Tick the tree
+            try:
+                status = self._tree.tick(self._ctx)
+                tick_count += 1
+                self._ctx.increment_tick()
+            except Exception as e:
+                logger.exception(f"Tree tick failed: {e}")
+                yield OracleStreamChunk(
+                    type="error",
+                    error="tree_error",
+                    content=str(e)
+                )
+                return
+
+            # Yield any pending chunks
+            async for chunk in self._drain_pending_chunks():
+                yield chunk
+
+            # Small delay to allow async operations
+            if status == RunStatus.RUNNING:
+                await asyncio.sleep(0.01)
+
+        # Final status handling
+        if tick_count >= max_ticks:
+            logger.error("Tree execution exceeded max ticks")
+            yield OracleStreamChunk(
+                type="error",
+                error="max_ticks_exceeded"
+            )
+        elif status == RunStatus.FAILURE:
+            logger.warning("Tree completed with FAILURE status")
+            # Drain any remaining chunks
+            async for chunk in self._drain_pending_chunks():
+                yield chunk
+        else:
+            logger.debug(f"Tree completed with status: {status}")
+            # Drain any remaining chunks
+            async for chunk in self._drain_pending_chunks():
+                yield chunk
+
+    async def _drain_pending_chunks(self) -> AsyncGenerator[OracleStreamChunk, None]:
+        """Drain pending chunks from blackboard and yield them."""
+        if self._blackboard is None:
+            return
+
+        chunks = self._blackboard.get("_pending_chunks") or []
+
+        if not chunks:
+            return
+
+        # Clear the list
+        self._blackboard.set("_pending_chunks", [])
+
+        for raw_chunk in chunks:
+            chunk = self._convert_chunk(raw_chunk)
+            if chunk:
+                yield chunk
+
+    def _convert_chunk(self, raw: Dict[str, Any]) -> Optional[OracleStreamChunk]:
+        """Convert raw chunk dict to OracleStreamChunk model."""
+        try:
+            chunk_type = raw.get("type", "unknown")
+
+            if chunk_type == "content":
+                return OracleStreamChunk(
+                    type="content",
+                    content=raw.get("content"),
+                )
+            elif chunk_type == "reasoning":
+                return OracleStreamChunk(
+                    type="reasoning",
+                    reasoning=raw.get("content"),
+                )
+            elif chunk_type == "tool_call":
+                return OracleStreamChunk(
+                    type="tool_call",
+                    tool_call={
+                        "call_id": raw.get("call_id"),
+                        "name": raw.get("name"),
+                        "status": raw.get("status"),
+                    }
+                )
+            elif chunk_type == "tool_result":
+                return OracleStreamChunk(
+                    type="tool_result",
+                    tool_result={
+                        "call_id": raw.get("call_id"),
+                        "name": raw.get("name"),
+                        "status": raw.get("status"),
+                        "result": raw.get("result"),
+                        "error": raw.get("error"),
+                    }
+                )
+            elif chunk_type == "error":
+                return OracleStreamChunk(
+                    type="error",
+                    error=raw.get("error"),
+                    content=raw.get("message"),
+                )
+            elif chunk_type == "done":
+                return OracleStreamChunk(
+                    type="done",
+                    accumulated_content=raw.get("accumulated_content"),
+                    context_id=self._blackboard.get("current_node_id") if self._blackboard else None,
+                    warning=raw.get("warning"),
+                )
+            elif chunk_type == "context_update":
+                return OracleStreamChunk(
+                    type="context_update",
+                    context_tokens=raw.get("context_tokens"),
+                    max_context_tokens=raw.get("max_context_tokens"),
+                )
+            elif chunk_type == "sources":
+                return OracleStreamChunk(
+                    type="sources",
+                    sources=raw.get("sources"),
+                )
+            elif chunk_type == "system":
+                return OracleStreamChunk(
+                    type="system",
+                    content=raw.get("content"),
+                    severity=raw.get("severity"),
+                )
+            else:
+                logger.warning(f"Unknown chunk type: {chunk_type}")
+                return OracleStreamChunk(
+                    type=chunk_type,
+                    content=str(raw),
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to convert chunk: {e}")
+            return None
+
+    # =========================================================================
+    # Context Persistence Bridge
+    # =========================================================================
+
+    def get_context_id(self) -> Optional[str]:
+        """Get current context ID for persistence.
+
+        Returns:
+            Current context node ID or None.
+        """
+        if self._blackboard:
+            return self._blackboard._lookup("current_node_id")
+        return None
+
+    def get_tree_root_id(self) -> Optional[str]:
+        """Get tree root ID for context navigation.
+
+        Returns:
+            Tree root ID or None.
+        """
+        if self._blackboard:
+            return self._blackboard._lookup("tree_root_id")
+        return None
+
+    def get_accumulated_content(self) -> str:
+        """Get accumulated response content.
+
+        Returns:
+            Full response content accumulated so far.
+        """
+        if self._blackboard:
+            return self._blackboard._lookup("accumulated_content") or ""
+        return ""
+
+    def get_token_usage(self) -> Dict[str, int]:
+        """Get token usage statistics.
+
+        Returns:
+            Dict with tokens_used, context_tokens, max_context_tokens.
+        """
+        if self._blackboard:
+            return {
+                "tokens_used": self._blackboard._lookup("tokens_used") or 0,
+                "context_tokens": self._blackboard._lookup("context_tokens") or 0,
+                "max_context_tokens": self._blackboard._lookup("max_context_tokens") or 0,
+            }
+        return {"tokens_used": 0, "context_tokens": 0, "max_context_tokens": 0}
+
+
+# =============================================================================
+# Factory Function
+# =============================================================================
+
+
+def create_oracle_bt_wrapper(
+    user_id: str,
+    project_id: Optional[str] = None,
+    model: Optional[str] = None,
+    max_tokens: int = 4096,
+    enable_shadow_mode: bool = False,
+) -> OracleBTWrapper:
+    """Create an OracleBTWrapper instance.
+
+    Factory function for dependency injection and testing.
+
+    Args:
+        user_id: User ID for context scoping.
+        project_id: Optional project ID.
+        model: LLM model identifier.
+        max_tokens: Maximum tokens for response.
+        enable_shadow_mode: Enable parallel comparison mode.
+
+    Returns:
+        Configured OracleBTWrapper instance.
+    """
+    return OracleBTWrapper(
+        user_id=user_id,
+        project_id=project_id,
+        model=model,
+        max_tokens=max_tokens,
+        enable_shadow_mode=enable_shadow_mode,
+    )
+
+
+# =============================================================================
+# Exports
+# =============================================================================
+
+
+__all__ = [
+    "OracleBTWrapper",
+    "OracleStreamChunk",
+    "create_oracle_bt_wrapper",
+]

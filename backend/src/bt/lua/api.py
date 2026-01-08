@@ -88,6 +88,18 @@ class NodeDefinition:
             "source_line": self.source_line,
         }
 
+    def get_fn_path(self) -> Optional[str]:
+        """Get function path from config for action/condition nodes."""
+        return self.config.get("fn")
+
+    def get_subtree_name(self) -> Optional[str]:
+        """Get subtree name for subtree_ref nodes."""
+        return self.config.get("tree_name")
+
+    def is_lazy_subtree(self) -> bool:
+        """Check if this is a lazy-loaded subtree reference."""
+        return bool(self.config.get("lazy", False))
+
 
 @dataclass
 class TreeDefinition:
@@ -365,37 +377,71 @@ class BTApiBuilder:
             source_line=self._get_current_line(),
         )
 
-    def _bt_for_each(self, key: Any, config: Any = None) -> NodeDefinition:
+    def _bt_for_each(self, key_or_config: Any, config: Any = None) -> NodeDefinition:
         """Create a for_each node.
 
-        Lua: BT.for_each("results", {
-            item_key = "current_result",
-            children = { BT.action("process", {...}) },
-            continue_on_failure = true,
-        })
+        Supports two calling conventions:
+        - BT.for_each("results", {item_key="current_result", children={...}})
+        - BT.for_each({collection_key="results", item_key="current_result", BT.child(...)})
 
         Args:
-            key: Collection blackboard key.
-            config: Configuration including children, item_key, etc.
+            key_or_config: Collection key (string) or config table with collection_key.
+            config: Configuration including children, item_key, etc. (when key is string).
 
         Returns:
             NodeDefinition for for_each.
         """
-        config_dict = self._to_python_dict(config) or {}
-        child_list = self._extract_children(config_dict.get("children", []))
+        # Detect calling convention
+        key_dict = self._to_python_dict(key_or_config)
+
+        if key_dict is not None and isinstance(key_dict, dict) and "collection_key" in key_dict:
+            # BT.for_each({collection_key=..., ...child...}) format
+            config_dict = key_dict
+            collection_key = config_dict.get("collection_key", "items")
+
+            # Children might be embedded in the config table (numbered keys like 1, 2, 3)
+            # or under the "children" key
+            child_list = self._extract_children(config_dict.get("children", []))
+
+            # Also check for numbered/positional entries that are NodeDefinitions
+            for k, v in config_dict.items():
+                if isinstance(k, int) or (isinstance(k, str) and k.isdigit()):
+                    if isinstance(v, NodeDefinition):
+                        child_list.append(v)
+                    elif isinstance(v, dict) and "type" in v:
+                        # Reconstructed dict from Lua
+                        child_list.append(self._dict_to_node(v))
+        else:
+            # BT.for_each("key", {config}) format
+            config_dict = self._to_python_dict(config) or {}
+            collection_key = str(key_or_config) if key_or_config else "items"
+            child_list = self._extract_children(config_dict.get("children", []))
 
         return NodeDefinition(
             type="for_each",
             id=config_dict.get("id"),
             name=config_dict.get("name"),
             config={
-                "collection_key": str(key),
+                "collection_key": collection_key,
                 "item_key": config_dict.get("item_key", "item"),
+                "index_key": config_dict.get("index_key"),
                 "continue_on_failure": bool(config_dict.get("continue_on_failure", False)),
                 "min_items": int(config_dict.get("min_items", 0)),
             },
             children=child_list,
             source_line=self._get_current_line(),
+        )
+
+    def _dict_to_node(self, d: Dict[str, Any]) -> NodeDefinition:
+        """Convert a dictionary back to NodeDefinition."""
+        return NodeDefinition(
+            type=d.get("type", "unknown"),
+            id=d.get("id"),
+            name=d.get("name"),
+            config=d.get("config", {}),
+            children=[self._dict_to_node(c) if isinstance(c, dict) else c
+                     for c in d.get("children", [])],
+            source_line=d.get("source_line"),
         )
 
     # =========================================================================
@@ -460,23 +506,29 @@ class BTApiBuilder:
             source_line=self._get_current_line(),
         )
 
-    def _bt_llm_call(self, config: Any) -> NodeDefinition:
+    def _bt_llm_call(self, name_or_config: Any, config: Any = None) -> NodeDefinition:
         """Create an LLM call node.
 
-        Lua: BT.llm_call({
-            model = "claude-3-opus",
-            prompt_key = "prompt",
-            response_key = "response",
-            stream_to = "partial",
-        })
+        Supports two calling conventions:
+        - BT.llm_call({config})  -- config contains name
+        - BT.llm_call("name", {config})  -- name as first arg
 
         Args:
-            config: LLM call configuration.
+            name_or_config: Either the node name (string) or config table.
+            config: Optional config table when name is provided.
 
         Returns:
             NodeDefinition for llm_call.
         """
-        config_dict = self._to_python_dict(config) or {}
+        # Handle both calling conventions
+        if config is not None:
+            # BT.llm_call("name", {config}) format
+            name = str(name_or_config) if name_or_config else "llm_call"
+            config_dict = self._to_python_dict(config) or {}
+            config_dict["name"] = name
+        else:
+            # BT.llm_call({config}) format
+            config_dict = self._to_python_dict(name_or_config) or {}
 
         return NodeDefinition(
             type="llm_call",
@@ -578,21 +630,49 @@ class BTApiBuilder:
         """
         return self._make_decorator("timeout", child, {"timeout_ms": int(ms or 0)})
 
-    def _bt_retry(self, max_retries: Any, child: Any, config: Any = None) -> NodeDefinition:
+    def _bt_retry(self, first_arg: Any, second_arg: Any = None, config: Any = None) -> NodeDefinition:
         """Create a retry decorator.
 
-        Lua: BT.retry(3, BT.action("flaky_op", {...}), {backoff_ms = 1000})
+        Supports multiple calling conventions:
+        - BT.retry(3, child, {config})  -- max_retries first
+        - BT.retry({config}, child)  -- config table first with max_attempts
+        - BT.retry({config with embedded child})  -- child as positional entry in config
 
         Args:
-            max_retries: Maximum retry attempts.
-            child: Child node to wrap.
-            config: Optional additional config (backoff_ms, etc.).
+            first_arg: Either max_retries (int) or config table.
+            second_arg: Either child node or child node.
+            config: Optional additional config when using first format.
 
         Returns:
             NodeDefinition for retry.
         """
-        config_dict = self._to_python_dict(config) or {}
-        config_dict["max_retries"] = int(max_retries or 0)
+        # Detect which calling convention is being used
+        first_dict = self._to_python_dict(first_arg)
+
+        if first_dict is not None and isinstance(first_dict, dict):
+            # BT.retry({config}, child) format - config table first
+            config_dict = first_dict
+            child = second_arg
+            max_retries = config_dict.get("max_attempts") or config_dict.get("max_retries") or 3
+
+            # If child is None, check for embedded child in config table
+            # (positional entries like 1, 2, etc. in Lua tables)
+            if child is None:
+                for k, v in config_dict.items():
+                    if isinstance(k, int) or (isinstance(k, str) and k.isdigit()):
+                        if isinstance(v, NodeDefinition):
+                            child = v
+                            break
+                        elif isinstance(v, dict) and "type" in v:
+                            child = self._dict_to_node(v)
+                            break
+        else:
+            # BT.retry(3, child, {config}) format - max_retries first
+            max_retries = int(first_arg or 0)
+            child = second_arg
+            config_dict = self._to_python_dict(config) or {}
+
+        config_dict["max_retries"] = int(max_retries)
         return self._make_decorator("retry", child, config_dict)
 
     def _bt_guard(self, condition: Any, child: Any) -> NodeDefinition:
