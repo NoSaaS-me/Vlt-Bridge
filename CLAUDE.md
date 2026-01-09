@@ -542,6 +542,60 @@ System messages appear in ChatPanel with distinct styling:
 
 Users can toggle non-core subscribers via Settings > Notifications tab. Core subscribers (marked `core = true`) cannot be disabled. Settings stored in `user_settings.disabled_subscribers_json`.
 
+## BT Oracle (020-bt-oracle-agent)
+
+The BT Oracle introduces Behavior Tree-controlled execution for the Oracle agent, enabling:
+- **XML Signal Protocol**: Agent emits structured self-reflection signals (`need_turn`, `context_sufficient`, `stuck`, etc.)
+- **Query Classification**: Automatic categorization (code/documentation/research/conversational/action)
+- **Dynamic Prompt Composition**: Context-aware prompt assembly from segments
+- **Budget Enforcement**: Turn limits and loop detection via BT conditions
+
+### Shadow Mode
+
+Shadow mode runs both legacy and BT implementations in parallel for safe rollout:
+
+```bash
+# Enable shadow mode (recommended for initial testing)
+export ORACLE_USE_BT=shadow
+
+# Run queries, then check comparison logs
+ls data/shadow_logs/
+cat data/shadow_logs/shadow_*.json | jq '.{match_rate, signal_match}'
+
+# Switch to BT-only when match rate >95%
+export ORACLE_USE_BT=true
+```
+
+Shadow logs include:
+- `match_rate`: Chunk-level output similarity
+- `signal_match`: Whether both implementations emitted equivalent signals
+- `bt_signals` / `legacy_signals`: Extracted signal data for comparison
+- `signal_discrepancies`: Detailed signal comparison results
+
+### Environment Variables
+
+| Variable | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `ORACLE_USE_BT` | `false`, `true`, `shadow` | `false` | Oracle execution mode |
+| `ORACLE_MAX_TURNS` | integer | `30` | Max iterations per query |
+| `ORACLE_PROMPT_BUDGET` | integer | `8000` | Token limit for system prompt |
+| `ORACLE_ITERATION_WARNING_THRESHOLD` | float | `0.70` | Warn at this % of max turns |
+| `ORACLE_TOKEN_WARNING_THRESHOLD` | float | `0.80` | Warn at this % of token budget |
+| `ORACLE_LOOP_THRESHOLD` | integer | `3` | Consecutive same-reason signals for stuck detection |
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `backend/src/models/signals.py` | Signal types and field schemas |
+| `backend/src/services/signal_parser.py` | XML signal extraction from LLM responses |
+| `backend/src/services/query_classifier.py` | Query type classification |
+| `backend/src/services/prompt_composer.py` | Dynamic prompt assembly |
+| `backend/src/bt/wrappers/shadow_mode.py` | Shadow mode runner and comparison |
+| `backend/src/bt/wrappers/oracle_wrapper.py` | BT-controlled Oracle wrapper |
+| `backend/src/bt/conditions/signals.py` | BT conditions for signal evaluation |
+| `backend/src/prompts/oracle/*.md` | Prompt segment templates |
+
 ## Recent Changes
 - 020-bt-oracle-agent: Added Python 3.11+ (backend), TypeScript 5.x (frontend - no changes) + FastAPI, Pydantic, lupa (Lua), existing BT runtime (019)
 - 015-oracle-plugin-system: Added Python 3.11+ (backend), TypeScript 5.x (frontend)

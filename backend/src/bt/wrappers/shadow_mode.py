@@ -7,11 +7,12 @@ compares their outputs, and logs any discrepancies for analysis.
 Features:
 1. Parallel execution of both implementations
 2. Output comparison with detailed diff reporting
-3. Discrepancy logging for debugging
-4. Toggle via feature flag
+3. Signal emission comparison (T050)
+4. Discrepancy logging for debugging
+5. Toggle via feature flag
 
-Part of the BT Universal Runtime (spec 019).
-Tasks covered: 5.3.1-5.3.4 from tasks.md
+Part of the BT Universal Runtime (spec 019) and BT-Controlled Oracle (spec 020).
+Tasks covered: 5.3.1-5.3.4 from tasks.md (019), T050-T051 from tasks-expanded-polish.md (020)
 """
 
 from __future__ import annotations
@@ -106,7 +107,11 @@ class ChunkDiscrepancy:
 
 @dataclass
 class ComparisonReport:
-    """Full comparison report between BT and legacy execution."""
+    """Full comparison report between BT and legacy execution.
+
+    Includes both chunk-level and signal-level comparison metrics.
+    Signal comparison added in T050/T051 (020-bt-oracle-agent).
+    """
 
     timestamp: datetime
     user_id: str
@@ -124,8 +129,17 @@ class ComparisonReport:
     bt_error: Optional[str] = None
     legacy_error: Optional[str] = None
 
+    # Signal comparison fields (T051)
+    bt_signals: List[Dict[str, Any]] = field(default_factory=list)
+    legacy_signals: List[Dict[str, Any]] = field(default_factory=list)
+    signal_discrepancies: List[ChunkDiscrepancy] = field(default_factory=list)
+    signal_match: bool = True
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for logging/storage."""
+        """Convert to dictionary for logging/storage.
+
+        Includes signal comparison data for analysis.
+        """
         return {
             "timestamp": self.timestamp.isoformat(),
             "user_id": self.user_id,
@@ -148,6 +162,21 @@ class ComparisonReport:
             "legacy_duration_ms": self.legacy_duration_ms,
             "bt_error": self.bt_error,
             "legacy_error": self.legacy_error,
+            # Signal comparison data (T051)
+            "bt_signals": self.bt_signals,
+            "legacy_signals": self.legacy_signals,
+            "signal_discrepancy_count": len(self.signal_discrepancies),
+            "signal_discrepancies": [
+                {
+                    "field": d.field,
+                    "bt_value": str(d.bt_value)[:100],
+                    "legacy_value": str(d.legacy_value)[:100],
+                    "index": d.index,
+                    "severity": d.severity,
+                }
+                for d in self.signal_discrepancies
+            ],
+            "signal_match": self.signal_match,
         }
 
 
@@ -396,6 +425,20 @@ class ShadowModeRunner:
             else 0.0
         )
 
+        # Signal comparison (T050)
+        bt_signals = self._extract_signals_from_chunks(self._bt_chunks)
+        legacy_signals = self._extract_signals_from_chunks(self._legacy_chunks)
+        signal_discrepancies = self._compare_signals(bt_signals, legacy_signals)
+        signal_match = len(signal_discrepancies) == 0
+
+        # Log signal comparison results
+        if bt_signals or legacy_signals:
+            logger.info(
+                f"Signal comparison: BT emitted {len(bt_signals)}, "
+                f"Legacy emitted {len(legacy_signals)}, "
+                f"discrepancies={len(signal_discrepancies)}"
+            )
+
         self._report = ComparisonReport(
             timestamp=datetime.now(timezone.utc),
             user_id=self._user_id,
@@ -408,6 +451,11 @@ class ShadowModeRunner:
             legacy_duration_ms=legacy_duration,
             bt_error=self._bt_error,
             legacy_error=self._legacy_error,
+            # Signal comparison fields (T051)
+            bt_signals=bt_signals,
+            legacy_signals=legacy_signals,
+            signal_discrepancies=signal_discrepancies,
+            signal_match=signal_match,
         )
 
     def _compare_chunks(
@@ -476,14 +524,178 @@ class ShadowModeRunner:
         matches = sum(c1 == c2 for c1, c2 in zip(text1, text2))
         return matches / max(len1, len2)
 
+    # =========================================================================
+    # Signal Comparison (T050)
+    # =========================================================================
+
+    def _extract_signals_from_chunks(
+        self,
+        chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Extract signals from accumulated content in chunk stream.
+
+        Parses the final accumulated content from the chunk stream and
+        extracts any XML signals using the signal_parser module.
+
+        Args:
+            chunks: List of chunk dictionaries from Oracle execution.
+
+        Returns:
+            List of signal dictionaries. Each signal is converted to dict
+            via model_dump() for JSON serialization and comparison.
+
+        Algorithm:
+            1. Get final accumulated content from 'done' chunk
+            2. Parse signals using signal_parser.parse_signal()
+            3. Convert Signal model to dict for comparison
+            4. Return list (usually 0-1 signals per response)
+        """
+        from ...services.signal_parser import parse_signal
+
+        signals: List[Dict[str, Any]] = []
+
+        # Get final content from done chunk
+        final_content = self._get_final_content(chunks)
+
+        if final_content:
+            signal = parse_signal(final_content)
+            if signal:
+                # Convert to dict for JSON serialization
+                signal_dict = signal.model_dump()
+                # Convert datetime to ISO string for JSON
+                if "timestamp" in signal_dict:
+                    ts = signal_dict["timestamp"]
+                    if hasattr(ts, "isoformat"):
+                        signal_dict["timestamp"] = ts.isoformat()
+                signals.append(signal_dict)
+                logger.debug(f"Extracted signal: type={signal.type}, confidence={signal.confidence}")
+
+        return signals
+
+    def _compare_signals(
+        self,
+        bt_signals: List[Dict[str, Any]],
+        legacy_signals: List[Dict[str, Any]],
+    ) -> List[ChunkDiscrepancy]:
+        """Compare signal emissions between BT and legacy implementations.
+
+        Detects discrepancies in:
+        - Signal presence (one emits, other doesn't)
+        - Signal type mismatches
+        - Confidence score differences > 0.2
+        - Key field differences
+
+        Args:
+            bt_signals: Signals extracted from BT Oracle response.
+            legacy_signals: Signals extracted from legacy Oracle response.
+
+        Returns:
+            List of ChunkDiscrepancy objects for signal mismatches.
+        """
+        discrepancies: List[ChunkDiscrepancy] = []
+
+        # Compare signal counts
+        bt_count = len(bt_signals)
+        legacy_count = len(legacy_signals)
+
+        if bt_count != legacy_count:
+            discrepancies.append(ChunkDiscrepancy(
+                field="signal_count",
+                bt_value=bt_count,
+                legacy_value=legacy_count,
+                severity="warning",
+            ))
+
+        # Compare signal types in order
+        bt_types = [s.get("type") for s in bt_signals]
+        legacy_types = [s.get("type") for s in legacy_signals]
+
+        if bt_types != legacy_types:
+            # Different severity based on whether it's just ordering vs different signals
+            severity = "error" if set(bt_types) != set(legacy_types) else "warning"
+            discrepancies.append(ChunkDiscrepancy(
+                field="signal_types",
+                bt_value=bt_types,
+                legacy_value=legacy_types,
+                severity=severity,
+            ))
+
+        # Compare individual signals that exist in both
+        for i, (bt_sig, leg_sig) in enumerate(zip(bt_signals, legacy_signals)):
+            # Compare signal type
+            bt_type = bt_sig.get("type")
+            leg_type = leg_sig.get("type")
+
+            if bt_type != leg_type:
+                discrepancies.append(ChunkDiscrepancy(
+                    field=f"signal[{i}].type",
+                    bt_value=bt_type,
+                    legacy_value=leg_type,
+                    index=i,
+                    severity="error",
+                ))
+                # Skip field comparison if types differ
+                continue
+
+            # Compare confidence (threshold: 0.2)
+            bt_conf = bt_sig.get("confidence", 0.0)
+            leg_conf = leg_sig.get("confidence", 0.0)
+
+            try:
+                bt_conf_float = float(bt_conf)
+                leg_conf_float = float(leg_conf)
+                if abs(bt_conf_float - leg_conf_float) > 0.2:
+                    discrepancies.append(ChunkDiscrepancy(
+                        field=f"signal[{i}].confidence",
+                        bt_value=bt_conf_float,
+                        legacy_value=leg_conf_float,
+                        index=i,
+                        severity="info",
+                    ))
+            except (TypeError, ValueError):
+                pass
+
+            # Compare key fields (reason, sources_found, attempted, blocker)
+            key_fields = ["reason", "sources_found", "attempted", "blocker", "missing"]
+            bt_fields = bt_sig.get("fields", {}) or {}
+            leg_fields = leg_sig.get("fields", {}) or {}
+
+            for field_name in key_fields:
+                bt_val = bt_fields.get(field_name)
+                leg_val = leg_fields.get(field_name)
+
+                if bt_val is not None or leg_val is not None:
+                    if bt_val != leg_val:
+                        discrepancies.append(ChunkDiscrepancy(
+                            field=f"signal[{i}].fields.{field_name}",
+                            bt_value=bt_val,
+                            legacy_value=leg_val,
+                            index=i,
+                            severity="info",
+                        ))
+
+        return discrepancies
+
     def _log_discrepancies(self) -> None:
-        """Log discrepancies for debugging."""
+        """Log discrepancies for debugging.
+
+        Logs both chunk-level and signal-level discrepancies.
+        Signal discrepancies added in T050/T051.
+        """
         if not self._report:
             return
 
         for d in self._report.discrepancies[:10]:  # Limit logged discrepancies
             logger.warning(
                 f"Shadow mode discrepancy [{d.severity}] {d.field}: "
+                f"BT={str(d.bt_value)[:50]!r} vs "
+                f"Legacy={str(d.legacy_value)[:50]!r}"
+            )
+
+        # Log signal discrepancies (T050)
+        for d in self._report.signal_discrepancies[:5]:  # Limit to 5
+            logger.warning(
+                f"Shadow mode signal discrepancy [{d.severity}] {d.field}: "
                 f"BT={str(d.bt_value)[:50]!r} vs "
                 f"Legacy={str(d.legacy_value)[:50]!r}"
             )

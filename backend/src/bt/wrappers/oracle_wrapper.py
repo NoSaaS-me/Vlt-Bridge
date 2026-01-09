@@ -547,6 +547,110 @@ class OracleBTWrapper:
             }
         return {"tokens_used": 0, "context_tokens": 0, "max_context_tokens": 0}
 
+    # =========================================================================
+    # Signal Parsing Methods (T022)
+    # =========================================================================
+
+    def _should_parse_signal(self) -> bool:
+        """Check if LLM response was received this tick and needs parsing.
+
+        Returns True if:
+        1. Blackboard exists
+        2. accumulated_content has content
+        3. Signal hasn't been parsed this turn yet
+
+        Returns:
+            True if signal should be parsed, False otherwise.
+        """
+        if not self._blackboard:
+            return False
+
+        accumulated = self._blackboard._lookup("accumulated_content")
+        if not accumulated:
+            return False
+
+        already_parsed = self._blackboard._lookup("_signal_parsed_this_turn")
+        return not already_parsed
+
+    def _parse_signal_from_response(self) -> None:
+        """Parse signal from LLM response and update blackboard state.
+
+        This method is called after an LLM response is received and
+        processes the signal using the signal_actions module.
+
+        Signal processing sequence:
+        1. parse_response_signal - Extract XML signal
+        2. update_signal_state - Track consecutive reasons
+        3. log_signal - Emit to ANS event bus
+        4. strip_signal_from_response - Remove XML from content
+
+        Part of T022: Signal parsing integration.
+        """
+        if not self._ctx or not self._blackboard:
+            logger.debug("_parse_signal_from_response: No context/blackboard")
+            return
+
+        try:
+            from ..actions.signal_actions import (
+                parse_response_signal,
+                update_signal_state,
+                log_signal,
+                strip_signal_from_response,
+            )
+
+            # Process signal in sequence
+            parse_response_signal(self._ctx)
+            update_signal_state(self._ctx)
+            log_signal(self._ctx)
+            strip_signal_from_response(self._ctx)
+
+            # Mark as parsed to prevent double-parsing
+            self._blackboard._data["_signal_parsed_this_turn"] = True
+            self._blackboard._writes.add("_signal_parsed_this_turn")
+
+            logger.debug("_parse_signal_from_response: Signal processing complete")
+
+        except ImportError as e:
+            logger.debug(f"_parse_signal_from_response: signal_actions not available: {e}")
+        except Exception as e:
+            logger.warning(f"_parse_signal_from_response: Error: {e}")
+
+    def _reset_signal_parse_flag(self) -> None:
+        """Reset the signal parse flag at the start of each tick.
+
+        Called before each tree tick to allow signal parsing
+        for new LLM responses.
+        """
+        if self._blackboard:
+            self._blackboard._data["_signal_parsed_this_turn"] = False
+            self._blackboard._writes.add("_signal_parsed_this_turn")
+
+    def get_last_signal(self) -> Optional[Dict[str, Any]]:
+        """Get the last parsed signal from blackboard.
+
+        Returns:
+            Signal dict or None if no signal was parsed.
+        """
+        if self._blackboard:
+            return self._blackboard._lookup("last_signal")
+        return None
+
+    def get_signal_state(self) -> Dict[str, Any]:
+        """Get the current signal state for debugging.
+
+        Returns:
+            Dict with signal tracking state.
+        """
+        if not self._blackboard:
+            return {}
+
+        return {
+            "last_signal": self._blackboard._lookup("last_signal"),
+            "signals_emitted": self._blackboard._lookup("signals_emitted") or [],
+            "consecutive_same_reason": self._blackboard._lookup("consecutive_same_reason") or 0,
+            "turns_without_signal": self._blackboard._lookup("turns_without_signal") or 0,
+        }
+
 
 # =============================================================================
 # Factory Function

@@ -64,6 +64,25 @@ return BT.tree("oracle-agent", {
         recent_tool_patterns = "list",
         loop_detected = "bool",
         loop_warning = "str",
+
+        -- Query Classification (US1 - Intelligent Context Selection)
+        query_classification = "dict",  -- {query_type, needs_code, needs_vault, needs_web, confidence}
+        needs_code = "bool",
+        needs_vault = "bool",
+        needs_web = "bool",
+
+        -- Signal state tracking (T023 - US2: Agent Self-Reflection via Signals)
+        -- Per data-model.md AgentSignalState entity
+        last_signal = "dict",              -- Most recent parsed signal {type, confidence, fields, raw_xml}
+        signals_emitted = "list",          -- All signals this session
+        consecutive_same_reason = "int",   -- Loop detection counter (3+ = stuck)
+        turns_without_signal = "int",      -- Fallback trigger counter (3+ = BERT fallback)
+
+        -- Budget enforcement (T030 - US3: Budget and Loop Enforcement)
+        -- Per tasks-expanded-us3.md
+        force_complete = "bool",           -- Force agent to complete on next check
+        loop_warning_emitted = "bool",     -- Loop warning ANS event emitted
+        iteration_exceeded_emitted = "bool", -- Budget exceeded ANS event emitted
     },
 
     -- Tree configuration
@@ -88,8 +107,19 @@ return BT.tree("oracle-agent", {
         }),
 
         --[[
+            Phase 1.5: Context Assessment (US1 - Intelligent Context Selection)
+            Classify query to determine what context sources are needed.
+            This informs tool selection and prompt composition.
+        --]]
+        BT.action("analyze-query", {
+            fn = "backend.src.bt.actions.query_analysis.analyze_query",
+            description = "Classify query type and determine context needs"
+        }),
+
+        --[[
             Phase 2: Context Loading
             Load tree context or create new tree, load legacy context
+            Note: Context needs are now in bb.needs_code, bb.needs_vault, bb.needs_web
         --]]
         BT.selector({
             -- Try to load existing context if context_id provided
@@ -171,12 +201,34 @@ return BT.tree("oracle-agent", {
             Repeater with budget check, agent turns until done or max turns
 
             Per oracle agent: MAX_TURNS = 30, uses tool calling loop
+
+            Budget Guards (T030 - US3: Budget and Loop Enforcement):
+            1. Check if forced to complete (from previous stuck/budget detection)
+            2. Check if over budget (turn >= max_turns)
+            3. Check if stuck in loop (consecutive_same_reason >= 3)
+            4. Normal agent turn processing
         --]]
         BT.selector({
             -- Main agent loop - repeats until SUCCESS (done) or max turns
             BT.retry(30,
                 BT.selector({
-                    -- Check cancellation first
+                    --[[
+                        Budget Guard 1: Check if forced to complete
+                        If force_complete flag is set, emit done and exit loop.
+                        This flag is set by force_completion() action.
+                    --]]
+                    BT.sequence({
+                        BT.condition("is-force-complete", {
+                            expression = "bb.force_complete == true"
+                        }),
+                        BT.action("emit-done-forced", {
+                            fn = "backend.src.bt.actions.oracle.emit_done",
+                            description = "Yield done chunk when force_complete is set"
+                        })
+                        -- Returns SUCCESS to break the loop
+                    }),
+
+                    -- Check cancellation
                     BT.sequence({
                         BT.condition("is-cancelled", {
                             expression = "bb.cancelled == true"
@@ -190,7 +242,51 @@ return BT.tree("oracle-agent", {
                         )
                     }),
 
-                    -- Check iteration budget exceeded
+                    --[[
+                        Budget Guard 2: Check if over budget (US3-AC2)
+                        Uses budget.is_over_budget condition from config.
+                        If over budget, force completion and exit.
+                    --]]
+                    BT.sequence({
+                        BT.condition("is-over-budget", {
+                            fn = "backend.src.bt.conditions.budget.is_over_budget"
+                        }),
+                        BT.action("force-completion-budget", {
+                            fn = "backend.src.bt.actions.budget_actions.force_completion",
+                            description = "Force completion when budget exceeded"
+                        }),
+                        BT.action("emit-done-budget", {
+                            fn = "backend.src.bt.actions.oracle.emit_done",
+                            description = "Yield done chunk after budget-forced completion"
+                        })
+                        -- Returns SUCCESS to break the loop
+                    }),
+
+                    --[[
+                        Budget Guard 3: Check for stuck loop (US3-AC3)
+                        Uses loop_detection.is_stuck_loop condition.
+                        If stuck in loop (3+ same reason signals), force completion.
+                    --]]
+                    BT.sequence({
+                        BT.condition("is-stuck-loop", {
+                            fn = "backend.src.bt.conditions.loop_detection.is_stuck_loop"
+                        }),
+                        BT.action("emit-loop-warning", {
+                            fn = "backend.src.bt.actions.budget_actions.emit_loop_warning",
+                            description = "Emit agent.loop.detected ANS event"
+                        }),
+                        BT.action("force-completion-loop", {
+                            fn = "backend.src.bt.actions.budget_actions.force_completion",
+                            description = "Force completion when stuck in loop"
+                        }),
+                        BT.action("emit-done-loop", {
+                            fn = "backend.src.bt.actions.oracle.emit_done",
+                            description = "Yield done chunk after loop-forced completion"
+                        })
+                        -- Returns SUCCESS to break the loop
+                    }),
+
+                    -- Legacy: Check iteration budget exceeded (fallback)
                     BT.sequence({
                         BT.condition("iteration-exceeded", {
                             expression = "bb.turn >= 30"
@@ -204,11 +300,12 @@ return BT.tree("oracle-agent", {
 
                     -- Normal agent turn
                     BT.sequence({
-                        -- Budget warnings (non-blocking)
+                        -- Budget warnings (non-blocking, T030)
+                        -- Uses budget_actions.emit_budget_warning which checks threshold
                         BT.always_succeed(
                             BT.action("check-iteration-budget", {
-                                fn = "backend.src.bt.actions.oracle.check_iteration_budget",
-                                description = "Emit warning at 70% of max turns"
+                                fn = "backend.src.bt.actions.budget_actions.check_budget_and_warn",
+                                description = "Emit warning at 70% of max turns (via OracleConfig)"
                             })
                         ),
 
@@ -364,6 +461,92 @@ BT.subtree("agent-turn", {
             })
         ),
 
+        --[[
+            Signal Processing Phase (T024 - US2: Agent Self-Reflection via Signals)
+            Parse, log, and strip XML signals from LLM response.
+            This enables the agent to communicate its internal state.
+        --]]
+        BT.always_succeed(
+            BT.sequence({
+                -- 1. Parse XML signal from accumulated content
+                BT.action("parse-signal", {
+                    fn = "backend.src.bt.actions.signal_actions.parse_response_signal",
+                    description = "Parse XML signal from LLM response"
+                }),
+                -- 2. Update signal state (consecutive reason tracking)
+                BT.action("update-signal-state", {
+                    fn = "backend.src.bt.actions.signal_actions.update_signal_state",
+                    description = "Track consecutive reasons for loop detection"
+                }),
+                -- 3. Log signal to ANS event bus (best-effort)
+                BT.always_succeed(
+                    BT.action("log-signal", {
+                        fn = "backend.src.bt.actions.signal_actions.log_signal",
+                        description = "Emit signal event to ANS for audit"
+                    })
+                ),
+                -- 4. Strip signal XML from user-visible content
+                BT.action("strip-signal", {
+                    fn = "backend.src.bt.actions.signal_actions.strip_signal_from_response",
+                    description = "Remove signal XML from accumulated_content"
+                })
+            })
+        ),
+
+        --[[
+            Signal-Based Routing (T024)
+            Check parsed signal and route accordingly:
+            - stuck: Let response through (agent acknowledged limitation)
+            - context_sufficient: Ready for final answer
+            - need_turn: Continue loop if budget allows
+        --]]
+        BT.selector({
+            -- If stuck signal, acknowledge and let response through
+            BT.sequence({
+                BT.condition("is-stuck-signal", {
+                    fn = "backend.src.bt.conditions.signals.signal_type_is",
+                    args = { expected_type = "stuck" }
+                }),
+                -- Let the response through - agent already acknowledged limitation
+                BT.action("noop-stuck", {
+                    fn = "backend.src.bt.actions.oracle.noop",
+                    description = "Stuck signal - let response complete"
+                })
+            }),
+
+            -- If context_sufficient, ready for final answer
+            BT.sequence({
+                BT.condition("context-sufficient-signal", {
+                    fn = "backend.src.bt.conditions.signals.signal_type_is",
+                    args = { expected_type = "context_sufficient" }
+                }),
+                -- Continue to tool handling / response completion
+                BT.action("noop-context-sufficient", {
+                    fn = "backend.src.bt.actions.oracle.noop",
+                    description = "Context sufficient - proceed to response"
+                })
+            }),
+
+            -- Check for loop (3+ consecutive same reason)
+            BT.sequence({
+                BT.condition("consecutive-same-reason", {
+                    fn = "backend.src.bt.conditions.signals.consecutive_same_reason_gte",
+                    args = { count = 3 }
+                }),
+                -- Agent is stuck in a loop - treat as stuck
+                BT.action("noop-loop-detected", {
+                    fn = "backend.src.bt.actions.oracle.noop",
+                    description = "Loop detected via signals - proceed to completion"
+                })
+            }),
+
+            -- Default: proceed with normal tool handling
+            BT.action("noop-continue", {
+                fn = "backend.src.bt.actions.oracle.noop",
+                description = "No signal routing - continue normal flow"
+            })
+        }),
+
         -- Handle tool calls if present
         BT.selector({
             -- Native tool calls from LLM response
@@ -391,7 +574,38 @@ BT.subtree("agent-turn", {
                 fn = "backend.src.bt.actions.oracle.accumulate_content",
                 description = "Add LLM response to accumulated_content"
             })
-        })
+        }),
+
+        --[[
+            Fallback Check Phase (US5 - BERT Fallback for Edge Cases)
+            After content accumulation/tool handling, check if fallback is needed.
+            Triggers when: no signal 3+ turns OR confidence < 0.3 OR stuck signal.
+            Wrapped in always_succeed so fallback doesn't break main loop.
+        --]]
+        BT.always_succeed(
+            BT.selector({
+                -- Check if fallback should trigger and apply if needed
+                BT.sequence({
+                    BT.condition("needs-fallback", {
+                        fn = "backend.src.bt.conditions.fallback.needs_fallback",
+                        description = "Check if fallback should activate (no signal 3+ turns, low confidence, or stuck)"
+                    }),
+                    BT.action("trigger-fallback", {
+                        fn = "backend.src.bt.actions.fallback_actions.trigger_fallback",
+                        description = "Run heuristic classification"
+                    }),
+                    BT.action("apply-fallback", {
+                        fn = "backend.src.bt.actions.fallback_actions.apply_heuristic_classification",
+                        description = "Apply fallback action (inject hint, force response, or escalate)"
+                    })
+                }),
+                -- No fallback needed - noop
+                BT.action("noop-no-fallback", {
+                    fn = "backend.src.bt.actions.oracle.noop",
+                    description = "No fallback trigger - continue normally"
+                })
+            })
+        )
     })
 })
 

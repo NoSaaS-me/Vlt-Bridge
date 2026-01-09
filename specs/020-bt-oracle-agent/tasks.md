@@ -19,11 +19,11 @@
 
 **Purpose**: Project initialization, copy prompt templates, verify dependencies
 
-- [ ] T001 Copy prompt templates from specs/020-bt-oracle-agent/prompts/oracle/ to backend/src/prompts/oracle/
-- [ ] T002 [P] Create backend/src/models/signals.py with Signal, SignalType enum, and field dataclasses per data-model.md
-- [ ] T003 [P] Create backend/src/models/query_classification.py with QueryType enum and QueryClassification dataclass per data-model.md
-- [ ] T004 [P] Create backend/src/bt/conditions/__init__.py to expose conditions module
-- [ ] T005 Verify BT runtime (019) tests pass: `cd backend && uv run pytest tests/unit/bt/ -q`
+- [x] T001 Copy prompt templates from specs/020-bt-oracle-agent/prompts/oracle/ to backend/src/prompts/oracle/
+- [x] T002 [P] Create backend/src/models/signals.py with Signal, SignalType enum, and field dataclasses per data-model.md
+- [x] T003 [P] Create backend/src/models/query_classification.py with QueryType enum and QueryClassification dataclass per data-model.md
+- [x] T004 [P] Create backend/src/bt/conditions/__init__.py to expose conditions module
+- [x] T005 Verify BT runtime (019) tests pass: `cd backend && uv run pytest tests/unit/bt/ -q`
 
 ---
 
@@ -33,13 +33,13 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T006 Create backend/src/services/signal_parser.py with parse_signal() and strip_signal() functions per research.md
-- [ ] T007 [P] Write backend/tests/unit/test_signal_parser.py with tests for all 6 signal types, malformed XML, and edge cases
-- [ ] T008 Create backend/src/services/query_classifier.py with classify_query() function using keyword heuristics per research.md
-- [ ] T009 [P] Write backend/tests/unit/test_query_classifier.py with tests for code/docs/research/conversational/action classification
-- [ ] T010 Create backend/src/services/prompt_composer.py with compose_prompt() function and segment registry per data-model.md
-- [ ] T011 [P] Write backend/tests/unit/test_prompt_composer.py with tests for segment composition rules
-- [ ] T012 Run all foundational tests: `cd backend && uv run pytest tests/unit/test_signal_parser.py tests/unit/test_query_classifier.py tests/unit/test_prompt_composer.py -v`
+- [x] T006 Create backend/src/services/signal_parser.py with parse_signal() and strip_signal() functions per research.md
+- [x] T007 [P] Write backend/tests/unit/test_signal_parser.py with tests for all 6 signal types, malformed XML, and edge cases
+- [x] T008 Create backend/src/services/query_classifier.py with classify_query() function using keyword heuristics per research.md
+- [x] T009 [P] Write backend/tests/unit/test_query_classifier.py with tests for code/docs/research/conversational/action classification
+- [x] T010 Create backend/src/services/prompt_composer.py with compose_prompt() function and segment registry per data-model.md
+- [x] T011 [P] Write backend/tests/unit/test_prompt_composer.py with tests for segment composition rules
+- [x] T012 Run all foundational tests: `cd backend && uv run pytest tests/unit/test_signal_parser.py tests/unit/test_query_classifier.py tests/unit/test_prompt_composer.py -v`
 
 **Checkpoint**: Foundation ready - all 3 core services implemented and tested
 
@@ -53,13 +53,13 @@
 
 ### Implementation for User Story 1
 
-- [ ] T013 [US1] Add query_classification field to blackboard schema in backend/src/bt/state/blackboard.py
-- [ ] T014 [US1] Create backend/src/bt/actions/query_analysis.py with analyze_query() action that calls classify_query()
-- [ ] T015 [US1] Create backend/src/bt/conditions/context_needs.py with needs_code_context(), needs_vault_context(), needs_web_context() conditions
-- [ ] T016 [US1] Modify backend/src/bt/trees/oracle-agent.lua to add Context Assessment Phase after initialization (before context loading)
-- [ ] T017 [US1] Update backend/src/bt/actions/oracle.py build_system_prompt() to call prompt_composer instead of loading monolithic prompt
-- [ ] T018 [P] [US1] Write backend/tests/unit/bt/test_query_analysis.py with tests for query→classification→context needs flow
-- [ ] T019 [US1] Integration test: verify "weather in Paris" routes to web_search only in backend/tests/integration/test_oracle_bt_integration.py
+- [x] T013 [US1] Add query_classification field to blackboard schema in backend/src/bt/state/blackboard.py
+- [x] T014 [US1] Create backend/src/bt/actions/query_analysis.py with analyze_query() action that calls classify_query()
+- [x] T015 [US1] Create backend/src/bt/conditions/context_needs.py with needs_code_context(), needs_vault_context(), needs_web_context() conditions
+- [x] T016 [US1] Modify backend/src/bt/trees/oracle-agent.lua to add Context Assessment Phase after initialization (before context loading)
+- [x] T017 [US1] Update backend/src/bt/actions/oracle.py build_system_prompt() to call prompt_composer instead of loading monolithic prompt
+- [x] T018 [P] [US1] Write backend/tests/unit/bt/test_query_analysis.py with tests for query→classification→context needs flow
+- [x] T019 [US1] Integration test: verify "weather in Paris" routes to web_search only in backend/tests/integration/test_oracle_bt_integration.py
 
 **Checkpoint**: Query classification determines context strategy - agent no longer searches everything
 
@@ -73,13 +73,13 @@
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] Create backend/src/bt/conditions/signals.py with check_signal(), has_signal(), signal_type_is() conditions
-- [ ] T021 [US2] Create backend/src/bt/actions/signal_actions.py with parse_response_signal(), log_signal(), strip_signal_from_response() actions
-- [ ] T022 [US2] Modify backend/src/bt/wrappers/oracle_wrapper.py to call signal parser after each LLM response
-- [ ] T023 [US2] Add signal state tracking to blackboard: last_signal, signals_emitted list, consecutive_same_reason counter
-- [ ] T024 [US2] Update backend/src/bt/trees/oracle-agent.lua agent loop to check signals after llm_call and route accordingly
-- [ ] T025 [P] [US2] Write backend/tests/unit/bt/test_signal_conditions.py with tests for signal-based BT conditions
-- [ ] T026 [US2] Integration test: verify tool failure triggers need_turn signal in backend/tests/integration/test_oracle_bt_integration.py
+- [x] T020 [US2] Create backend/src/bt/conditions/signals.py with check_signal(), has_signal(), signal_type_is() conditions
+- [x] T021 [US2] Create backend/src/bt/actions/signal_actions.py with parse_response_signal(), log_signal(), strip_signal_from_response() actions
+- [x] T022 [US2] Modify backend/src/bt/wrappers/oracle_wrapper.py to call signal parser after each LLM response
+- [x] T023 [US2] Add signal state tracking to blackboard: last_signal, signals_emitted list, consecutive_same_reason counter
+- [x] T024 [US2] Update backend/src/bt/trees/oracle-agent.lua agent loop to check signals after llm_call and route accordingly
+- [x] T025 [P] [US2] Write backend/tests/unit/bt/test_signal_conditions.py with tests for signal-based BT conditions
+- [x] T026 [US2] Integration test: verify tool failure triggers need_turn signal in backend/tests/integration/test_oracle_bt_integration.py
 
 **Checkpoint**: Agent self-reflection works - signals are emitted, parsed, and drive BT decisions
 
@@ -93,14 +93,14 @@
 
 ### Implementation for User Story 3
 
-- [ ] T027 [US3] Create backend/src/bt/conditions/budget.py with turns_remaining(), is_at_budget_limit(), is_over_budget() conditions
-- [ ] T028 [US3] Create backend/src/bt/conditions/loop_detection.py with is_stuck_loop() condition checking consecutive_same_reason >= 3
-- [ ] T029 [US3] Create backend/src/bt/actions/budget_actions.py with force_completion(), emit_budget_warning() actions
-- [ ] T030 [US3] Update backend/src/bt/trees/oracle-agent.lua agent loop with budget guards and loop detection
-- [ ] T031 [US3] Add turn budget configuration to backend/src/config.py (ORACLE_MAX_TURNS, default 30)
-- [ ] T032 [P] [US3] Write backend/tests/unit/bt/test_budget_conditions.py with tests for budget limits
-- [ ] T033 [P] [US3] Write backend/tests/unit/bt/test_loop_detection.py with tests for stuck loop detection
-- [ ] T034 [US3] Integration test: verify max_turns=5 forces completion in backend/tests/integration/test_oracle_bt_integration.py
+- [x] T027 [US3] Create backend/src/bt/conditions/budget.py with turns_remaining(), is_at_budget_limit(), is_over_budget() conditions
+- [x] T028 [US3] Create backend/src/bt/conditions/loop_detection.py with is_stuck_loop() condition checking consecutive_same_reason >= 3
+- [x] T029 [US3] Create backend/src/bt/actions/budget_actions.py with force_completion(), emit_budget_warning() actions
+- [x] T030 [US3] Update backend/src/bt/trees/oracle-agent.lua agent loop with budget guards and loop detection
+- [x] T031 [US3] Add turn budget configuration to backend/src/config.py (ORACLE_MAX_TURNS, default 30)
+- [x] T032 [P] [US3] Write backend/tests/unit/bt/test_budget_conditions.py with tests for budget limits
+- [x] T033 [P] [US3] Write backend/tests/unit/bt/test_loop_detection.py with tests for stuck loop detection
+- [x] T034 [US3] Integration test: verify max_turns=5 forces completion in backend/tests/integration/test_oracle_bt_integration.py
 
 **Checkpoint**: Safety guardrails work - budget enforced, loops detected, agent can't spin forever
 
@@ -114,13 +114,13 @@
 
 ### Implementation for User Story 4
 
-- [ ] T035 [US4] Ensure all prompt segments exist in backend/src/prompts/oracle/ (base.md, signals.md, tools-reference.md, code-analysis.md, documentation.md, research.md, conversation.md)
-- [ ] T036 [US4] Add segment loader to prompt_composer.py that reads from backend/src/prompts/oracle/
-- [ ] T037 [US4] Implement segment priority ordering per data-model.md (base=0, signals=1, tools=2, context-specific=10)
-- [ ] T038 [US4] Add token budget tracking to prompt_composer.py (max 8000 tokens)
-- [ ] T039 [US4] Verify signals.md is ALWAYS included regardless of query type
-- [ ] T040 [P] [US4] Write backend/tests/unit/test_prompt_composition_segments.py with tests for segment inclusion/exclusion logic
-- [ ] T041 [US4] Integration test: verify code query prompt includes code-analysis.md in backend/tests/integration/test_oracle_bt_integration.py
+- [x] T035 [US4] Ensure all prompt segments exist in backend/src/prompts/oracle/ (base.md, signals.md, tools-reference.md, code-analysis.md, documentation.md, research.md, conversation.md)
+- [x] T036 [US4] Add segment loader to prompt_composer.py that reads from backend/src/prompts/oracle/
+- [x] T037 [US4] Implement segment priority ordering per data-model.md (base=0, signals=1, tools=2, context-specific=10)
+- [x] T038 [US4] Add token budget tracking to prompt_composer.py (max 8000 tokens)
+- [x] T039 [US4] Verify signals.md is ALWAYS included regardless of query type
+- [x] T040 [P] [US4] Write backend/tests/unit/test_prompt_composition_segments.py with tests for segment inclusion/exclusion logic
+- [x] T041 [US4] Integration test: verify code query prompt includes code-analysis.md in backend/tests/integration/test_oracle_bt_integration.py
 
 **Checkpoint**: Prompts are dynamic - different queries get different prompt compositions
 
@@ -134,14 +134,14 @@
 
 ### Implementation for User Story 5
 
-- [ ] T042 [US5] Create backend/src/services/fallback_classifier.py with heuristic_classify() function (BERT placeholder)
-- [ ] T043 [US5] Create backend/src/bt/conditions/fallback.py with needs_fallback() condition (no signal for 3+ turns OR confidence < 0.3 OR stuck signal)
-- [ ] T044 [US5] Create backend/src/bt/actions/fallback_actions.py with trigger_fallback(), apply_heuristic_classification() actions
-- [ ] T045 [US5] Update backend/src/bt/trees/oracle-agent.lua with fallback selector after signal check
-- [ ] T046 [US5] Add fallback logging to track when and why fallback activates
-- [ ] T047 [P] [US5] Write backend/tests/unit/test_fallback_classifier.py with tests for heuristic classification
-- [ ] T048 [P] [US5] Write backend/tests/unit/bt/test_fallback_conditions.py with tests for fallback trigger conditions
-- [ ] T049 [US5] Integration test: verify 3 turns without signals triggers fallback in backend/tests/integration/test_oracle_bt_integration.py
+- [x] T042 [US5] Create backend/src/services/fallback_classifier.py with heuristic_classify() function (BERT placeholder)
+- [x] T043 [US5] Create backend/src/bt/conditions/fallback.py with needs_fallback() condition (no signal for 3+ turns OR confidence < 0.3 OR stuck signal)
+- [x] T044 [US5] Create backend/src/bt/actions/fallback_actions.py with trigger_fallback(), apply_heuristic_classification() actions
+- [x] T045 [US5] Update backend/src/bt/trees/oracle-agent.lua with fallback selector after signal check
+- [x] T046 [US5] Add fallback logging to track when and why fallback activates
+- [x] T047 [P] [US5] Write backend/tests/unit/test_fallback_classifier.py with tests for heuristic classification
+- [x] T048 [P] [US5] Write backend/tests/unit/bt/test_fallback_conditions.py with tests for fallback trigger conditions
+- [x] T049 [US5] Integration test: verify 3 turns without signals triggers fallback in backend/tests/integration/test_oracle_bt_integration.py
 
 **Checkpoint**: Fallback works - system gracefully handles missing/weak signals
 
@@ -151,13 +151,13 @@
 
 **Purpose**: Shadow mode, documentation, final validation
 
-- [ ] T050 Update backend/src/bt/wrappers/shadow_mode.py to compare signal emission between legacy and BT implementations
-- [ ] T051 Add signal discrepancy tracking to shadow mode comparison report
-- [ ] T052 [P] Update backend/src/config.py to add ORACLE_USE_BT environment variable documentation
-- [ ] T053 [P] Update CLAUDE.md with 020-bt-oracle-agent technology additions
-- [ ] T054 Run full test suite: `cd backend && uv run pytest tests/unit/bt/ tests/unit/test_signal_parser.py tests/unit/test_query_classifier.py tests/unit/test_prompt_composer.py tests/integration/test_oracle_bt_integration.py -v`
-- [ ] T055 Run quickstart.md validation: follow steps and verify shadow mode works
-- [ ] T056 Manual E2E test: Enable shadow mode, run 10 diverse queries, analyze comparison logs
+- [x] T050 Update backend/src/bt/wrappers/shadow_mode.py to compare signal emission between legacy and BT implementations
+- [x] T051 Add signal discrepancy tracking to shadow mode comparison report
+- [x] T052 [P] Update backend/src/config.py to add ORACLE_USE_BT environment variable documentation
+- [x] T053 [P] Update CLAUDE.md with 020-bt-oracle-agent technology additions
+- [x] T054 Run full test suite: `cd backend && uv run pytest tests/unit/bt/ tests/unit/test_signal_parser.py tests/unit/test_query_classifier.py tests/unit/test_prompt_composer.py tests/integration/test_oracle_bt_integration.py -v`
+- [x] T055 Run quickstart.md validation: follow steps and verify shadow mode works
+- [x] T056 Manual E2E test: Enable shadow mode, run 10 diverse queries, analyze comparison logs
 
 ---
 

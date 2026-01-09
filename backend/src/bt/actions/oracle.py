@@ -133,7 +133,24 @@ def reset_state(ctx: "TickContext") -> RunStatus:
     # Initialize messages list
     bb_set(bb,"messages", [])
 
-    logger.debug("Oracle state reset for new query")
+    # Reset query classification (US1 - Intelligent Context Selection)
+    bb_set(bb, "query_classification", None)
+    bb_set(bb, "needs_code", False)
+    bb_set(bb, "needs_vault", False)
+    bb_set(bb, "needs_web", False)
+
+    # ==========================================================================
+    # Signal state tracking (T023 - US2: Agent Self-Reflection via Signals)
+    # Per data-model.md AgentSignalState entity
+    # ==========================================================================
+    bb_set(bb, "last_signal", None)              # Most recent parsed signal
+    bb_set(bb, "signals_emitted", [])            # All signals this session
+    bb_set(bb, "consecutive_same_reason", 0)     # Loop detection counter
+    bb_set(bb, "turns_without_signal", 0)        # Fallback trigger counter
+    bb_set(bb, "_signal_parsed_this_turn", False)  # Per-turn parse flag
+    bb_set(bb, "_prev_signal", None)             # For consecutive comparison
+
+    logger.debug("Oracle state reset for new query (with signal tracking)")
     ctx.mark_progress()
     return RunStatus.SUCCESS
 
@@ -328,7 +345,12 @@ def load_cross_session_notifications(ctx: "TickContext") -> RunStatus:
 
 
 def build_system_prompt(ctx: "TickContext") -> RunStatus:
-    """Load vault files/threads, render system.md template.
+    """Load vault files/threads, render system prompt via prompt_composer.
+
+    US1 Enhancement: Uses query classification for dynamic prompt composition.
+    The prompt_composer selects segments based on query_type:
+    - Always includes: base.md, signals.md, tools-reference.md
+    - Conditionally includes: code-analysis.md, documentation.md, research.md
 
     Corresponds to oracle_agent.py lines 1043-1183.
     """
@@ -336,12 +358,55 @@ def build_system_prompt(ctx: "TickContext") -> RunStatus:
     if bb is None:
         return RunStatus.FAILURE
 
-    messages = bb_get(bb,"messages") or []
-    user_id = bb_get(bb,"user_id")
-    project_id = bb_get(bb,"project_id")
+    messages = bb_get(bb, "messages") or []
+    user_id = bb_get(bb, "user_id")
+    project_id = bb_get(bb, "project_id")
+    classification = bb_get(bb, "query_classification")
 
-    # Build system prompt from template
-    system_content = _build_system_content(user_id, project_id)
+    # Build system prompt using composer (US1 - dynamic composition)
+    try:
+        from src.services.prompt_composer import PromptComposer
+        from src.models.query_classification import QueryClassification, QueryType
+
+        # Extract query_type from classification, defaulting to "conversational"
+        query_type_str = "conversational"
+        if classification and isinstance(classification, dict):
+            query_type_str = classification.get("query_type", "conversational")
+
+        # Convert to QueryType enum
+        try:
+            query_type = QueryType(query_type_str)
+        except ValueError:
+            query_type = QueryType.CONVERSATIONAL
+
+        # Build classification object
+        classification_obj = QueryClassification.from_type(
+            query_type,
+            confidence=classification.get("confidence", 1.0) if classification else 1.0,
+            keywords_matched=classification.get("keywords_matched", []) if classification else [],
+        )
+
+        # Compose prompt
+        composer = PromptComposer()
+        context = {
+            "user_id": str(user_id or "unknown"),
+            "project_id": str(project_id or "default"),
+        }
+        result = composer.compose(classification_obj, context=context)
+        system_content = result.content
+
+        logger.debug(
+            f"Prompt composed: segments={result.segments_included}, "
+            f"tokens~={result.token_estimate}, warnings={result.warnings}"
+        )
+
+    except ImportError as e:
+        # Fallback to legacy prompt building if composer unavailable
+        logger.warning(f"prompt_composer not available, using legacy: {e}")
+        system_content = _build_system_content_legacy(user_id, project_id)
+    except Exception as e:
+        logger.warning(f"Prompt composition failed, using legacy: {e}")
+        system_content = _build_system_content_legacy(user_id, project_id)
 
     # Add system message
     messages.insert(0, {
@@ -349,13 +414,16 @@ def build_system_prompt(ctx: "TickContext") -> RunStatus:
         "content": system_content
     })
 
-    bb_set(bb,"messages", messages)
+    bb_set(bb, "messages", messages)
     ctx.mark_progress()
     return RunStatus.SUCCESS
 
 
-def _build_system_content(user_id: Optional[str], project_id: Optional[str]) -> str:
-    """Build system prompt content from template and context."""
+def _build_system_content_legacy(user_id: Optional[str], project_id: Optional[str]) -> str:
+    """Build system prompt content from template (legacy fallback).
+
+    Used when prompt_composer is unavailable.
+    """
     # Try to load template
     template_path = Path(__file__).parent.parent.parent / "services" / "prompts" / "oracle" / "system.md"
 
