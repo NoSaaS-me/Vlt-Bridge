@@ -39,7 +39,9 @@ from ..core.context import TickContext
 from ..state.blackboard import TypedBlackboard
 from ..state.base import RunStatus
 from ..lua.loader import TreeLoader
+from ..lua.builder import TreeBuilder
 from ..lua.registry import TreeRegistry
+from ..services.openrouter_client import OpenRouterClient, BTServices
 
 if TYPE_CHECKING:
     from ..core.tree import BehaviorTree
@@ -100,25 +102,30 @@ class OracleBTWrapper:
     def __init__(
         self,
         user_id: str,
+        api_key: str,
         project_id: Optional[str] = None,
         model: Optional[str] = None,
         max_tokens: int = 4096,
-        enable_shadow_mode: bool = False,
     ) -> None:
         """Initialize the Oracle BT wrapper.
 
         Args:
             user_id: User ID for context scoping.
+            api_key: OpenRouter API key for LLM calls.
             project_id: Optional project ID for tool scoping.
             model: LLM model identifier.
             max_tokens: Maximum tokens for LLM response.
-            enable_shadow_mode: If True, run alongside old Oracle for comparison.
         """
         self._user_id = user_id
+        self._api_key = api_key
         self._project_id = project_id
         self._model = model or "deepseek/deepseek-chat"
         self._max_tokens = max_tokens
-        self._enable_shadow_mode = enable_shadow_mode
+
+        # Create LLM client for BT nodes
+        self._llm_client = OpenRouterClient(api_key=api_key)
+        # Note: BTServices is created after tree loading so we can include tree_registry
+        self._services: Optional[BTServices] = None
 
         # Tree runtime components
         self._registry: Optional[TreeRegistry] = None
@@ -129,8 +136,8 @@ class OracleBTWrapper:
         # Cancellation
         self._cancelled = False
 
-        # Shadow mode tracking
-        self._shadow_chunks: List[OracleStreamChunk] = []
+        # Chunk collection for streaming
+        self._collected_chunks: List[OracleStreamChunk] = []
 
     # =========================================================================
     # Public Interface
@@ -159,9 +166,10 @@ class OracleBTWrapper:
             # Initialize blackboard with query parameters
             self._init_blackboard(query, context_id)
 
-            # Create tick context
+            # Create tick context with services for LLM calls
             self._ctx = TickContext(
                 blackboard=self._blackboard,
+                services=self._services,  # Provides llm_client for BT.llm_call
                 tick_budget=1000,  # High budget for full execution
                 trace_enabled=logger.isEnabledFor(logging.DEBUG),
             )
@@ -170,9 +178,8 @@ class OracleBTWrapper:
             async for chunk in self._run_tree():
                 yield chunk
 
-                # Collect chunks for shadow mode comparison
-                if self._enable_shadow_mode:
-                    self._shadow_chunks.append(chunk)
+                # Collect chunks for potential inspection
+                self._collected_chunks.append(chunk)
 
         except asyncio.CancelledError:
             logger.info("Oracle BT query cancelled")
@@ -212,20 +219,20 @@ class OracleBTWrapper:
             self._ctx.clear_cancellation()
 
     # =========================================================================
-    # Shadow Mode Interface
+    # Chunk Access Interface
     # =========================================================================
 
-    def get_shadow_chunks(self) -> List[OracleStreamChunk]:
-        """Get collected chunks for shadow mode comparison.
+    def get_collected_chunks(self) -> List[OracleStreamChunk]:
+        """Get collected chunks from the last query.
 
         Returns:
             List of chunks from the BT execution.
         """
-        return self._shadow_chunks.copy()
+        return self._collected_chunks.copy()
 
-    def clear_shadow_chunks(self) -> None:
-        """Clear shadow mode chunk collection."""
-        self._shadow_chunks = []
+    def clear_collected_chunks(self) -> None:
+        """Clear collected chunks."""
+        self._collected_chunks = []
 
     async def compare_with_legacy(
         self,
@@ -239,7 +246,7 @@ class OracleBTWrapper:
         Returns:
             Comparison report with discrepancies.
         """
-        bt_chunks = self._shadow_chunks
+        bt_chunks = self._collected_chunks
 
         report = {
             "bt_chunk_count": len(bt_chunks),
@@ -306,19 +313,37 @@ class OracleBTWrapper:
         if self._tree is not None:
             return
 
-        # Initialize registry
-        self._registry = TreeRegistry()
+        # Initialize registry with tree directory and load all trees
+        # (including subtrees like agent-turn.lua, execute-tools.lua)
+        # Note: validate_on_load=False because function paths are resolved at runtime
+        logger.debug(f"Creating TreeRegistry for: {self.TREE_PATH.parent}")
+        self._registry = TreeRegistry(
+            tree_dir=self.TREE_PATH.parent,
+            validate_on_load=False,
+        )
+        self._registry.load_all()
+        logger.debug(f"Loaded trees: {list(self._registry._trees.keys()) if hasattr(self._registry, '_trees') else 'unknown'}")
 
-        # Load tree from Lua file
-        loader = TreeLoader(registry=self._registry)
-
+        # Get the oracle-agent tree from the registry
         if not self.TREE_PATH.exists():
             raise FileNotFoundError(
                 f"Oracle tree definition not found: {self.TREE_PATH}"
             )
 
-        tree_def = loader.load_file(str(self.TREE_PATH))
-        self._tree = loader.build_tree(tree_def)
+        # The tree should now be loaded by registry.load_all()
+        self._tree = self._registry.get("oracle-agent")
+        if self._tree is None:
+            # Fallback: load directly if not in registry
+            loader = TreeLoader()
+            tree_def = loader.load(self.TREE_PATH)
+            builder = TreeBuilder(registry=self._registry)
+            self._tree = builder.build(tree_def)
+
+        # Create BTServices with tree_registry for lazy subtree resolution
+        self._services = BTServices(
+            llm_client=self._llm_client,
+            tree_registry=self._registry,
+        )
 
         logger.info(f"Loaded oracle-agent tree: {self._tree.id}")
 
@@ -327,19 +352,115 @@ class OracleBTWrapper:
         query: str,
         context_id: Optional[str],
     ) -> None:
-        """Initialize blackboard with query parameters."""
-        self._blackboard = TypedBlackboard(scope_name="oracle_query")
+        """Initialize blackboard with query parameters.
 
-        # Set input parameters
-        self._blackboard.set("query", query)
-        self._blackboard.set("user_id", self._user_id)
-        self._blackboard.set("project_id", self._project_id)
-        self._blackboard.set("context_id", context_id)
-        self._blackboard.set("model", self._model)
-        self._blackboard.set("max_tokens", self._max_tokens)
+        Uses a simple dict-based wrapper since TypedBlackboard requires
+        schema registration which is complex for this use case.
+        """
+        # Create a simple dict-based blackboard wrapper
+        # Initialize messages for LLMCallNode (required by messages_key validation)
+        initial_messages = [
+            {"role": "user", "content": query}
+        ]
 
-        # Initialize pending chunks list
-        self._blackboard.set("_pending_chunks", [])
+        self._bb_data: Dict[str, Any] = {
+            "query": query,
+            "user_id": self._user_id,
+            "project_id": self._project_id,
+            "context_id": context_id,
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            # LLMCallNode requires messages to be present
+            "messages": initial_messages,
+            # Initialize other required keys
+            "tool_calls": [],
+            "tools": None,
+            "accumulated_content": "",
+            "turn": 0,
+            "thinking_enabled": False,
+            "_pending_chunks": [],
+            # Track streaming progress to avoid duplicate content
+            "_last_streamed_len": 0,
+        }
+
+        # Create a wrapper object that behaves like a blackboard
+        class SimpleBlackboard:
+            """Simple dict-based blackboard for BT runtime."""
+
+            def __init__(bb_self, data: Dict[str, Any]):
+                bb_self._data = data
+                bb_self._reads: set = set()
+                bb_self._writes: set = set()
+
+            def get(bb_self, key: str, default: Any = None) -> Any:
+                bb_self._reads.add(key)
+                return bb_self._data.get(key, default)
+
+            def set(bb_self, key: str, value: Any) -> None:
+                bb_self._writes.add(key)
+                bb_self._data[key] = value
+
+            def has(bb_self, key: str) -> bool:
+                return key in bb_self._data
+
+            def delete(bb_self, key: str) -> None:
+                bb_self._data.pop(key, None)
+
+            def keys(bb_self) -> List[str]:
+                return list(bb_self._data.keys())
+
+            def clear(bb_self) -> None:
+                bb_self._data.clear()
+
+            def clear_access_tracking(bb_self) -> None:
+                bb_self._reads = set()
+                bb_self._writes = set()
+
+            def get_reads(bb_self) -> set:
+                return bb_self._reads
+
+            def get_writes(bb_self) -> set:
+                return bb_self._writes
+
+            def snapshot(bb_self) -> Dict[str, Any]:
+                return bb_self._data.copy()
+
+            # Methods needed by BT actions that bypass schema validation
+            def _lookup(bb_self, key: str) -> Any:
+                """Get value without schema validation (for action helpers)."""
+                return bb_self._data.get(key)
+
+            def _store(bb_self, key: str, value: Any) -> None:
+                """Set value without schema validation (for action helpers)."""
+                bb_self._writes.add(key)
+                bb_self._data[key] = value
+
+            def create_child_scope(bb_self, scope_id: str = "") -> "SimpleBlackboard":
+                """Create a child scope that inherits from this blackboard.
+
+                For SimpleBlackboard, we just return self since we're not
+                tracking scopes. Writes go to the same data dict.
+                """
+                # For simple blackboard, return self - no scoping needed
+                return bb_self
+
+            def register(bb_self, key: str, schema: Any = None) -> None:
+                """Register a key in the blackboard (no-op for SimpleBlackboard).
+
+                TypedBlackboard uses this for schema validation, but SimpleBlackboard
+                doesn't validate schemas.
+                """
+                # No-op: SimpleBlackboard doesn't track schemas
+                pass
+
+            def has(bb_self, key: str) -> bool:
+                """Check if a key exists in the blackboard."""
+                return key in bb_self._data
+
+        self._blackboard = SimpleBlackboard(self._bb_data)
+
+        # Initialize pending chunks list (on wrapper, not blackboard)
+        self._pending_chunks: List[Dict[str, Any]] = []
 
     async def _run_tree(self) -> AsyncGenerator[OracleStreamChunk, None]:
         """Run the behavior tree and yield chunks.
@@ -353,7 +474,7 @@ class OracleBTWrapper:
 
         status = RunStatus.RUNNING
         tick_count = 0
-        max_ticks = 10000  # Safety limit
+        max_ticks = 50000  # Safety limit (50000 ticks @ 100ms = 83 min max)
 
         while status == RunStatus.RUNNING and tick_count < max_ticks:
             # Check cancellation
@@ -383,9 +504,10 @@ class OracleBTWrapper:
             async for chunk in self._drain_pending_chunks():
                 yield chunk
 
-            # Small delay to allow async operations
+            # Delay to allow async operations (LLM calls can take 30+ seconds)
+            # Use longer sleep to reduce tick consumption while waiting
             if status == RunStatus.RUNNING:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.1)  # 100ms between ticks
 
         # Final status handling
         if tick_count >= max_ticks:
@@ -398,25 +520,33 @@ class OracleBTWrapper:
             logger.warning("Tree completed with FAILURE status")
             # Drain any remaining chunks
             async for chunk in self._drain_pending_chunks():
+                logger.info(f"Draining final chunk (failure): {chunk.type}")
                 yield chunk
         else:
-            logger.debug(f"Tree completed with status: {status}")
+            logger.info(f"Tree completed successfully with status: {status}, ticks: {tick_count}")
             # Drain any remaining chunks
+            chunks_drained = 0
             async for chunk in self._drain_pending_chunks():
+                chunks_drained += 1
+                logger.info(f"Draining final chunk ({chunks_drained}): {chunk.type}")
                 yield chunk
+            logger.info(f"Final drain complete: {chunks_drained} chunks")
 
     async def _drain_pending_chunks(self) -> AsyncGenerator[OracleStreamChunk, None]:
-        """Drain pending chunks from blackboard and yield them."""
+        """Drain pending chunks from blackboard and yield them.
+
+        Actions add chunks to bb._data["_pending_chunks"] via _add_pending_chunk().
+        """
+        # Get chunks from blackboard, not wrapper attribute
         if self._blackboard is None:
             return
 
-        chunks = self._blackboard.get("_pending_chunks") or []
-
+        chunks = self._blackboard._data.get("_pending_chunks", [])
         if not chunks:
             return
 
-        # Clear the list
-        self._blackboard.set("_pending_chunks", [])
+        # Clear the chunks list in blackboard
+        self._blackboard._data["_pending_chunks"] = []
 
         for raw_chunk in chunks:
             chunk = self._convert_chunk(raw_chunk)

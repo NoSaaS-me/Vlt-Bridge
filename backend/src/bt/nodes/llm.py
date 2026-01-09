@@ -113,23 +113,26 @@ class LLMResponse(BaseModel):
     content: str
     model: str
     finish_reason: Optional[str] = None
-    usage: Dict[str, int] = Field(default_factory=dict)
+    usage: Dict[str, Any] = Field(default_factory=dict)
     request_id: Optional[str] = None
 
     @property
     def input_tokens(self) -> int:
         """Get input token count."""
-        return self.usage.get("prompt_tokens", 0)
+        val = self.usage.get("prompt_tokens", 0)
+        return val if isinstance(val, int) else 0
 
     @property
     def output_tokens(self) -> int:
         """Get output token count."""
-        return self.usage.get("completion_tokens", 0)
+        val = self.usage.get("completion_tokens", 0)
+        return val if isinstance(val, int) else 0
 
     @property
     def total_tokens(self) -> int:
         """Get total token count."""
-        return self.usage.get("total_tokens", 0)
+        val = self.usage.get("total_tokens", 0)
+        return val if isinstance(val, int) else 0
 
 
 class StreamChunk(BaseModel):
@@ -424,9 +427,9 @@ class LLMCallNode(LeafNode):
     def __init__(
         self,
         id: str,
-        model: str,
-        prompt_key: str,
-        response_key: str,
+        model: Optional[str] = None,
+        prompt_key: Optional[str] = None,
+        response_key: str = "llm_response",
         stream_to: Optional[str] = None,
         timeout: int = 120,
         budget_tokens: Optional[int] = None,
@@ -436,6 +439,14 @@ class LLMCallNode(LeafNode):
         on_chunk: Optional[Callable[[str, int], None]] = None,
         name: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        # Extended keys for Oracle/flexible usage
+        model_key: Optional[str] = None,
+        messages_key: Optional[str] = None,
+        tools_key: Optional[str] = None,
+        max_tokens_key: Optional[str] = None,
+        tool_calls_key: Optional[str] = None,
+        reasoning_key: Optional[str] = None,
+        on_chunk_fn: Optional[str] = None,
     ) -> None:
         """Initialize an LLMCallNode.
 
@@ -453,6 +464,13 @@ class LLMCallNode(LeafNode):
             on_chunk: Optional callback for streaming chunks.
             name: Human-readable name (defaults to id).
             metadata: Optional metadata for debugging.
+            model_key: Blackboard key to read model from (alternative to model).
+            messages_key: Blackboard key to read messages from (alternative to prompt_key).
+            tools_key: Blackboard key to read tools array from.
+            max_tokens_key: Blackboard key to read max_tokens from.
+            tool_calls_key: Blackboard key to write tool_calls to.
+            reasoning_key: Blackboard key to write reasoning/thinking content to.
+            on_chunk_fn: Dotted path to chunk callback function (resolved at runtime).
         """
         super().__init__(id=id, name=name, metadata=metadata)
 
@@ -468,9 +486,21 @@ class LLMCallNode(LeafNode):
         self._max_retries = max_retries
         self._on_chunk = on_chunk
 
+        # Extended keys for flexible blackboard access
+        self._model_key = model_key
+        self._messages_key = messages_key
+        self._tools_key = tools_key
+        self._max_tokens_key = max_tokens_key
+        self._tool_calls_key = tool_calls_key
+        self._reasoning_key = reasoning_key
+        self._on_chunk_fn = on_chunk_fn
+        self._resolved_on_chunk: Optional[Callable] = None
+
         # State (mutable during execution)
         self._request_id: Optional[str] = None
         self._partial_response: str = ""
+        self._reasoning_buffer: str = ""
+        self._tool_calls: Optional[List[Dict[str, Any]]] = None
         self._tokens_used: int = 0
         self._retry_count: int = 0
         self._started_at: Optional[datetime] = None
@@ -571,12 +601,33 @@ class LLMCallNode(LeafNode):
     def _validate_contract_inputs(self, blackboard) -> list:
         """Override to validate instance-specific contract.
 
-        Checks that the actual prompt_key exists in the blackboard.
+        Checks that either prompt_key or messages_key exists in the blackboard.
         """
+        # Using messages_key instead of prompt_key is valid
+        if self._messages_key is not None:
+            if blackboard is None:
+                return [self._messages_key]
+            if hasattr(blackboard, '_lookup'):
+                messages = blackboard._lookup(self._messages_key)
+            else:
+                messages = blackboard.get(self._messages_key, None) if hasattr(blackboard, 'get') else None
+            if messages is None:
+                return [self._messages_key]
+            return []
+
+        # Traditional prompt_key validation
+        if self._prompt_key is None:
+            return []  # No prompt_key or messages_key - skip validation
+
         if blackboard is None:
             return [self._prompt_key]
 
-        if not blackboard.has(self._prompt_key):
+        if hasattr(blackboard, 'has') and not blackboard.has(self._prompt_key):
+            # Try _lookup fallback for SimpleBlackboard
+            if hasattr(blackboard, '_lookup'):
+                if blackboard._lookup(self._prompt_key) is None:
+                    return [self._prompt_key]
+                return []  # Found via _lookup
             return [self._prompt_key]
 
         return []
@@ -600,6 +651,7 @@ class LLMCallNode(LeafNode):
         Returns:
             RunStatus based on current state.
         """
+        logger.debug(f"LLMCallNode '{self._id}' tick: status={self._status}, result_ready={self._result_ready}")
         # Check for interruption
         if ctx.cancellation_requested:
             return self._handle_interruption(ctx)
@@ -707,6 +759,7 @@ class LLMCallNode(LeafNode):
         """Handle successful completion.
 
         Writes LLMResponse to blackboard and returns SUCCESS.
+        Also writes tool_calls and reasoning if configured.
 
         Args:
             ctx: Tick context.
@@ -719,14 +772,21 @@ class LLMCallNode(LeafNode):
         content = result.get("content", self._partial_response)
         usage = result.get("usage", {})
         finish_reason = result.get("finish_reason", "stop")
+        tool_calls = result.get("tool_calls")
+        reasoning = result.get("reasoning", self._reasoning_buffer)
 
         # Update token tracking
         self._tokens_used = usage.get("total_tokens", 0)
 
+        # Get the actual model used (from blackboard if using model_key)
+        actual_model = self._model
+        if self._model_key and ctx.blackboard:
+            actual_model = self._bb_get(ctx.blackboard, self._model_key) or self._model
+
         # Create response model
         response = LLMResponse(
             content=content,
-            model=self._model,
+            model=actual_model or "unknown",
             finish_reason=finish_reason,
             usage=usage,
             request_id=self._request_id,
@@ -734,11 +794,22 @@ class LLMCallNode(LeafNode):
 
         # Write to blackboard
         if ctx.blackboard:
-            # Check if response_key is registered
-            if not ctx.blackboard.has(self._response_key):
-                # Register it dynamically
-                ctx.blackboard.register(self._response_key, LLMResponse)
-            ctx.blackboard.set(self._response_key, response)
+            # Write main response
+            self._bb_set(ctx.blackboard, self._response_key, response)
+
+            # Write tool_calls if we have them and a key is configured
+            if tool_calls and self._tool_calls_key:
+                self._bb_set(ctx.blackboard, self._tool_calls_key, tool_calls)
+                logger.debug(f"LLMCallNode '{self._id}' wrote {len(tool_calls)} tool_calls to '{self._tool_calls_key}'")
+
+            # Write reasoning if we have it and a key is configured
+            if reasoning and self._reasoning_key:
+                self._bb_set(ctx.blackboard, self._reasoning_key, reasoning)
+                logger.debug(f"LLMCallNode '{self._id}' wrote reasoning ({len(reasoning)} chars) to '{self._reasoning_key}'")
+
+            # Also write accumulated content if stream_to is configured
+            if self._stream_to and self._partial_response:
+                self._bb_set(ctx.blackboard, self._stream_to, self._partial_response)
 
         # Complete async operation
         ctx.complete_async(self._request_id)
@@ -746,12 +817,34 @@ class LLMCallNode(LeafNode):
         # Clear state
         self._cleanup()
 
-        logger.debug(
+        logger.info(
             f"LLMCallNode '{self._id}' completed successfully. "
-            f"Tokens used: {self._tokens_used}"
+            f"Tokens used: {self._tokens_used}, "
+            f"tool_calls: {len(tool_calls) if tool_calls else 0}"
         )
 
         return RunStatus.SUCCESS
+
+    def _bb_get(self, bb: Any, key: str) -> Any:
+        """Get value from blackboard with fallback to _lookup."""
+        if hasattr(bb, '_lookup'):
+            return bb._lookup(key)
+        elif hasattr(bb, 'get'):
+            return bb.get(key)
+        return None
+
+    def _bb_set(self, bb: Any, key: str, value: Any) -> None:
+        """Set value in blackboard with fallback to direct access."""
+        if hasattr(bb, '_data'):
+            bb._data[key] = value
+            if hasattr(bb, '_writes'):
+                bb._writes.add(key)
+        elif hasattr(bb, 'set'):
+            try:
+                bb.set(key, value)
+            except Exception:
+                # Fall back to direct attribute if set fails
+                setattr(bb, key, value)
 
     def _handle_error(self, ctx: "TickContext", error: Exception) -> RunStatus:
         """Handle request error with retry logic.
@@ -881,6 +974,10 @@ class LLMCallNode(LeafNode):
     def _get_prompt(self, ctx: "TickContext") -> Optional[PromptContent]:
         """Get prompt from blackboard.
 
+        Supports two modes:
+        1. messages_key: Read messages list directly from blackboard
+        2. prompt_key: Read PromptContent object
+
         Args:
             ctx: Tick context.
 
@@ -891,37 +988,50 @@ class LLMCallNode(LeafNode):
             logger.error(f"LLMCallNode '{self._id}' has no blackboard")
             return None
 
-        # Try to get prompt content directly
-        # The blackboard.get returns Optional[T], not ErrorResult
-        try:
-            result = ctx.blackboard.get(self._prompt_key, PromptContent)
-            if result is not None:
-                return result
-        except Exception as e:
-            logger.debug(
-                f"LLMCallNode '{self._id}' blackboard.get raised: {e}"
-            )
-
-        # Try to get raw value and convert
-        raw = ctx.blackboard._data.get(self._prompt_key)
-        if raw is not None:
-            try:
-                if isinstance(raw, PromptContent):
-                    return raw
-                elif isinstance(raw, dict):
-                    return PromptContent.model_validate(raw)
-                elif isinstance(raw, str):
-                    # Simple string becomes user message
-                    return PromptContent(user=raw)
-            except Exception as e:
-                logger.error(
-                    f"LLMCallNode '{self._id}' failed to parse prompt: {e}"
+        # Mode 1: Direct messages list from messages_key
+        if self._messages_key:
+            messages = self._bb_get(ctx.blackboard, self._messages_key)
+            if messages and isinstance(messages, list):
+                # Convert messages list to PromptContent
+                return PromptContent(messages=messages)
+            elif messages:
+                logger.warning(
+                    f"LLMCallNode '{self._id}' messages_key '{self._messages_key}' "
+                    f"is not a list: {type(messages)}"
                 )
-                return None
+
+        # Mode 2: Traditional prompt_key with PromptContent
+        if self._prompt_key:
+            # Try to get prompt content directly
+            try:
+                result = ctx.blackboard.get(self._prompt_key, PromptContent)
+                if result is not None:
+                    return result
+            except Exception as e:
+                logger.debug(
+                    f"LLMCallNode '{self._id}' blackboard.get raised: {e}"
+                )
+
+            # Try to get raw value and convert
+            raw = ctx.blackboard._data.get(self._prompt_key)
+            if raw is not None:
+                try:
+                    if isinstance(raw, PromptContent):
+                        return raw
+                    elif isinstance(raw, dict):
+                        return PromptContent.model_validate(raw)
+                    elif isinstance(raw, str):
+                        # Simple string becomes user message
+                        return PromptContent(user=raw)
+                except Exception as e:
+                    logger.error(
+                        f"LLMCallNode '{self._id}' failed to parse prompt: {e}"
+                    )
+                    return None
 
         logger.error(
             f"LLMCallNode '{self._id}' could not read prompt "
-            f"from '{self._prompt_key}'"
+            f"from messages_key='{self._messages_key}' or prompt_key='{self._prompt_key}'"
         )
         return None
 
@@ -954,27 +1064,68 @@ class LLMCallNode(LeafNode):
         """
         messages = prompt.to_api_messages()
 
+        # Get model - either from config or from blackboard key
+        model = self._model
+        if self._model_key and ctx.blackboard:
+            model = self._bb_get(ctx.blackboard, self._model_key) or self._model
+        if not model:
+            model = "deepseek/deepseek-chat"  # Default fallback
+
+        # Get tools from blackboard if configured
+        tools = None
+        if self._tools_key and ctx.blackboard:
+            tools = self._bb_get(ctx.blackboard, self._tools_key)
+
+        # Get max_tokens from blackboard if configured
+        max_tokens = None
+        if self._max_tokens_key and ctx.blackboard:
+            max_tokens = self._bb_get(ctx.blackboard, self._max_tokens_key)
+
+        # Resolve on_chunk callback function if specified as dotted path
+        on_chunk_callback = self._on_chunk
+        if self._on_chunk_fn and not self._resolved_on_chunk:
+            try:
+                self._resolved_on_chunk = self._resolve_callback(self._on_chunk_fn, ctx)
+            except Exception as e:
+                logger.warning(f"LLMCallNode '{self._id}' failed to resolve on_chunk_fn: {e}")
+        if self._resolved_on_chunk:
+            on_chunk_callback = self._resolved_on_chunk
+
         # Create callback for streaming chunks
         def on_chunk(content: str, index: int) -> None:
             self._partial_response += content
             self._chunk_index = index
-            if self._on_chunk:
-                self._on_chunk(content, index)
+            if on_chunk_callback:
+                on_chunk_callback(content, index)
+
+        # Build kwargs for API call
+        kwargs = {}
+        if tools:
+            kwargs["tools"] = tools
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+
+        logger.debug(
+            f"LLMCallNode '{self._id}' starting request: "
+            f"model={model}, messages={len(messages)}, tools={len(tools) if tools else 0}"
+        )
 
         # Start async task
-        if self._stream_to:
+        if self._stream_to or self._on_chunk or self._on_chunk_fn:
             # Streaming mode
             coro = client.stream_complete(
                 messages=messages,
-                model=self._model,
+                model=model,
                 on_chunk=on_chunk,
+                **kwargs,
             )
         else:
             # Non-streaming mode
             coro = client.complete(
                 messages=messages,
-                model=self._model,
+                model=model,
                 stream=False,
+                **kwargs,
             )
 
         # Schedule the coroutine
@@ -987,16 +1138,52 @@ class LLMCallNode(LeafNode):
                 f"LLMCallNode '{self._id}' running without event loop"
             )
 
+    def _resolve_callback(self, fn_path: str, ctx: "TickContext") -> Optional[Callable]:
+        """Resolve a dotted function path to a callable.
+
+        Args:
+            fn_path: Dotted path like 'src.bt.actions.oracle.on_llm_chunk'
+            ctx: Tick context (for potential injection).
+
+        Returns:
+            Resolved callable or None.
+        """
+        import importlib
+        parts = fn_path.rsplit(".", 1)
+        if len(parts) != 2:
+            return None
+
+        module_path, func_name = parts
+        try:
+            module = importlib.import_module(module_path)
+            func = getattr(module, func_name, None)
+            if func and callable(func):
+                # Wrap to inject context AND write chunk content to blackboard
+                def wrapped(content: str, index: int) -> None:
+                    # Write the current chunk content to stream_to key so callback can read it
+                    if ctx.blackboard and self._stream_to:
+                        # Write accumulated partial response for the callback to read
+                        ctx.blackboard.set(self._stream_to, self._partial_response)
+                    func(ctx)
+                return wrapped
+            return None
+        except ImportError as e:
+            logger.warning(f"Failed to import {module_path}: {e}")
+            return None
+
     async def _run_request(self, coro) -> None:
         """Run the request coroutine and capture result.
 
         Args:
             coro: The coroutine to run.
         """
+        logger.debug(f"LLMCallNode '{self._id}' starting async request")
         try:
             self._result = await coro
+            logger.debug(f"LLMCallNode '{self._id}' completed: result keys={list(self._result.keys()) if self._result else None}")
             self._result_ready = True
         except Exception as e:
+            logger.warning(f"LLMCallNode '{self._id}' request error: {e}")
             self._error = e
             self._result_ready = True
 

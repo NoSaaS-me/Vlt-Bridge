@@ -135,6 +135,64 @@ class TreeDefinition:
             "source_hash": self.source_hash,
         }
 
+    def all_subtree_refs(self) -> List[str]:
+        """Get all subtree reference names.
+
+        Used for dependency resolution.
+        """
+        refs: List[str] = []
+        self._collect_subtree_refs(self.root, refs)
+        return refs
+
+    def _collect_subtree_refs(
+        self,
+        node: NodeDefinition,
+        refs: List[str],
+    ) -> None:
+        """Recursively collect subtree references."""
+        if node.type == "subtree_ref":
+            subtree_name = node.get_subtree_name()
+            if subtree_name and not node.is_lazy_subtree():
+                refs.append(subtree_name)
+
+        for child in node.children:
+            self._collect_subtree_refs(child, refs)
+
+    def all_node_ids(self) -> List[str]:
+        """Get all node IDs in the tree."""
+        ids: List[str] = []
+        self._collect_node_ids(self.root, ids)
+        return ids
+
+    def _collect_node_ids(
+        self,
+        node: NodeDefinition,
+        ids: List[str],
+    ) -> None:
+        """Recursively collect node IDs."""
+        if node.id:
+            ids.append(node.id)
+        for child in node.children:
+            self._collect_node_ids(child, ids)
+
+    def all_fn_paths(self) -> List[str]:
+        """Get all function paths referenced in the tree."""
+        paths: List[str] = []
+        self._collect_fn_paths(self.root, paths)
+        return paths
+
+    def _collect_fn_paths(
+        self,
+        node: NodeDefinition,
+        paths: List[str],
+    ) -> None:
+        """Recursively collect function paths."""
+        fn = node.config.get("fn")
+        if fn and isinstance(fn, str):
+            paths.append(fn)
+        for child in node.children:
+            self._collect_fn_paths(child, paths)
+
 
 # =============================================================================
 # BTApiBuilder

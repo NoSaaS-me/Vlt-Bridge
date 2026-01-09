@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, TYPE_CHECKING
 from .definitions import TreeDefinition, ValidationError
 from .validator import TreeValidator
 from .builder import TreeBuilder, TreeBuildError
+from .loader import TreeLoader
 
 if TYPE_CHECKING:
     from ..core.tree import BehaviorTree
@@ -421,6 +422,33 @@ class TreeRegistry:
         """
         return list(self._trees.keys())
 
+    def __contains__(self, tree_id: str) -> bool:
+        """Check if tree is registered.
+
+        Args:
+            tree_id: Tree identifier to check.
+
+        Returns:
+            True if tree is registered, False otherwise.
+        """
+        return tree_id in self._trees
+
+    def __getitem__(self, tree_id: str) -> "BehaviorTree":
+        """Get tree by ID using subscript notation.
+
+        Args:
+            tree_id: Tree identifier.
+
+        Returns:
+            Tree instance.
+
+        Raises:
+            KeyError: If tree not found.
+        """
+        if tree_id not in self._trees:
+            raise KeyError(f"Tree '{tree_id}' not found in registry")
+        return self._trees[tree_id]
+
     # =========================================================================
     # Hot Reload Methods
     # =========================================================================
@@ -767,42 +795,23 @@ class TreeRegistry:
             return False
 
     def _load_definition(self, path: Path) -> TreeDefinition:
-        """Load tree definition from Lua file.
-
-        This is a placeholder - actual Lua parsing would be done
-        by LuaTreeLoader. For now, we'll parse a simplified format.
+        """Load tree definition from Lua file using TreeLoader.
 
         Args:
             path: Path to .lua file.
 
         Returns:
-            TreeDefinition instance.
+            TreeDefinition instance parsed from Lua DSL.
         """
-        # TODO: Integrate with actual LuaTreeLoader when available
-        # For now, we'll use a simple approach - assume the tree name
-        # is derived from the filename
-
         tree_name = path.stem
 
         # Check for pending definition (from batch load)
         if tree_name in self._pending_definitions:
             return self._pending_definitions[tree_name]
 
-        # Create minimal definition from file
-        # In the full implementation, LuaTreeLoader would parse the Lua DSL
-        from .definitions import NodeDefinition
-
-        root = NodeDefinition(
-            type="sequence",
-            id="root",
-            source_line=1,
-        )
-
-        return TreeDefinition(
-            name=tree_name,
-            root=root,
-            source_path=str(path),
-        )
+        # Use TreeLoader to parse the Lua DSL
+        loader = TreeLoader()
+        return loader.load(path)
 
     def _log_tree_diff(
         self,

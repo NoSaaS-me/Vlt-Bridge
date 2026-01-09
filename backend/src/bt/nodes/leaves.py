@@ -458,7 +458,12 @@ class Condition(LeafNode):
                 logger.error(f"Condition '{self._id}' has no condition defined")
                 return RunStatus.FAILURE
 
-            # Convert bool to RunStatus
+            # If result is already a RunStatus, use it directly
+            # (condition functions can return RunStatus.SUCCESS/FAILURE)
+            if isinstance(result, RunStatus):
+                return result
+
+            # Convert bool to RunStatus for expression/bool-returning functions
             return RunStatus.from_bool(bool(result))
 
         except Exception as e:
@@ -505,6 +510,16 @@ class Condition(LeafNode):
                 f"Condition '{self._id}' Lua evaluation failed: {result.error}"
             )
             return False
+
+        # Debug logging for key conditions
+        if "tool_calls" in expr:
+            tool_calls_val = env.get("bb", {}).get("tool_calls")
+            logger.debug(
+                f"Condition '{self._id}' tool_calls check: "
+                f"tool_calls={tool_calls_val}, type={type(tool_calls_val)}, "
+                f"len={len(tool_calls_val) if isinstance(tool_calls_val, (list, tuple)) else 'N/A'}, "
+                f"result={result.result}"
+            )
 
         # Convert result to bool
         return bool(result.result)

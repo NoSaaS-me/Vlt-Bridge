@@ -167,7 +167,7 @@ def is_over_budget(ctx: "TickContext") -> RunStatus:
     """
     bb = ctx.blackboard
     if bb is None:
-        logger.debug("is_over_budget: No blackboard available")
+        logger.warning("is_over_budget: No blackboard available, returning FAILURE")
         return RunStatus.FAILURE
 
     # Import config here to avoid circular imports
@@ -179,6 +179,7 @@ def is_over_budget(ctx: "TickContext") -> RunStatus:
         max_turns = 30
 
     turn = _bb_get(bb, "turn", 0)
+    logger.info(f"is_over_budget: raw turn value = {turn!r} (type: {type(turn).__name__})")
 
     # Ensure turn is integer
     try:
@@ -187,11 +188,10 @@ def is_over_budget(ctx: "TickContext") -> RunStatus:
         turn = 0
 
     over = turn >= max_turns
+    result = RunStatus.SUCCESS if over else RunStatus.FAILURE
+    logger.info(f"is_over_budget: turn={turn}, max_turns={max_turns}, over={over}, returning {result.name}")
 
-    if over:
-        logger.error(f"Over budget: turn {turn} >= max {max_turns}")
-
-    return RunStatus.SUCCESS if over else RunStatus.FAILURE
+    return result
 
 
 def budget_warning_needed(ctx: "TickContext") -> RunStatus:

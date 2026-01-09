@@ -32,7 +32,6 @@ import type {
   NodeInfo,
   BlackboardResponse,
   TickHistoryEntry,
-  BreakpointInfo,
   TreeStatus,
   RunStatus,
 } from '@/types/btDebug';

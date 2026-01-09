@@ -213,7 +213,7 @@ def load_tree_node(ctx: "TickContext") -> RunStatus:
         return RunStatus.FAILURE
 
     try:
-        from src.services.context_tree import ContextTreeService
+        from src.services.context_tree_service import ContextTreeService
 
         tree_service = ContextTreeService()
         node = tree_service.get_node(context_id)
@@ -252,7 +252,7 @@ def get_or_create_tree(ctx: "TickContext") -> RunStatus:
         return RunStatus.FAILURE
 
     try:
-        from src.services.context_tree import ContextTreeService
+        from src.services.context_tree_service import ContextTreeService
 
         tree_service = ContextTreeService()
 
@@ -462,7 +462,7 @@ def add_tree_history(ctx: "TickContext") -> RunStatus:
         return RunStatus.SUCCESS
 
     try:
-        from src.services.context_tree import ContextTreeService
+        from src.services.context_tree_service import ContextTreeService
 
         tree_service = ContextTreeService()
         nodes = tree_service.get_nodes(tree_root_id)
@@ -782,7 +782,7 @@ def save_exchange(ctx: "TickContext") -> RunStatus:
     # Save to tree context
     if tree_root_id and current_node_id:
         try:
-            from src.services.context_tree import ContextTreeService
+            from src.services.context_tree_service import ContextTreeService
 
             tree_service = ContextTreeService()
             new_node = tree_service.create_node(
@@ -850,15 +850,25 @@ def emit_done(ctx: "TickContext") -> RunStatus:
     """Yield done chunk to complete response."""
     bb = ctx.blackboard
     if bb is None:
+        logger.error("emit_done: No blackboard available")
         return RunStatus.FAILURE
+
+    accumulated = bb_get(bb,"accumulated_content") or ""
+    turn = bb_get(bb,"turn") or 0
+    tool_calls = bb_get(bb,"tool_calls") or []
+
+    logger.info(
+        f"emit_done called: turn={turn}, accumulated_len={len(accumulated)}, "
+        f"tool_calls={len(tool_calls)}"
+    )
 
     _add_pending_chunk(bb, {
         "type": "done",
-        "accumulated_content": bb_get(bb,"accumulated_content") or "",
-        "turn": bb_get(bb,"turn") or 0,
+        "accumulated_content": accumulated,
+        "turn": turn,
     })
 
-    logger.debug("Emitted done chunk")
+    logger.info("Emitted done chunk to pending_chunks")
     ctx.mark_progress()
     return RunStatus.SUCCESS
 
@@ -1322,17 +1332,22 @@ def build_llm_request(ctx: "TickContext") -> RunStatus:
     """Build request with model, messages, tools, max_tokens."""
     bb = ctx.blackboard
     if bb is None:
+        logger.error("build_llm_request: No blackboard!")
         return RunStatus.FAILURE
 
     # Request is already prepared in blackboard
     # This action is a hook for any last-minute modifications
 
     model = bb_get(bb,"model")
-    if model and ":thinking" not in model:
-        # Some models support thinking traces
-        thinking_models = ["deepseek", "o1", "claude"]
+    # Only add :thinking suffix if user has thinking_enabled AND model supports it
+    # Note: thinking_enabled should be set in blackboard during init
+    thinking_enabled = bb_get(bb, "thinking_enabled")
+    if model and thinking_enabled and ":thinking" not in model:
+        # Some models support thinking traces via OpenRouter suffix
+        thinking_models = ["deepseek", "o1"]  # Claude doesn't use :thinking suffix
         if any(m in model.lower() for m in thinking_models):
-            bb_set(bb,"model", f"{model}:thinking")
+            bb_set(bb, "model", f"{model}:thinking")
+            logger.debug(f"Enabled thinking mode for model: {model}")
 
     ctx.mark_progress()
     return RunStatus.SUCCESS
@@ -1342,6 +1357,7 @@ def on_llm_chunk(ctx: "TickContext") -> RunStatus:
     """Callback for streaming LLM chunks.
 
     Called by LLMCallNode during streaming.
+    Filters out signal XML tags from the streamed content.
     """
     bb = ctx.blackboard
     if bb is None:
@@ -1349,12 +1365,39 @@ def on_llm_chunk(ctx: "TickContext") -> RunStatus:
 
     partial = bb_get(bb,"partial_response") or ""
 
-    # Yield streaming chunk
-    _add_pending_chunk(bb, {
-        "type": "content",
-        "content": partial,
-        "streaming": True
-    })
+    # Filter out signal tags from streaming content
+    # Signal tags look like: <signal type="...">...</signal>
+    # We need to detect the start of a potential signal and not stream it
+    clean_content = partial
+
+    # Check for start of signal tag
+    signal_start = partial.find("<signal")
+    if signal_start != -1:
+        # Only emit content before the signal tag
+        clean_content = partial[:signal_start]
+    else:
+        # Also check for partial signal tag at the end (e.g., "<sig" or "<sign")
+        # This prevents streaming partial tags that look like: "<", "<s", "<si", etc.
+        for i in range(1, min(8, len(partial) + 1)):  # "<signal" is 7 chars
+            suffix = partial[-i:] if len(partial) >= i else partial
+            if "<signal".startswith(suffix) and suffix.startswith("<"):
+                clean_content = partial[:-i]
+                break
+
+    # Track what we've already streamed to avoid duplicates
+    last_streamed_len = bb_get(bb, "_last_streamed_len") or 0
+
+    # Only emit new content
+    if len(clean_content) > last_streamed_len:
+        new_content = clean_content[last_streamed_len:]
+        bb_set(bb, "_last_streamed_len", len(clean_content))
+
+        # Yield streaming chunk with only new content
+        _add_pending_chunk(bb, {
+            "type": "content",
+            "content": new_content,
+            "streaming": True
+        })
 
     ctx.mark_progress()
     return RunStatus.SUCCESS

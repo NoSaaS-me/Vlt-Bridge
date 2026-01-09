@@ -56,6 +56,7 @@ from ..nodes import (
     # Errors
     FunctionNotFoundError,
 )
+from ..nodes.llm import LLMCallNode
 
 from ..core.tree import BehaviorTree
 from ..state import TypedBlackboard, MergeStrategy
@@ -149,6 +150,8 @@ NODE_BUILDERS: Dict[str, Type[BehaviorNode]] = {
     "oracle": Oracle,
     "code_search": CodeSearch,
     "vault_search": VaultSearch,
+    # LLM call node
+    "llm_call": LLMCallNode,
 }
 
 
@@ -571,7 +574,7 @@ class TreeBuilder:
                 )
 
         elif node_type == "subtree_ref":
-            subtree_name = config.get("tree") or config.get("name")
+            subtree_name = config.get("tree") or config.get("tree_name") or config.get("name")
             if not subtree_name:
                 raise TreeBuildError(
                     code="E4004",
@@ -705,6 +708,42 @@ class TreeBuilder:
                 metadata=config.get("metadata", {}),
             )
 
+        elif node_type == "llm_call":
+            # LLM call node for making API requests
+            from ..nodes.llm import LLMCallNode
+
+            # Convert timeout from ms to seconds if present
+            timeout = config.get("timeout")
+            if timeout and timeout > 1000:
+                timeout = timeout // 1000  # Convert ms to seconds
+
+            return LLMCallNode(
+                id=definition.id or f"llm-call-{hash(str(config))}",
+                name=definition.name or config.get("name") or definition.id,
+                # Direct model or model_key for blackboard lookup
+                model=config.get("model"),
+                model_key=config.get("model_key"),
+                # Messages from prompt_key or messages_key
+                prompt_key=config.get("prompt_key"),
+                messages_key=config.get("messages_key"),
+                # Output keys
+                response_key=config.get("response_key", "llm_response"),
+                stream_to=config.get("stream_to"),
+                tool_calls_key=config.get("tool_calls_key"),
+                reasoning_key=config.get("reasoning_key"),
+                # Tools from blackboard
+                tools_key=config.get("tools_key"),
+                max_tokens_key=config.get("max_tokens_key"),
+                # Configuration
+                timeout=timeout or 120,
+                budget_tokens=config.get("budget_tokens"),
+                interruptible=config.get("interruptible", True),
+                max_retries=config.get("max_retries", 3),
+                # Callback
+                on_chunk_fn=config.get("on_chunk"),
+                metadata=config.get("metadata", {}),
+            )
+
         else:
             # Unknown leaf type
             raise TreeBuildError(
@@ -734,9 +773,9 @@ class TreeBuilder:
         Returns:
             Stub Action node if applicable, None otherwise.
         """
-        # Only llm_call may need a stub if LLMCallNode is not available
-        # Tool, Oracle, CodeSearch, VaultSearch are now fully implemented
-        stub_types = {"llm_call"}
+        # All node types are now fully implemented
+        # Tool, Oracle, CodeSearch, VaultSearch, LLMCall are handled in _build_leaf
+        stub_types: set = set()  # No more stub types needed
 
         if definition.type not in stub_types:
             return None

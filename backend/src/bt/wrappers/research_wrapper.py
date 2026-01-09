@@ -39,6 +39,7 @@ from ..core.context import TickContext
 from ..state.blackboard import TypedBlackboard
 from ..state.base import RunStatus
 from ..lua.loader import TreeLoader
+from ..lua.builder import TreeBuilder
 from ..lua.registry import TreeRegistry
 
 if TYPE_CHECKING:
@@ -315,19 +316,21 @@ class ResearchBTWrapper:
         if self._tree is not None:
             return
 
-        # Initialize registry
-        self._registry = TreeRegistry()
+        # Initialize registry with tree directory
+        self._registry = TreeRegistry(tree_dir=self.TREE_PATH.parent)
 
-        # Load tree from Lua file
-        loader = TreeLoader(registry=self._registry)
-
+        # Load tree definition from Lua file
         if not self.TREE_PATH.exists():
             raise FileNotFoundError(
                 f"Research tree definition not found: {self.TREE_PATH}"
             )
 
-        tree_def = loader.load_file(str(self.TREE_PATH))
-        self._tree = loader.build_tree(tree_def)
+        loader = TreeLoader()
+        tree_def = loader.load(self.TREE_PATH)
+
+        # Build executable tree from definition
+        builder = TreeBuilder(registry=self._registry)
+        self._tree = builder.build(tree_def)
 
         logger.info(f"Loaded research tree: {self._tree.id}")
 

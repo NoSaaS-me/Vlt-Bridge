@@ -81,17 +81,8 @@ class AppConfig(BaseModel):
         description="Base URL for the application (used for widget asset URLs, OAuth redirects in production)"
     )
 
-    # BT Oracle Configuration (020-bt-oracle-agent, T052)
-    oracle_use_bt: str = Field(
-        default="false",
-        description=(
-            "Oracle execution mode for BT-controlled Oracle (ORACLE_USE_BT). Options:\n"
-            "  'false'  - Use legacy OracleAgent only (default, safe)\n"
-            "  'true'   - Use BT-controlled Oracle exclusively\n"
-            "  'shadow' - Run both in parallel, compare outputs, yield legacy\n"
-            "Start with 'shadow' to validate BT behavior before switching to 'true'."
-        )
-    )
+    # BT Oracle Configuration (020-bt-oracle-agent)
+    # Note: oracle_use_bt removed - BT is now the only implementation
     oracle_prompt_budget: int = Field(
         default=8000,
         ge=1000,
@@ -102,20 +93,6 @@ class AppConfig(BaseModel):
             "omit segments to stay within this budget. Default: 8000 tokens."
         )
     )
-
-    @field_validator("oracle_use_bt", mode="before")
-    @classmethod
-    def _validate_oracle_mode(cls, value: str) -> str:
-        """Validate ORACLE_USE_BT is one of the allowed values."""
-        if value is None:
-            return "false"
-        v = str(value).lower().strip()
-        allowed = {"false", "true", "shadow"}
-        if v not in allowed:
-            raise ValueError(
-                f"ORACLE_USE_BT must be one of {allowed}, got: {value!r}"
-            )
-        return v
 
     @field_validator("vault_base_path", mode="before")
     @classmethod
@@ -174,8 +151,7 @@ def get_config() -> AppConfig:
     # Base URL for application (for widget URLs, etc.)
     base_url = _read_env("BASE_URL", "http://localhost:8000")
 
-    # BT Oracle configuration (020-bt-oracle-agent, T052)
-    oracle_use_bt = _read_env("ORACLE_USE_BT", "false")
+    # BT Oracle configuration (020-bt-oracle-agent)
     oracle_prompt_budget_str = _read_env("ORACLE_PROMPT_BUDGET", "8000")
     try:
         oracle_prompt_budget = int(oracle_prompt_budget_str)
@@ -198,7 +174,6 @@ def get_config() -> AppConfig:
         admin_user_ids=admin_user_ids,
         base_url=base_url,
         # BT Oracle (020-bt-oracle-agent)
-        oracle_use_bt=oracle_use_bt,
         oracle_prompt_budget=oracle_prompt_budget,
     )
     # Ensure vault base directory and index persist directory exist for downstream services.

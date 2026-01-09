@@ -4,14 +4,14 @@ This module provides the Oracle Agent API which uses OpenRouter function calling
 for autonomous tool execution. The Oracle can search code, read documentation,
 query development threads, and search the web to answer questions.
 
-Updated for 009-oracle-agent: Uses OracleAgent instead of OracleBridge subprocess.
+Updated for 020-bt-oracle-agent: Uses OracleBTWrapper with behavior tree runtime.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import AsyncGenerator, Dict
+from typing import AsyncGenerator, Dict, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -26,7 +26,7 @@ from ...models.oracle import (
     ConversationMessage,
     SourceReference,
 )
-from ...services.oracle_agent import OracleAgent, OracleAgentError
+from ...bt.wrappers.oracle_wrapper import OracleBTWrapper
 from ...services.oracle_bridge import OracleBridge, OracleBridgeError
 from ...services.user_settings import UserSettingsService, get_user_settings_service
 
@@ -34,12 +34,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/oracle", tags=["oracle"])
 
-# Singleton oracle bridge instance (kept for fallback/deprecation period)
+# Singleton oracle bridge instance (kept for history endpoints)
 _oracle_bridge: OracleBridge | None = None
 
 # Active Oracle sessions for cancellation support
-# Maps user_id to active OracleAgent instance
-_active_sessions: Dict[str, OracleAgent] = {}
+# Maps user_id to active OracleBTWrapper instance
+_active_sessions: Dict[str, OracleBTWrapper] = {}
 
 
 def get_oracle_bridge() -> OracleBridge:
@@ -89,19 +89,18 @@ async def query_oracle(
     try:
         logger.info(f"Oracle query from user {auth.user_id}: {request.question[:100]}")
 
-        # Get user's model settings for Oracle and Librarian
+        # Get user's model settings for Oracle
         oracle_model = request.model or settings_service.get_oracle_model(auth.user_id)
-        subagent_model = settings_service.get_subagent_model(auth.user_id)
 
-        logger.debug(f"Using oracle_model={oracle_model}, subagent_model={subagent_model}")
+        logger.debug(f"Using oracle_model={oracle_model}")
 
-        # Create OracleAgent with context service integration
-        agent = OracleAgent(
-            api_key=openrouter_api_key,
-            model=oracle_model,
-            subagent_model=subagent_model,
-            project_id=request.project_id or "default",
+        # Create OracleBTWrapper with BT runtime
+        wrapper = OracleBTWrapper(
             user_id=auth.user_id,
+            api_key=openrouter_api_key,
+            project_id=request.project_id or "default",
+            model=oracle_model,
+            max_tokens=request.max_tokens or 4096,
         )
 
         # Collect all chunks from the stream
@@ -111,23 +110,18 @@ async def query_oracle(
         model_used = None
         context_id = None
 
-        async for chunk in agent.query(
-            question=request.question,
-            user_id=auth.user_id,
-            stream=False,  # Non-streaming mode
-            thinking=request.thinking,
-            max_tokens=request.max_tokens,
-            project_id=request.project_id,
+        async for chunk in wrapper.process_query(
+            query=request.question,
             context_id=request.context_id,
         ):
             if chunk.type == "content" and chunk.content:
                 content_parts.append(chunk.content)
-            elif chunk.type == "source" and chunk.source:
-                sources.append(chunk.source)
+            elif chunk.type == "source" and chunk.sources:
+                sources.extend(chunk.sources)
             elif chunk.type == "done":
-                tokens_used = chunk.tokens_used
-                model_used = chunk.model_used
+                # Extract metadata from done chunk if available
                 context_id = chunk.context_id
+                context_tokens = chunk.context_tokens
             elif chunk.type == "error":
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -138,16 +132,9 @@ async def query_oracle(
             answer="".join(content_parts),
             sources=sources,
             tokens_used=tokens_used,
-            model_used=model_used,
+            model_used=oracle_model,
             context_id=context_id,
-            retrieval_traces=None,  # TODO: Implement if explain=True
-        )
-
-    except OracleAgentError as e:
-        logger.error(f"Oracle agent error: {e.message}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Oracle error: {e.message}",
+            retrieval_traces=None,
         )
     except HTTPException:
         raise
@@ -210,56 +197,40 @@ async def query_oracle_stream(
         logger.info(f"Cancelling existing session for user {auth.user_id}")
         _active_sessions[auth.user_id].cancel()
 
-    # Get user's model settings for Oracle and Librarian
+    # Get user's model settings for Oracle
     oracle_model = request.model or settings_service.get_oracle_model(auth.user_id)
-    subagent_model = settings_service.get_subagent_model(auth.user_id)
 
-    logger.debug(f"Stream using oracle_model={oracle_model}, subagent_model={subagent_model}")
+    logger.debug(f"Stream using oracle_model={oracle_model}")
 
-    # Create OracleAgent with user's settings and context integration
-    agent = OracleAgent(
-        api_key=openrouter_api_key,
-        model=oracle_model,
-        subagent_model=subagent_model,
-        project_id=request.project_id or "default",
+    # Create OracleBTWrapper with BT runtime
+    wrapper = OracleBTWrapper(
         user_id=auth.user_id,
+        api_key=openrouter_api_key,
+        project_id=request.project_id or "default",
+        model=oracle_model,
+        max_tokens=request.max_tokens or 4096,
     )
 
-    # Register the agent for cancellation support
-    _active_sessions[auth.user_id] = agent
+    # Register the wrapper for cancellation support
+    _active_sessions[auth.user_id] = wrapper
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        """Generate SSE events from OracleAgent stream."""
+        """Generate SSE events from OracleBTWrapper stream."""
         chunk_counter = 0
         try:
-            logger.info(f"Oracle Agent query from user {auth.user_id}: {request.question[:100]}")
+            logger.info(f"Oracle BT query from user {auth.user_id}: {request.question[:100]}")
 
-            async for chunk in agent.query(
-                question=request.question,
-                user_id=auth.user_id,
-                stream=True,
-                thinking=request.thinking,
-                max_tokens=request.max_tokens,
-                project_id=request.project_id,
+            async for chunk in wrapper.process_query(
+                query=request.question,
                 context_id=request.context_id,
             ):
                 chunk_counter += 1
                 chunk_json = chunk.model_dump(exclude_none=True)
-                # Debug logging to trace chunk duplication issue
                 logger.debug(
                     f"[SSE #{chunk_counter}] type={chunk.type} "
                     f"content_preview={str(chunk.content)[:50] if chunk.content else 'N/A'}"
                 )
-                # OracleAgent yields OracleStreamChunk objects directly
                 yield json.dumps(chunk_json)
-
-        except OracleAgentError as e:
-            logger.error(f"Oracle agent error: {e.message}")
-            error_chunk = OracleStreamChunk(
-                type="error",
-                error=f"Oracle error: {e.message}"
-            )
-            yield json.dumps(error_chunk.model_dump(exclude_none=True))
 
         except Exception as e:
             logger.exception("Oracle streaming failed")
@@ -271,7 +242,7 @@ async def query_oracle_stream(
 
         finally:
             # Clean up session when done
-            if auth.user_id in _active_sessions and _active_sessions[auth.user_id] is agent:
+            if auth.user_id in _active_sessions and _active_sessions[auth.user_id] is wrapper:
                 del _active_sessions[auth.user_id]
 
     return EventSourceResponse(event_generator())

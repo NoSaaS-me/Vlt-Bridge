@@ -89,6 +89,9 @@ def force_completion(ctx: "TickContext") -> RunStatus:
     Returns:
         RunStatus.SUCCESS always (force completion is authoritative).
     """
+    import traceback
+    logger.warning(f"force_completion: CALLED! Stack trace:\n{''.join(traceback.format_stack()[-5:])}")
+
     bb = ctx.blackboard
     if bb is None:
         logger.error("force_completion: No blackboard available")

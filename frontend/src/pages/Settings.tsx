@@ -234,18 +234,10 @@ export function Settings() {
   }, [location.hash, location.pathname]);
 
   const handleConnectGitHub = () => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to connect GitHub.');
-      return;
-    }
     window.location.href = getGitHubConnectUrl();
   };
 
   const handleGenerateToken = async () => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to generate new tokens.');
-      return;
-    }
     try {
       setError(null);
       const tokenResponse = await getToken();
@@ -267,10 +259,6 @@ export function Settings() {
   };
 
   const handleRebuildIndex = async () => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to rebuild the index.');
-      return;
-    }
     setIsRebuilding(true);
     setError(null);
     setRebuildResult(null);
@@ -300,10 +288,6 @@ export function Settings() {
 
   const handleSaveModelSettings = async () => {
     if (!modelSettings) return;
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to save model settings.');
-      return;
-    }
 
     setIsSavingModels(true);
     setError(null);
@@ -322,11 +306,6 @@ export function Settings() {
   };
 
   const handleTestTavily = async () => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to test connections.');
-      return;
-    }
-
     setIsTestingTavily(true);
     setTavilyTestResult(null);
     setError(null);
@@ -350,10 +329,6 @@ export function Settings() {
 
   const handleSaveContextSettings = async () => {
     if (!contextSettings) return;
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to save context settings.');
-      return;
-    }
 
     setIsSavingContext(true);
     setError(null);
@@ -373,11 +348,6 @@ export function Settings() {
 
   // T052: Handle CodeRAG re-indexing
   const handleReindex = async () => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to re-index code.');
-      return;
-    }
-
     if (!selectedProjectId) {
       setError('No project selected. Please select a project first.');
       return;
@@ -557,7 +527,7 @@ export function Settings() {
               </div>
             </div>
 
-            <Button onClick={handleGenerateToken} disabled={isDemoMode}>
+            <Button onClick={handleGenerateToken}>
               <RefreshCw className="h-4 w-4 mr-2" />
               Generate New Token
             </Button>
@@ -639,7 +609,7 @@ export function Settings() {
 
               <Button
                 onClick={handleRebuildIndex}
-                disabled={isDemoMode || isRebuilding}
+                disabled={isRebuilding}
                 variant="outline"
               >
                 <RefreshCw className={`h-4 w-4 mr-2 ${isRebuilding ? 'animate-spin' : ''}`} />
@@ -726,7 +696,7 @@ export function Settings() {
               {/* T051: Re-index Code button */}
               <Button
                 variant="outline"
-                disabled={isDemoMode || coderagStatus.status === 'indexing' || isReindexing}
+                disabled={coderagStatus.status === 'indexing' || isReindexing}
                 onClick={handleReindex}
               >
                 <RefreshCw className={`h-4 w-4 mr-2 ${coderagStatus.status === 'indexing' || isReindexing ? 'animate-spin' : ''}`} />
@@ -762,7 +732,7 @@ export function Settings() {
 
               <Button
                 variant="outline"
-                disabled={isDemoMode || isReindexing}
+                disabled={isReindexing}
                 onClick={handleReindex}
               >
                 <RefreshCw className={`h-4 w-4 mr-2 ${isReindexing ? 'animate-spin' : ''}`} />
@@ -816,7 +786,6 @@ export function Settings() {
                   <Button
                     variant="outline"
                     onClick={handleConnectGitHub}
-                    disabled={isDemoMode}
                     title="Refresh GitHub token if you have permission issues"
                   >
                     <RefreshCw className="h-4 w-4 mr-2" />
@@ -855,7 +824,7 @@ export function Settings() {
                   <li>Access organization repositories you have permission to</li>
                 </ul>
 
-                <Button onClick={handleConnectGitHub} disabled={isDemoMode}>
+                <Button onClick={handleConnectGitHub}>
                   <Github className="h-4 w-4 mr-2" />
                   Reconnect GitHub
                 </Button>
@@ -1182,7 +1151,7 @@ export function Settings() {
                         variant="outline"
                         size="sm"
                         onClick={handleTestTavily}
-                        disabled={isDemoMode || isTestingTavily || !modelSettings.tavily_api_key_set}
+                        disabled={isTestingTavily || !modelSettings.tavily_api_key_set}
                       >
                         {isTestingTavily ? (
                           <>
@@ -1213,7 +1182,7 @@ export function Settings() {
 
               <Button
                 onClick={handleSaveModelSettings}
-                disabled={isDemoMode || isSavingModels}
+                disabled={isSavingModels}
               >
                 <Save className="h-4 w-4 mr-2" />
                 {isSavingModels ? 'Saving...' : 'Save Model Settings'}
@@ -1281,7 +1250,7 @@ export function Settings() {
 
               <Button
                 onClick={handleSaveContextSettings}
-                disabled={isDemoMode || isSavingContext}
+                disabled={isSavingContext}
               >
                 <Save className="h-4 w-4 mr-2" />
                 {isSavingContext ? 'Saving...' : 'Save Context Settings'}

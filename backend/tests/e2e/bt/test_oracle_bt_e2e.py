@@ -30,12 +30,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 # Use backend.src path for test imports
 from backend.src.bt.wrappers.oracle_wrapper import OracleBTWrapper, OracleStreamChunk
-from backend.src.bt.wrappers.shadow_mode import (
-    ShadowModeRunner,
-    get_oracle_mode,
-    is_bt_oracle_enabled,
-    is_shadow_mode_enabled,
-)
 from backend.src.bt.state.blackboard import TypedBlackboard
 from backend.src.bt.state.base import RunStatus
 from backend.src.bt.core.context import TickContext
@@ -156,6 +150,7 @@ def wrapper(mock_context_tree, mock_tool_executor):
         with patch("backend.src.bt.actions.oracle.ToolExecutor", return_value=mock_tool_executor):
             wrapper = OracleBTWrapper(
                 user_id="test_user",
+                api_key="test-api-key",
                 project_id="test_project",
                 model="test/model",
                 max_tokens=1000,
@@ -180,6 +175,7 @@ async def test_e2e_basic_query_response():
     """
     wrapper = OracleBTWrapper(
         user_id="test_user",
+        api_key="test-api-key",
         project_id="test_project",
     )
 
@@ -204,6 +200,7 @@ async def test_e2e_basic_query_chunk_types():
     """E2E: Query produces expected chunk types."""
     wrapper = OracleBTWrapper(
         user_id="test_user",
+        api_key="test-api-key",
         model="test/model",
     )
 
@@ -701,7 +698,7 @@ async def test_e2e_interrupt_handling():
 @pytest.mark.asyncio
 async def test_e2e_interrupt_wrapper():
     """E2E: OracleBTWrapper handles cancellation."""
-    wrapper = OracleBTWrapper(user_id="test_user")
+    wrapper = OracleBTWrapper(user_id="test_user", api_key="test-api-key")
 
     assert wrapper.is_cancelled() is False
 
@@ -710,45 +707,6 @@ async def test_e2e_interrupt_wrapper():
 
     wrapper.reset_cancellation()
     assert wrapper.is_cancelled() is False
-
-
-# =============================================================================
-# Shadow Mode Tests
-# =============================================================================
-
-
-def test_feature_flag_default():
-    """Shadow mode is disabled by default."""
-    # Clear environment variable
-    os.environ.pop("ORACLE_USE_BT", None)
-
-    assert is_bt_oracle_enabled() is False
-    assert is_shadow_mode_enabled() is False
-    assert get_oracle_mode() == "legacy"
-
-
-def test_feature_flag_bt_mode():
-    """BT mode can be enabled via environment."""
-    os.environ["ORACLE_USE_BT"] = "true"
-
-    assert is_bt_oracle_enabled() is True
-    assert is_shadow_mode_enabled() is False
-    assert get_oracle_mode() == "bt"
-
-    # Cleanup
-    os.environ.pop("ORACLE_USE_BT", None)
-
-
-def test_feature_flag_shadow_mode():
-    """Shadow mode can be enabled via environment."""
-    os.environ["ORACLE_USE_BT"] = "shadow"
-
-    assert is_bt_oracle_enabled() is False
-    assert is_shadow_mode_enabled() is True
-    assert get_oracle_mode() == "shadow"
-
-    # Cleanup
-    os.environ.pop("ORACLE_USE_BT", None)
 
 
 # =============================================================================
@@ -885,22 +843,22 @@ async def test_wrapper_initialization():
     """OracleBTWrapper initializes correctly."""
     wrapper = OracleBTWrapper(
         user_id="test_user",
+        api_key="test-api-key",
         project_id="test_project",
         model="anthropic/claude-3-opus",
         max_tokens=8000,
-        enable_shadow_mode=True,
     )
 
     assert wrapper._user_id == "test_user"
+    assert wrapper._api_key == "test-api-key"
     assert wrapper._project_id == "test_project"
     assert wrapper._model == "anthropic/claude-3-opus"
     assert wrapper._max_tokens == 8000
-    assert wrapper._enable_shadow_mode is True
 
 
 def test_wrapper_token_usage():
     """OracleBTWrapper reports token usage correctly."""
-    wrapper = OracleBTWrapper(user_id="test_user")
+    wrapper = OracleBTWrapper(user_id="test_user", api_key="test-api-key")
 
     # Initialize blackboard using bb_set helper
     wrapper._blackboard = TypedBlackboard(scope_name="test")
@@ -917,7 +875,7 @@ def test_wrapper_token_usage():
 
 def test_wrapper_context_id():
     """OracleBTWrapper returns context ID for persistence."""
-    wrapper = OracleBTWrapper(user_id="test_user")
+    wrapper = OracleBTWrapper(user_id="test_user", api_key="test-api-key")
     wrapper._blackboard = TypedBlackboard(scope_name="test")
     bb_set(wrapper._blackboard, "current_node_id", "node_123")
     bb_set(wrapper._blackboard, "tree_root_id", "tree_456")
