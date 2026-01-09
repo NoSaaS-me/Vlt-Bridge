@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 
 
 # Default threshold for considering agent stuck (configurable via OracleConfig)
-CONSECUTIVE_SAME_REASON_THRESHOLD = 3
+# Increased from 3 to 5 to reduce false positives
+CONSECUTIVE_SAME_REASON_THRESHOLD = 5
 
 
 # =============================================================================

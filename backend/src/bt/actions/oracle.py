@@ -916,15 +916,17 @@ def detect_loop(ctx: "TickContext") -> RunStatus:
 
     current_pattern = "|".join(sorted(pattern_parts))
 
-    # Add to recent patterns (window size 6)
+    # Add to recent patterns (window size 10)
+    # Increased from 6 to reduce false positives
     recent_patterns.append(current_pattern)
-    if len(recent_patterns) > 6:
-        recent_patterns = recent_patterns[-6:]
+    if len(recent_patterns) > 10:
+        recent_patterns = recent_patterns[-10:]
     bb_set(bb,"recent_tool_patterns", recent_patterns)
 
-    # Check for loop (3+ occurrences)
+    # Check for loop (5+ occurrences to avoid false positives)
+    # Was 3, but this triggered too easily on legitimate tool use
     count = recent_patterns.count(current_pattern)
-    loop_threshold = 3
+    loop_threshold = 5
 
     if count >= loop_threshold:
         bb_set(bb,"loop_detected", True)
