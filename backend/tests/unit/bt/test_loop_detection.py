@@ -142,11 +142,11 @@ class TestIsStuckLoop:
         assert result == RunStatus.FAILURE
 
     def test_threshold_constant_is_3(self):
-        """Default threshold constant should be 3."""
+        """Default threshold constant should be 5 (increased from 3 to reduce false positives)."""
         from backend.src.bt.conditions.loop_detection import (
             CONSECUTIVE_SAME_REASON_THRESHOLD
         )
-        assert CONSECUTIVE_SAME_REASON_THRESHOLD == 3
+        assert CONSECUTIVE_SAME_REASON_THRESHOLD == 5
 
 
 # =============================================================================

@@ -71,14 +71,19 @@ class PromptContent(BaseModel):
     Attributes:
         system: Optional system message for the LLM.
         messages: List of message dicts with role and content.
+            For assistant messages with tool_calls, content may be None
+            and tool_calls will be a list.
         user: Optional simple user message (alternative to messages).
     """
 
     system: Optional[str] = None
-    messages: List[Dict[str, str]] = Field(default_factory=list)
+    # Use Any for values because assistant messages can have:
+    # - content: None (when tool_calls present)
+    # - tool_calls: list (not string)
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
     user: Optional[str] = None
 
-    def to_api_messages(self) -> List[Dict[str, str]]:
+    def to_api_messages(self) -> List[Dict[str, Any]]:
         """Convert to API-compatible message format.
 
         Returns:
@@ -820,8 +825,18 @@ class LLMCallNode(LeafNode):
         logger.info(
             f"LLMCallNode '{self._id}' completed successfully. "
             f"Tokens used: {self._tokens_used}, "
-            f"tool_calls: {len(tool_calls) if tool_calls else 0}"
+            f"tool_calls: {len(tool_calls) if tool_calls else 0}, "
+            f"finish_reason: {finish_reason}"
         )
+        if tool_calls:
+            logger.info(f"LLMCallNode '{self._id}' tool_calls received: {[tc.get('function', {}).get('name') for tc in tool_calls]}")
+        else:
+            # Get tools count from blackboard to log accurate warning
+            tools = None
+            if self._tools_key and ctx.blackboard:
+                tools = self._bb_get(ctx.blackboard, self._tools_key)
+            if tools:
+                logger.warning(f"LLMCallNode '{self._id}' NO tool_calls in response despite {len(tools)} tools provided!")
 
         return RunStatus.SUCCESS
 
@@ -1105,10 +1120,12 @@ class LLMCallNode(LeafNode):
         if max_tokens:
             kwargs["max_tokens"] = max_tokens
 
-        logger.debug(
+        logger.info(
             f"LLMCallNode '{self._id}' starting request: "
             f"model={model}, messages={len(messages)}, tools={len(tools) if tools else 0}"
         )
+        if tools:
+            logger.info(f"LLMCallNode '{self._id}' tool names: {[t.get('function', {}).get('name') for t in tools[:5]]}")
 
         # Start async task
         if self._stream_to or self._on_chunk or self._on_chunk_fn:

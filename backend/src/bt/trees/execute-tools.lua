@@ -10,32 +10,7 @@ return BT.tree("execute-tools", {
     description = "Execute tool calls with loop detection and parallel execution",
 
     root = BT.sequence({
-        -- Loop detection
-        BT.always_succeed(
-            BT.sequence({
-                BT.action("detect-loop", {
-                    fn = "src.bt.actions.oracle.detect_loop",
-                    description = "Check for repeated tool call patterns"
-                }),
-                BT.selector({
-                    BT.sequence({
-                        BT.condition("loop-detected", {
-                            expression = "bb.loop_detected == true"
-                        }),
-                        BT.action("emit-loop-event", {
-                            fn = "src.bt.actions.oracle.emit_loop_event",
-                            description = "Emit AGENT_LOOP_DETECTED event, inject warning"
-                        }),
-                        BT.action("yield-loop-warning", {
-                            fn = "src.bt.actions.oracle.yield_loop_warning"
-                        })
-                    }),
-                    BT.action("noop", { fn = "src.bt.actions.oracle.noop" })
-                })
-            })
-        ),
-
-        -- Parse tool calls
+        -- Parse tool calls (moved before loop detection)
         BT.action("parse-tool-calls", {
             fn = "src.bt.actions.oracle.parse_tool_calls",
             description = "Extract call_id, name, arguments from each call"
@@ -78,6 +53,34 @@ return BT.tree("execute-tools", {
             fn = "src.bt.actions.oracle.process_tool_results",
             description = "Yield result chunks, emit events, extract sources"
         }),
+
+        -- Loop detection (AFTER tools execute and return results)
+        -- This ensures we only detect loops based on executed tool patterns,
+        -- not just requested tools. The agent gets a chance to see results
+        -- before we decide it's stuck in a loop.
+        BT.always_succeed(
+            BT.sequence({
+                BT.action("detect-loop", {
+                    fn = "src.bt.actions.oracle.detect_loop",
+                    description = "Check for repeated tool call patterns (after execution)"
+                }),
+                BT.selector({
+                    BT.sequence({
+                        BT.condition("loop-detected", {
+                            expression = "bb.loop_detected == true"
+                        }),
+                        BT.action("emit-loop-event", {
+                            fn = "src.bt.actions.oracle.emit_loop_event",
+                            description = "Emit AGENT_LOOP_DETECTED event, inject warning"
+                        }),
+                        BT.action("yield-loop-warning", {
+                            fn = "src.bt.actions.oracle.yield_loop_warning"
+                        })
+                    }),
+                    BT.action("noop", { fn = "src.bt.actions.oracle.noop" })
+                })
+            })
+        ),
 
         -- Update context tokens
         BT.always_succeed(

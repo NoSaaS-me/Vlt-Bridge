@@ -379,6 +379,70 @@ class TestLeafBuild:
         condition = tree.root.children[0]
         assert isinstance(condition, Condition)
 
+    def test_build_condition_with_fn_and_args(self, builder: TreeBuilder) -> None:
+        """Test building a condition node with function and args (functools.partial binding)."""
+        def my_condition(ctx, expected_type: str):
+            """Condition function that takes an expected_type argument."""
+            return expected_type == "test_value"
+
+        tree_def = make_tree(
+            NodeDefinition(
+                type="sequence",
+                id="root",
+                children=[
+                    NodeDefinition(
+                        type="condition",
+                        id="check",
+                        config={
+                            "fn": "test.my_condition",
+                            "args": {"expected_type": "test_value"},
+                        },
+                    ),
+                ],
+            )
+        )
+
+        with patch.object(builder, "_resolve_function", return_value=my_condition):
+            tree = builder.build(tree_def)
+
+        condition = tree.root.children[0]
+        assert isinstance(condition, Condition)
+        # The condition function should be wrapped with functools.partial
+        # We can verify by checking that the partial was applied
+        assert hasattr(condition._condition_fn, "func")  # functools.partial objects have a 'func' attribute
+
+    def test_build_action_with_fn_and_args(self, builder: TreeBuilder) -> None:
+        """Test building an action node with function and args (functools.partial binding)."""
+        def my_action(ctx, count: int):
+            """Action function that takes a count argument."""
+            return ctx
+
+        tree_def = make_tree(
+            NodeDefinition(
+                type="sequence",
+                id="root",
+                children=[
+                    NodeDefinition(
+                        type="action",
+                        id="my-action",
+                        name="My Action",
+                        config={
+                            "fn": "test.my_action",
+                            "args": {"count": 5},
+                        },
+                    ),
+                ],
+            )
+        )
+
+        with patch.object(builder, "_resolve_function", return_value=my_action):
+            tree = builder.build(tree_def)
+
+        action = tree.root.children[0]
+        assert isinstance(action, Action)
+        # The action function should be wrapped with functools.partial
+        assert hasattr(action._fn, "func")  # functools.partial objects have a 'func' attribute
+
     def test_build_subtree_ref(self, builder: TreeBuilder) -> None:
         """Test building a subtree reference node."""
         tree_def = make_tree(

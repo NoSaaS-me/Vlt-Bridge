@@ -1350,26 +1350,27 @@ class ToolExecutor:
         Returns:
             List of search results or dict with error
         """
+        # Try new ddgs package first, fall back to legacy duckduckgo_search
+        DDGS = None
         try:
-            from duckduckgo_search import DDGS
-            from duckduckgo_search.exceptions import DuckDuckGoSearchException
+            from ddgs import DDGS
         except ImportError:
-            return {"error": "duckduckgo-search package not installed"}
+            try:
+                from duckduckgo_search import DDGS
+            except ImportError:
+                return {"error": "ddgs package not installed. Run: uv add ddgs"}
 
         try:
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=limit))
             return results
-        except DuckDuckGoSearchException as e:
+        except Exception as e:
             error_msg = str(e)
             if "ratelimit" in error_msg.lower():
                 logger.warning(f"DuckDuckGo rate limit hit: {e}")
                 return {"error": "Search rate limited. Please try again in a few seconds."}
             logger.error(f"DuckDuckGo search error: {e}")
             return {"error": f"Search failed: {error_msg}"}
-        except Exception as e:
-            logger.error(f"DuckDuckGo search error: {e}")
-            return {"error": f"Search failed: {str(e)}"}
 
     async def _web_fetch(
         self,

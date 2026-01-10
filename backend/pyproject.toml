@@ -29,6 +29,7 @@ dependencies = [
     "toml>=0.10.2",
     "tavily-python>=0.5.0",
     "watchdog>=4.0.0",
+    "ddgs>=9.10.0",
 ]
 
 [dependency-groups]

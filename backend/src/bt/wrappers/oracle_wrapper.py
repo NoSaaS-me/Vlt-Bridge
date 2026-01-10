@@ -19,6 +19,7 @@ Tasks covered: 5.2.1-5.2.4 from tasks.md
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -61,7 +62,8 @@ class OracleStreamChunk(BaseModel):
     content: Optional[str] = None
     reasoning: Optional[str] = None
     tool_call: Optional[Dict[str, Any]] = None
-    tool_result: Optional[Dict[str, Any]] = None
+    tool_call_id: Optional[str] = None  # For tool_result events - associates result with tool call
+    tool_result: Optional[str] = None  # Tool result as JSON string (matches API contract)
     error: Optional[str] = None
     sources: Optional[List[Dict[str, Any]]] = None
     context_id: Optional[str] = None
@@ -385,23 +387,86 @@ class OracleBTWrapper:
 
         # Create a wrapper object that behaves like a blackboard
         class SimpleBlackboard:
-            """Simple dict-based blackboard for BT runtime."""
+            """Simple dict-based blackboard for BT runtime.
 
-            def __init__(bb_self, data: Dict[str, Any]):
+            This class provides a TypedBlackboard-compatible interface for cases
+            where full schema validation is not needed. It supports:
+            - Basic get/set operations
+            - Access tracking (reads/writes)
+            - Child scope creation for Parallel nodes
+            - Scope chain lookup (child -> parent)
+
+            IMPORTANT: This class must maintain compatibility with TypedBlackboard's
+            interface, especially for Parallel node scope merging which expects
+            `_scope_name` attribute.
+            """
+
+            def __init__(
+                bb_self,
+                data: Dict[str, Any],
+                parent: Optional["SimpleBlackboard"] = None,
+                scope_name: str = "root"
+            ):
                 bb_self._data = data
+                bb_self._parent = parent
+                bb_self._scope_name = scope_name  # CRITICAL: Required by merge.py line 294
                 bb_self._reads: set = set()
                 bb_self._writes: set = set()
 
             def get(bb_self, key: str, default: Any = None) -> Any:
-                bb_self._reads.add(key)
-                return bb_self._data.get(key, default)
+                """Get value from blackboard, checking parent chain if not found locally.
 
-            def set(bb_self, key: str, value: Any) -> None:
+                This method now traverses the parent scope chain to find values,
+                which is critical for ForEach nodes that operate in child scopes.
+                """
+                bb_self._reads.add(key)
+                # Check local data first
+                if key in bb_self._data:
+                    return bb_self._data[key]
+                # Check parent chain
+                if bb_self._parent is not None:
+                    parent_value = bb_self._parent.get(key, None)
+                    if parent_value is not None:
+                        return parent_value
+                # Return default if not found anywhere
+                return default
+
+            def set(bb_self, key: str, value: Any) -> Any:
+                """Set value in blackboard, propagating to parent if child scope.
+
+                For child scopes (created by SubtreeRef, Parallel, ForEach), writes
+                propagate to the parent so all scopes share the same state. This
+                ensures writes in subtrees are visible to the parent after subtree
+                completes.
+
+                Returns an ErrorResult-compatible object for merge.py compatibility.
+                SimpleBlackboard always succeeds (no schema validation).
+                """
                 bb_self._writes.add(key)
+
+                # If we have a parent, propagate write to parent (shared state)
+                # This ensures child scope writes are visible after subtree returns
+                if bb_self._parent is not None:
+                    return bb_self._parent.set(key, value)
+
+                # No parent - we're the root, write locally
                 bb_self._data[key] = value
+                # Return ErrorResult-compatible success object
+                # Import here to avoid circular import issues
+                from ..state.base import ErrorResult
+                return ErrorResult.ok()
 
             def has(bb_self, key: str) -> bool:
-                return key in bb_self._data
+                """Check if key exists in blackboard or parent chain.
+
+                Traverses parent scope chain to check for key existence,
+                critical for ForEach nodes operating in child scopes.
+                """
+                if key in bb_self._data:
+                    return True
+                if bb_self._parent is not None:
+                    return bb_self._parent.has(key)
+                return False
 
             def delete(bb_self, key: str) -> None:
                 bb_self._data.pop(key, None)
@@ -427,22 +492,85 @@ class OracleBTWrapper:
 
             # Methods needed by BT actions that bypass schema validation
             def _lookup(bb_self, key: str) -> Any:
-                """Get value without schema validation (for action helpers)."""
-                return bb_self._data.get(key)
+                """Get value without schema validation (for action helpers).
+
+                Searches in local data first, then parent chain.
+                """
+                if key in bb_self._data:
+                    return bb_self._data[key]
+                if bb_self._parent is not None:
+                    return bb_self._parent._lookup(key)
+                return None
 
             def _store(bb_self, key: str, value: Any) -> None:
-                """Set value without schema validation (for action helpers)."""
+                """Set value without schema validation (for action helpers).
+
+                Propagates to parent if this is a child scope.
+                """
                 bb_self._writes.add(key)
-                bb_self._data[key] = value
+                # Propagate to parent if child scope
+                if bb_self._parent is not None:
+                    bb_self._parent._store(key, value)
+                else:
+                    bb_self._data[key] = value
+
+            def set_internal(bb_self, key: str, value: Any) -> None:
+                """Set value for internal BT use (tracked as a write for merge).
+
+                Propagates to parent if this is a child scope.
+                """
+                bb_self._writes.add(key)  # Track writes for merge.py
+                # Propagate to parent if child scope
+                if bb_self._parent is not None:
+                    bb_self._parent.set_internal(key, value)
+                else:
+                    bb_self._data[key] = value
+
+            def _get_registered_schema(bb_self, key: str) -> Any:
+                """Get registered schema for a key.
+
+                For SimpleBlackboard, we return a placeholder class to indicate
+                that all keys are "registered" (no schema validation needed).
+
+                This is required by merge.py's apply_merge_result_to_parent()
+                which skips keys where _get_registered_schema returns None.
+
+                Args:
+                    key: The blackboard key to look up schema for.
+
+                Returns:
+                    A placeholder class to indicate the key is valid.
+                """
+                # Return a placeholder to indicate "any type is allowed"
+                # This prevents merge.py from skipping unregistered keys
+                class AnySchema:
+                    """Placeholder schema that accepts any value."""
+                    pass
+                return AnySchema
 
             def create_child_scope(bb_self, scope_id: str = "") -> "SimpleBlackboard":
                 """Create a child scope that inherits from this blackboard.
 
-                For SimpleBlackboard, we just return self since we're not
-                tracking scopes. Writes go to the same data dict.
+                Creates a new SimpleBlackboard with:
+                - Empty local data (writes go to child only)
+                - Parent reference for scope chain lookup
+                - Unique scope name for merge identification
+
+                This is required for Parallel node scope isolation per footgun A.3.
+
+                Args:
+                    scope_id: Identifier for this child scope.
+
+                Returns:
+                    New SimpleBlackboard with this blackboard as parent.
                 """
-                # For simple blackboard, return self - no scoping needed
-                return bb_self
+                # Create child with isolated data but parent reference for lookups
+                child = SimpleBlackboard(
+                    data={},  # Empty - child gets isolated writes
+                    parent=bb_self,
+                    scope_name=scope_id or f"child_{id(bb_self)}"
+                )
+                return child
 
             def register(bb_self, key: str, schema: Any = None) -> None:
                 """Register a key in the blackboard (no-op for SimpleBlackboard).
@@ -452,10 +580,6 @@ class OracleBTWrapper:
                 """
                 # No-op: SimpleBlackboard doesn't track schemas
                 pass
-
-            def has(bb_self, key: str) -> bool:
-                """Check if a key exists in the blackboard."""
-                return key in bb_self._data
 
         self._blackboard = SimpleBlackboard(self._bb_data)
 
@@ -578,15 +702,20 @@ class OracleBTWrapper:
                     }
                 )
             elif chunk_type == "tool_result":
+                # Build result dict and serialize to JSON string (API contract expects string)
+                result_data = {
+                    "call_id": raw.get("call_id"),
+                    "name": raw.get("name"),
+                    "status": raw.get("status"),
+                    "result": raw.get("result"),
+                    "error": raw.get("error"),
+                }
+                # Filter out None values for cleaner output
+                result_data = {k: v for k, v in result_data.items() if v is not None}
                 return OracleStreamChunk(
                     type="tool_result",
-                    tool_result={
-                        "call_id": raw.get("call_id"),
-                        "name": raw.get("name"),
-                        "status": raw.get("status"),
-                        "result": raw.get("result"),
-                        "error": raw.get("error"),
-                    }
+                    tool_call_id=raw.get("call_id"),
+                    tool_result=json.dumps(result_data),
                 )
             elif chunk_type == "error":
                 return OracleStreamChunk(

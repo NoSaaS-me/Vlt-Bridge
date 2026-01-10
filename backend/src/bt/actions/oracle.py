@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -50,9 +51,15 @@ def bb_set(bb: "TypedBlackboard", key: str, value: Any) -> None:
     """Set value in blackboard without schema validation.
 
     For internal oracle state that doesn't need Pydantic validation.
+    Now uses _store() method to ensure proper scope propagation.
     """
-    bb._data[key] = value
-    bb._writes.add(key)
+    # Use _store() instead of direct _data access to enable scope propagation
+    if hasattr(bb, '_store'):
+        bb._store(key, value)
+    else:
+        # Fallback for TypedBlackboard without _store
+        bb._data[key] = value
+        bb._writes.add(key)
 
 
 # =============================================================================
@@ -102,14 +109,17 @@ def reset_state(ctx: "TickContext") -> RunStatus:
         logger.error("reset_state: No blackboard available")
         return RunStatus.FAILURE
 
+    logger.debug("reset_state: Initializing blackboard state for new query")
+
     # Reset cancellation flag
     bb_set(bb,"cancelled", False)
 
-    # Reset loop detection
+    # Reset loop detection - CRITICAL: Must be reset at start of each query
     bb_set(bb,"recent_tool_patterns", [])
     bb_set(bb,"loop_detected", False)
     bb_set(bb,"loop_already_warned", False)
     bb_set(bb,"loop_warning", "")
+    logger.debug("reset_state: Loop detection state reset (recent_tool_patterns=[], loop_detected=False)")
 
     # Reset budget tracking
     bb_set(bb,"turn", 0)
@@ -149,6 +159,14 @@ def reset_state(ctx: "TickContext") -> RunStatus:
     bb_set(bb, "turns_without_signal", 0)        # Fallback trigger counter
     bb_set(bb, "_signal_parsed_this_turn", False)  # Per-turn parse flag
     bb_set(bb, "_prev_signal", None)             # For consecutive comparison
+
+    # ==========================================================================
+    # Additional state keys (found during audit)
+    # ==========================================================================
+    bb_set(bb, "_exchange_saved", False)          # Track if exchange was saved
+    bb_set(bb, "thinking_enabled", False)         # LLM thinking mode (extended thinking)
+    bb_set(bb, "_pending_chunks", [])             # SSE chunks pending delivery
+    bb_set(bb, "_last_streamed_len", 0)           # For incremental streaming
 
     logger.debug("Oracle state reset for new query (with signal tracking)")
     ctx.mark_progress()
@@ -208,25 +226,31 @@ def load_tree_node(ctx: "TickContext") -> RunStatus:
     if bb is None:
         return RunStatus.FAILURE
 
-    context_id = bb_get(bb,"context_id")
+    context_id = bb_get(bb, "context_id")
+    user_id = bb_get(bb, "user_id")
     if not context_id:
+        return RunStatus.FAILURE
+
+    if not user_id:
+        logger.error("load_tree_node: user_id required")
         return RunStatus.FAILURE
 
     try:
         from src.services.context_tree_service import ContextTreeService
 
         tree_service = ContextTreeService()
-        node = tree_service.get_node(context_id)
+        # get_node requires (user_id, node_id) signature
+        node = tree_service.get_node(user_id, context_id)
 
         if node is None:
             logger.warning(f"Context node not found: {context_id}")
             return RunStatus.FAILURE
 
-        # Set tree context in blackboard
-        bb_set(bb,"tree_root_id", node.tree_id)
-        bb_set(bb,"current_node_id", context_id)
+        # Set tree context in blackboard (ContextNode uses root_id, not tree_id)
+        bb_set(bb, "tree_root_id", node.root_id)
+        bb_set(bb, "current_node_id", context_id)
 
-        logger.debug(f"Loaded tree context: root={node.tree_id}, node={context_id}")
+        logger.debug(f"Loaded tree context: root={node.root_id}, node={context_id}")
         ctx.mark_progress()
         return RunStatus.SUCCESS
 
@@ -244,8 +268,8 @@ def get_or_create_tree(ctx: "TickContext") -> RunStatus:
     if bb is None:
         return RunStatus.FAILURE
 
-    user_id = bb_get(bb,"user_id")
-    project_id = bb_get(bb,"project_id")
+    user_id = bb_get(bb, "user_id")
+    project_id = bb_get(bb, "project_id") or "default"
 
     if not user_id:
         logger.error("get_or_create_tree: user_id required")
@@ -256,19 +280,26 @@ def get_or_create_tree(ctx: "TickContext") -> RunStatus:
 
         tree_service = ContextTreeService()
 
-        # Try to get existing tree
-        tree = tree_service.get_active_tree(user_id, project_id)
+        # Try to get existing active tree ID
+        active_tree_id = tree_service.get_active_tree_id(user_id, project_id)
 
-        if tree is None:
+        if active_tree_id:
+            # Get the full tree object
+            tree = tree_service.get_tree(user_id, active_tree_id)
+            if tree:
+                logger.debug(f"Using existing tree: {tree.root_id}")
+            else:
+                # Tree ID exists but tree not found - create new
+                tree = tree_service.create_tree(user_id, project_id)
+                logger.debug(f"Created new tree (previous not found): {tree.root_id}")
+        else:
             # Create new tree
             tree = tree_service.create_tree(user_id, project_id)
-            logger.debug(f"Created new tree: {tree.id}")
-        else:
-            logger.debug(f"Using existing tree: {tree.id}")
+            logger.debug(f"Created new tree: {tree.root_id}")
 
-        # Set tree context in blackboard
-        bb_set(bb,"tree_root_id", tree.id)
-        bb_set(bb,"current_node_id", tree.head_node_id)
+        # Set tree context in blackboard (ContextTree uses root_id and current_node_id)
+        bb_set(bb, "tree_root_id", tree.root_id)
+        bb_set(bb, "current_node_id", tree.current_node_id)
 
         ctx.mark_progress()
         return RunStatus.SUCCESS
@@ -292,10 +323,10 @@ def load_legacy_context(ctx: "TickContext") -> RunStatus:
     project_id = bb_get(bb,"project_id")
 
     try:
-        from src.services.oracle_context import OracleContextService
+        from src.services.oracle_context_service import OracleContextService
 
         context_service = OracleContextService()
-        context = context_service.get_or_create_context(user_id, project_id)
+        context = context_service.get_or_create_context(user_id, project_id or "default")
 
         bb_set(bb,"context", context)
         logger.debug("Loaded legacy context")
@@ -453,11 +484,18 @@ def add_tree_history(ctx: "TickContext") -> RunStatus:
     if bb is None:
         return RunStatus.FAILURE
 
-    messages = bb_get(bb,"messages") or []
-    tree_root_id = bb_get(bb,"tree_root_id")
-    current_node_id = bb_get(bb,"current_node_id")
+    messages = bb_get(bb, "messages") or []
+    user_id = bb_get(bb, "user_id")
+    tree_root_id = bb_get(bb, "tree_root_id")
+    current_node_id = bb_get(bb, "current_node_id")
 
     if not tree_root_id or not current_node_id:
+        logger.debug("add_tree_history: No tree context, skipping history load")
+        ctx.mark_progress()
+        return RunStatus.SUCCESS
+
+    if not user_id:
+        logger.warning("add_tree_history: user_id required for tree history")
         ctx.mark_progress()
         return RunStatus.SUCCESS
 
@@ -465,7 +503,13 @@ def add_tree_history(ctx: "TickContext") -> RunStatus:
         from src.services.context_tree_service import ContextTreeService
 
         tree_service = ContextTreeService()
-        nodes = tree_service.get_nodes(tree_root_id)
+        # get_nodes requires (user_id, root_id) signature
+        nodes = tree_service.get_nodes(user_id, tree_root_id)
+
+        if not nodes:
+            logger.debug(f"add_tree_history: No nodes found for tree {tree_root_id}")
+            ctx.mark_progress()
+            return RunStatus.SUCCESS
 
         # Build path from root to current
         node_map = {n.id: n for n in nodes}
@@ -476,8 +520,11 @@ def add_tree_history(ctx: "TickContext") -> RunStatus:
             path_nodes.insert(0, node_map[current_id])
             current_id = node_map[current_id].parent_id
 
-        # Add exchanges from path to messages
+        # Add exchanges from path to messages (skip root node which has empty Q&A)
         for node in path_nodes:
+            # Skip root/empty nodes
+            if not node.question and not node.answer:
+                continue
             if node.question:
                 messages.append({
                     "role": "user",
@@ -489,9 +536,9 @@ def add_tree_history(ctx: "TickContext") -> RunStatus:
                     "content": node.answer
                 })
 
-        bb_set(bb,"messages", messages)
-        bb_set(bb,"message_history", path_nodes)
-        logger.debug(f"Added {len(path_nodes)} exchanges from tree history")
+        bb_set(bb, "messages", messages)
+        bb_set(bb, "message_history", path_nodes)
+        logger.debug(f"add_tree_history: Added {len(path_nodes)} exchanges from tree history")
 
     except Exception as e:
         logger.warning(f"Failed to add tree history: {e}")
@@ -614,10 +661,17 @@ def init_context_tracking(ctx: "TickContext") -> RunStatus:
 
 
 def _estimate_tokens(messages: List[Dict[str, str]]) -> int:
-    """Estimate token count for messages."""
+    """Estimate token count for messages.
+
+    Handles messages where content may be None (e.g., assistant messages
+    with tool_calls but no text content).
+    """
     total = 0
     for msg in messages:
-        content = msg.get("content", "")
+        content = msg.get("content")
+        # Handle None content (e.g., tool_call messages have content: null)
+        if content is None:
+            content = ""
         # Rough estimate: 4 chars per token
         total += len(content) // 4
     return total
@@ -762,12 +816,21 @@ def save_exchange(ctx: "TickContext") -> RunStatus:
     if bb is None:
         return RunStatus.FAILURE
 
-    query = bb_get(bb,"query")
-    accumulated = bb_get(bb,"accumulated_content") or ""
-    tree_root_id = bb_get(bb,"tree_root_id")
-    current_node_id = bb_get(bb,"current_node_id")
-    tool_results = bb_get(bb,"tool_results") or []
-    system_messages = bb_get(bb,"system_messages") or []
+    # Check if already saved this exchange
+    if bb_get(bb, "_exchange_saved"):
+        logger.debug("save_exchange: Exchange already saved, skipping")
+        ctx.mark_progress()
+        return RunStatus.SUCCESS
+
+    query = bb_get(bb, "query")
+    accumulated = bb_get(bb, "accumulated_content") or ""
+    user_id = bb_get(bb, "user_id")
+    tree_root_id = bb_get(bb, "tree_root_id")
+    current_node_id = bb_get(bb, "current_node_id")
+    tool_results = bb_get(bb, "tool_results") or []
+    system_messages = bb_get(bb, "system_messages") or []
+    model = bb_get(bb, "model")
+    tokens_used = bb_get(bb, "tokens_used") or 0
 
     # Get question text
     if isinstance(query, str):
@@ -780,45 +843,83 @@ def save_exchange(ctx: "TickContext") -> RunStatus:
         question = str(query)
 
     # Save to tree context
-    if tree_root_id and current_node_id:
+    if tree_root_id and current_node_id and user_id:
         try:
             from src.services.context_tree_service import ContextTreeService
+            from src.models.oracle_context import ToolCall, ToolCallStatus
 
             tree_service = ContextTreeService()
+
+            # Convert tool_results to ToolCall objects
+            tool_call_objects = []
+            for tc in tool_results:
+                if isinstance(tc, dict):
+                    # Map success boolean to ToolCallStatus enum
+                    # tool_results contains: call_id, name, result/error, success (bool)
+                    # ToolCallStatus enum has: PENDING, SUCCESS, ERROR
+                    if tc.get("status"):
+                        # If status is explicitly set, use it
+                        status = ToolCallStatus(tc.get("status"))
+                    elif tc.get("success", False):
+                        status = ToolCallStatus.SUCCESS
+                    else:
+                        status = ToolCallStatus.ERROR
+
+                    tool_call_objects.append(ToolCall(
+                        id=tc.get("call_id", ""),
+                        name=tc.get("name", ""),
+                        arguments=tc.get("arguments", {}),
+                        result=tc.get("result"),
+                        status=status,
+                        duration_ms=tc.get("duration_ms"),
+                    ))
+
+            # create_node signature: (user_id, root_id, parent_id, question, answer, ...)
             new_node = tree_service.create_node(
-                tree_id=tree_root_id,
+                user_id=user_id,
+                root_id=tree_root_id,
                 parent_id=current_node_id,
                 question=question,
                 answer=accumulated,
-                tool_calls_json=json.dumps([tc for tc in tool_results]),
-                system_messages_json=json.dumps(system_messages),
+                tool_calls=tool_call_objects if tool_call_objects else None,
+                tokens_used=tokens_used,
+                model_used=model,
+                system_messages=system_messages if system_messages else None,
             )
-            bb_set(bb,"current_node_id", new_node.id)
+            bb_set(bb, "current_node_id", new_node.id)
+            bb_set(bb, "_exchange_saved", True)
             logger.debug(f"Saved exchange to tree: {new_node.id}")
 
         except Exception as e:
-            logger.warning(f"Failed to save to tree: {e}")
+            logger.warning(f"Failed to save to tree: {e}", exc_info=True)
 
-    # Save to legacy context
+    # Save to legacy context (for backwards compatibility)
     try:
-        from src.services.oracle_context import OracleContextService
+        from src.services.oracle_context_service import OracleContextService
+        from src.models.oracle_context import OracleExchange, ExchangeRole
 
         context_service = OracleContextService()
-        user_id = bb_get(bb,"user_id")
-        project_id = bb_get(bb,"project_id")
+        project_id = bb_get(bb, "project_id") or "default"
 
-        context_service.add_exchange(
-            user_id=user_id,
-            project_id=project_id,
-            role="user",
-            content=question
-        )
-        context_service.add_exchange(
-            user_id=user_id,
-            project_id=project_id,
-            role="assistant",
-            content=accumulated
-        )
+        if user_id:
+            # Create user exchange
+            user_exchange = OracleExchange(
+                id=str(uuid.uuid4()),
+                role=ExchangeRole.USER,
+                content=question,
+                timestamp=datetime.now(timezone.utc),
+            )
+            context_service.add_exchange(user_id, project_id, user_exchange, model)
+
+            # Create assistant exchange
+            assistant_exchange = OracleExchange(
+                id=str(uuid.uuid4()),
+                role=ExchangeRole.ASSISTANT,
+                content=accumulated,
+                timestamp=datetime.now(timezone.utc),
+                token_count=tokens_used,
+            )
+            context_service.add_exchange(user_id, project_id, assistant_exchange, model)
 
     except Exception as e:
         logger.warning(f"Failed to save to legacy context: {e}")
@@ -853,9 +954,13 @@ def emit_done(ctx: "TickContext") -> RunStatus:
         logger.error("emit_done: No blackboard available")
         return RunStatus.FAILURE
 
-    accumulated = bb_get(bb,"accumulated_content") or ""
-    turn = bb_get(bb,"turn") or 0
-    tool_calls = bb_get(bb,"tool_calls") or []
+    # Debug: check blackboard state
+    accumulated_raw = bb_get(bb, "accumulated_content")
+    logger.info(f"emit_done: accumulated_content raw value = {repr(accumulated_raw)[:100]}, type = {type(accumulated_raw)}")
+
+    accumulated = accumulated_raw or ""
+    turn = bb_get(bb, "turn") or 0
+    tool_calls = bb_get(bb, "tool_calls") or []
 
     logger.info(
         f"emit_done called: turn={turn}, accumulated_len={len(accumulated)}, "
@@ -882,6 +987,13 @@ def detect_loop(ctx: "TickContext") -> RunStatus:
     """Check for repeated tool call patterns.
 
     Corresponds to oracle_agent.py lines 649-713.
+
+    IMPORTANT: This function handles BOTH formats of tool_calls:
+    1. Raw format from LLM: {"function": {"name": "...", "arguments": {...}}}
+    2. Parsed format after parse_tool_calls: {"name": "...", "arguments": {...}}
+
+    The detect_loop action runs AFTER parse_tool_calls in execute-tools.lua,
+    so we must handle the parsed format where "name" is at the top level.
     """
     bb = ctx.blackboard
     if bb is None:
@@ -890,17 +1002,39 @@ def detect_loop(ctx: "TickContext") -> RunStatus:
     tool_calls = bb_get(bb,"tool_calls") or []
     recent_patterns = bb_get(bb,"recent_tool_patterns") or []
     loop_already_warned = bb_get(bb,"loop_already_warned") or False
+    turn = bb_get(bb,"turn") or 0
+
+    # CRITICAL DEBUG: Log every call to detect_loop
+    logger.info(
+        f"detect_loop ENTRY: turn={turn}, tool_calls_count={len(tool_calls)}, "
+        f"recent_patterns_count={len(recent_patterns)}, loop_already_warned={loop_already_warned}"
+    )
 
     if not tool_calls or loop_already_warned:
+        # Ensure loop_detected is False when there are no tool calls
+        # to prevent stale state from previous iterations
+        if not tool_calls:
+            bb_set(bb, "loop_detected", False)
+        logger.info(f"detect_loop EARLY_EXIT: no tool_calls or already warned")
         ctx.mark_progress()
         return RunStatus.SUCCESS
 
     # Build pattern signature
     pattern_parts = []
     for call in tool_calls:
-        func = call.get("function", {})
-        name = func.get("name", "")
-        args = func.get("arguments", {})
+        # Handle BOTH raw and parsed format:
+        # Raw: {"function": {"name": "...", "arguments": {...}}}
+        # Parsed: {"name": "...", "arguments": {...}}
+        if "function" in call:
+            # Raw format from LLM
+            func = call.get("function", {})
+            name = func.get("name", "")
+            args = func.get("arguments", {})
+        else:
+            # Parsed format (after parse_tool_calls)
+            name = call.get("name", "")
+            args = call.get("arguments", {})
+
         if isinstance(args, str):
             try:
                 args = json.loads(args)
@@ -916,6 +1050,13 @@ def detect_loop(ctx: "TickContext") -> RunStatus:
 
     current_pattern = "|".join(sorted(pattern_parts))
 
+    # Skip empty patterns (would cause false positive loop detection)
+    if not current_pattern or current_pattern == "()" or all(p == "()" for p in pattern_parts):
+        logger.debug(f"detect_loop: Skipping empty pattern from {len(tool_calls)} tool calls")
+        bb_set(bb, "loop_detected", False)
+        ctx.mark_progress()
+        return RunStatus.SUCCESS
+
     # Add to recent patterns (window size 10)
     # Increased from 6 to reduce false positives
     recent_patterns.append(current_pattern)
@@ -928,10 +1069,16 @@ def detect_loop(ctx: "TickContext") -> RunStatus:
     count = recent_patterns.count(current_pattern)
     loop_threshold = 5
 
+    # Debug logging to help diagnose loop detection issues
+    logger.debug(
+        f"detect_loop: pattern='{current_pattern}', count={count}/{loop_threshold}, "
+        f"recent_patterns_len={len(recent_patterns)}, patterns={recent_patterns}"
+    )
+
     if count >= loop_threshold:
         bb_set(bb,"loop_detected", True)
         bb_set(bb,"loop_warning", f"Detected loop: pattern repeated {count} times")
-        logger.warning(f"Loop detected: {current_pattern}")
+        logger.warning(f"Loop detected: {current_pattern}, count={count}, all_patterns={recent_patterns}")
     else:
         bb_set(bb,"loop_detected", False)
 
@@ -1077,24 +1224,46 @@ def execute_single_tool(ctx: "TickContext") -> RunStatus:
     """Execute tool and collect result.
 
     This action is called inside a for_each loop with current_tool set.
+    Note: ForEach sets item_key with underscore prefix (_current_tool),
+    so we must read from _current_tool, not current_tool.
     """
+    import asyncio
+
     bb = ctx.blackboard
     if bb is None:
+        logger.error("execute_single_tool: No blackboard available")
         return RunStatus.FAILURE
 
-    current_tool = bb_get(bb,"current_tool")
+    # ForEach sets the iteration variable with underscore prefix
+    # e.g., item_key="current_tool" -> stored as "_current_tool"
+    current_tool = bb_get(bb, "_current_tool")
     if not current_tool:
+        logger.warning(
+            f"execute_single_tool: _current_tool not found in blackboard. "
+            f"Available keys: {list(bb._data.keys()) if hasattr(bb, '_data') else 'N/A'}"
+        )
         return RunStatus.FAILURE
 
     call_id = current_tool.get("id")
     name = current_tool.get("name")
     args = current_tool.get("arguments", {})
+    user_id = bb_get(bb, "user_id") or "anonymous"
 
     try:
         from src.services.tool_executor import ToolExecutor
 
         executor = ToolExecutor()
-        result = executor.execute(name, args)
+        # ToolExecutor.execute is async, need to run it in the event loop
+        # Use asyncio.get_event_loop().run_until_complete() for sync context
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If event loop is already running, create a new task
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, executor.execute(name, args, user_id))
+                result = future.result(timeout=120)  # 2 minute timeout
+        else:
+            result = loop.run_until_complete(executor.execute(name, args, user_id))
 
         # Store result
         tool_results = bb_get(bb,"tool_results") or []
@@ -1477,11 +1646,22 @@ def accumulate_content(ctx: "TickContext") -> RunStatus:
     if bb is None:
         return RunStatus.FAILURE
 
-    llm_response = bb_get(bb,"llm_response")
+    llm_response = bb_get(bb, "llm_response")
+    logger.info(f"accumulate_content: llm_response type={type(llm_response)}, has_content={hasattr(llm_response, 'content') if llm_response else False}")
+
     if llm_response and hasattr(llm_response, "content"):
-        accumulated = bb_get(bb,"accumulated_content") or ""
-        accumulated += llm_response.content
-        bb_set(bb,"accumulated_content", accumulated)
+        content_to_add = llm_response.content if llm_response.content is not None else ""
+        logger.info(f"accumulate_content: content_to_add length={len(content_to_add)}")
+
+        accumulated = bb_get(bb, "accumulated_content") or ""
+        logger.info(f"accumulate_content: BEFORE accumulated length={len(accumulated)}")
+
+        accumulated += content_to_add
+        bb_set(bb, "accumulated_content", accumulated)
+
+        logger.info(f"accumulate_content: AFTER accumulated length={len(accumulated)}")
+    else:
+        logger.warning(f"accumulate_content: Could not accumulate - llm_response={llm_response is not None}, has_content={hasattr(llm_response, 'content') if llm_response else 'N/A'}")
 
     ctx.mark_progress()
     return RunStatus.SUCCESS

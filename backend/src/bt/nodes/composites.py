@@ -91,6 +91,9 @@ class CompositeNode(BehaviorNode):
     def reset(self) -> None:
         """Reset composite and all children to initial state."""
         super().reset()
+        # Reset all children recursively
+        for child in self._children:
+            child.reset()
         # Subclasses should also reset their internal state
 
 

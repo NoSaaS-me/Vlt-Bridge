@@ -16,6 +16,7 @@ Tasks covered: 2.7.6-2.7.10 from tasks.md
 
 from __future__ import annotations
 
+import functools
 import importlib
 import logging
 from typing import Any, Callable, Dict, List, Optional, Type, TYPE_CHECKING
@@ -538,6 +539,11 @@ class TreeBuilder:
 
             # Resolve function
             fn = self._resolve_function(fn_path, definition.id)
+            # Bind args to the function using functools.partial
+            args = config.get("args", {})
+            if args:
+                # Args are passed as keyword arguments after ctx
+                fn = functools.partial(fn, **args)
 
             return Action(
                 id=definition.id,
@@ -553,6 +559,11 @@ class TreeBuilder:
 
             if fn_path:
                 fn = self._resolve_function(fn_path, definition.id)
+                # Bind args to the function using functools.partial
+                args = config.get("args", {})
+                if args:
+                    # Args are passed as keyword arguments after ctx
+                    fn = functools.partial(fn, **args)
                 return Condition(
                     id=definition.id,
                     name=definition.name or definition.id,
