@@ -850,7 +850,10 @@ class LLMCallNode(LeafNode):
 
     def _bb_set(self, bb: Any, key: str, value: Any) -> None:
         """Set value in blackboard with fallback to direct access."""
-        if hasattr(bb, '_data'):
+        # Use _store() for scope propagation if available (SimpleBlackboard)
+        if hasattr(bb, '_store'):
+            bb._store(key, value)
+        elif hasattr(bb, '_data'):
             bb._data[key] = value
             if hasattr(bb, '_writes'):
                 bb._writes.add(key)

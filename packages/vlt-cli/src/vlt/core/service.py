@@ -111,9 +111,10 @@ class SqliteVaultService(IVaultService):
         # Realistically, for a CLI tool, process exit cleans up.
         pass
 
-    def create_project(self, name: str, description: str) -> Project:
+    def create_project(self, name: str, description: str, project_id: str = None) -> Project:
         try:
-            project_id = name.lower().replace(" ", "-")
+            if project_id is None:
+                project_id = name.lower().replace(" ", "-")
             project = Project(id=project_id, name=name, description=description)
             self.db.add(project)
             self.db.commit()
@@ -122,6 +123,43 @@ class SqliteVaultService(IVaultService):
         except SQLAlchemyError as e:
             self.db.rollback()
             raise VaultError(f"Database error creating project: {str(e)}")
+
+    def ensure_project_exists(self, project_id: str, name: str = None, description: str = None) -> Project:
+        """
+        Get an existing project or create it if it doesn't exist.
+        
+        This is the safe way to ensure a project exists before creating
+        dependent records (threads, code_chunks, etc.) that have foreign
+        key constraints.
+        
+        Args:
+            project_id: The project identifier (slug)
+            name: Display name (defaults to project_id if not provided)
+            description: Project description (defaults to "Auto-created")
+            
+        Returns:
+            The existing or newly created Project
+        """
+        try:
+            project = self.db.get(Project, project_id)
+            if project:
+                return project
+            
+            # Create the project
+            effective_name = name or project_id
+            effective_description = description or "Auto-created project"
+            project = Project(
+                id=project_id,
+                name=effective_name,
+                description=effective_description
+            )
+            self.db.add(project)
+            self.db.commit()
+            self.db.refresh(project)
+            return project
+        except SQLAlchemyError as e:
+            self.db.rollback()
+            raise VaultError(f"Database error ensuring project exists: {str(e)}")
 
     def create_thread(self, project_id: str, name: str, initial_thought: str, author: str = "user") -> Thread:
         try:

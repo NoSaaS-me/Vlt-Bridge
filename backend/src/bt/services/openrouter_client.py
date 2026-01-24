@@ -165,7 +165,14 @@ class OpenRouterClient:
         usage = {}
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            # Use streaming-friendly timeout (no read timeout for SSE)
+            streaming_timeout = httpx.Timeout(
+                connect=30.0,
+                read=None,  # Critical: No read timeout for SSE streaming
+                write=30.0,
+                pool=30.0,
+            )
+            async with httpx.AsyncClient(timeout=streaming_timeout) as client:
                 async with client.stream(
                     "POST",
                     f"{self._base_url}/chat/completions",
@@ -174,7 +181,13 @@ class OpenRouterClient:
                 ) as response:
                     response.raise_for_status()
 
+                    line_count = 0
+                    logger.info(f"[OpenRouterClient] Starting SSE stream for model={model}")
                     async for line in response.aiter_lines():
+                        line_count += 1
+                        # Log first few lines and every 10th line for debugging
+                        if line_count <= 5 or line_count % 10 == 0:
+                            logger.debug(f"[OpenRouterClient] SSE line #{line_count}: {line[:200] if line else 'EMPTY'}")
                         # Check for cancellation
                         if request_id in self._cancelled:
                             logger.info(f"[OpenRouterClient] Request {request_id} cancelled")
@@ -250,12 +263,17 @@ class OpenRouterClient:
             if tool_calls_buffer:
                 tool_calls = [tool_calls_buffer[i] for i in sorted(tool_calls_buffer.keys())]
 
+            # Warn if no lines were received (possible API error or timeout)
+            if line_count == 0:
+                logger.warning(f"[OpenRouterClient] No SSE lines received - possible API error or timeout")
+
             logger.info(
                 f"[OpenRouterClient] Stream complete: "
                 f"content_len={len(content_buffer)}, "
                 f"reasoning_len={len(reasoning_buffer)}, "
                 f"tool_calls={len(tool_calls) if tool_calls else 0}, "
-                f"finish_reason={finish_reason}"
+                f"finish_reason={finish_reason}, "
+                f"lines_processed={line_count}"
             )
 
             return {

@@ -30,22 +30,18 @@ return BT.tree("execute-tools", {
             })
         ),
 
-        -- Execute tools in parallel
-        BT.parallel({
-            policy = "require_all",
-            merge_strategy = "collect",
-            continue_on_failure = true
-        }, {
-            BT.for_each("tool_calls", {
-                item_key = "current_tool",
-                continue_on_failure = true,
-                children = {
-                    BT.action("execute-single-tool", {
-                        fn = "src.bt.actions.oracle.execute_single_tool",
-                        description = "Execute tool and collect result"
-                    })
-                }
-            })
+        -- Execute tools sequentially (ForEach handles iteration)
+        -- NOTE: Previously wrapped in BT.parallel, but with only one child (ForEach),
+        -- it was actually sequential. ForEach iterates through tool_calls one by one.
+        BT.for_each("tool_calls", {
+            item_key = "current_tool",
+            continue_on_failure = true,
+            children = {
+                BT.action("execute-single-tool", {
+                    fn = "src.bt.actions.oracle.execute_single_tool",
+                    description = "Execute tool and collect result"
+                })
+            }
         }),
 
         -- Process results and yield chunks

@@ -74,6 +74,19 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
   const toast = useToast();
 
   /**
+   * Aggregate all tool calls from all assistant messages for conversation-wide history display.
+   */
+  const allToolCalls = useMemo(() => {
+    const toolCalls: ToolCallInfo[] = [];
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        toolCalls.push(...msg.tool_calls);
+      }
+    }
+    return toolCalls;
+  }, [messages]);
+
+  /**
    * Convert context nodes to OracleMessage format.
    * Builds the path from root to the target node and converts each node
    * to a pair of user/assistant messages.
@@ -919,6 +932,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
                 showThinking={showThinking}
                 showSources={showSources}
                 isStreaming={isLoading && i === messages.length - 1 && msg.role === 'assistant'}
+                allToolCalls={i === messages.length - 1 && msg.role === 'assistant' ? allToolCalls : undefined}
               />
             ))}
             {isLoading && statusMessage && (

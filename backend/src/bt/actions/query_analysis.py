@@ -39,9 +39,15 @@ def bb_set(bb: "TypedBlackboard", key: str, value: Any) -> None:
     """Set value in blackboard without schema validation.
 
     For internal oracle state that doesn't need Pydantic validation.
+    Now uses _store() method to ensure proper scope propagation.
     """
-    bb._data[key] = value
-    bb._writes.add(key)
+    # Use _store() instead of direct _data access to enable scope propagation
+    if hasattr(bb, '_store'):
+        bb._store(key, value)
+    else:
+        # Fallback for TypedBlackboard without _store
+        bb._data[key] = value
+        bb._writes.add(key)
 
 
 # =============================================================================

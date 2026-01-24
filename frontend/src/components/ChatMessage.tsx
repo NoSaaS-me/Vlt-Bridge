@@ -21,6 +21,7 @@ interface ChatMessageProps {
   showThinking?: boolean;
   showSources?: boolean;
   isStreaming?: boolean; // Whether this message is currently being streamed
+  allToolCalls?: ToolCallInfo[]; // All tool calls from entire conversation history
 }
 
 /**
@@ -38,6 +39,7 @@ export function ChatMessage({
   showThinking = true,
   showSources = true,
   isStreaming = false,
+  allToolCalls,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
@@ -135,7 +137,11 @@ export function ChatMessage({
   // Show thinking even if there's an error - user should see what was thought before the error
   const hasThinking = Boolean(oracleMsg?.thinking && oracleMsg.thinking.length > 0);
   const hasContent = Boolean(message.content && message.content.length > 0);
-  const hasToolCalls = Boolean(oracleMsg?.tool_calls && oracleMsg.tool_calls.length > 0);
+  // Check both current message tool calls AND conversation-wide tool calls
+  const hasToolCalls = Boolean(
+    (oracleMsg?.tool_calls && oracleMsg.tool_calls.length > 0) ||
+    (allToolCalls && allToolCalls.length > 0)
+  );
   // Thinking is "active" when streaming and no content yet - but keep showing it on error
   const isThinkingActive = hasThinking && !hasContent && isStreaming && !hasError;
 
@@ -263,13 +269,15 @@ export function ChatMessage({
     return text.slice(0, maxLength) + '...';
   };
 
-  // Count running/completed tools
+  // Count running/completed tools across entire conversation history
   const toolStats = useMemo(() => {
-    if (!oracleMsg?.tool_calls) return { running: 0, completed: 0, total: 0 };
-    const running = oracleMsg.tool_calls.filter(tc => tc.status === 'running').length;
-    const completed = oracleMsg.tool_calls.filter(tc => tc.status === 'completed').length;
-    return { running, completed, total: oracleMsg.tool_calls.length };
-  }, [oracleMsg?.tool_calls]);
+    // Use allToolCalls if provided (full conversation history), otherwise fall back to current message only
+    const toolCalls = allToolCalls || oracleMsg?.tool_calls;
+    if (!toolCalls || toolCalls.length === 0) return { running: 0, completed: 0, total: 0 };
+    const running = toolCalls.filter(tc => tc.status === 'running').length;
+    const completed = toolCalls.filter(tc => tc.status === 'completed').length;
+    return { running, completed, total: toolCalls.length };
+  }, [allToolCalls, oracleMsg?.tool_calls]);
 
   return (
     <div className={cn(
@@ -361,6 +369,9 @@ export function ChatMessage({
               <Wrench className="h-4 w-4 text-muted-foreground" />
               <span className="text-sm font-medium text-muted-foreground flex-1 text-left">
                 {toolStats.total} tool{toolStats.total > 1 ? 's' : ''}
+                {allToolCalls && allToolCalls.length > (oracleMsg?.tool_calls?.length || 0) && (
+                  <span className="text-xs ml-1">(conversation history)</span>
+                )}
               </span>
               {/* Status summary */}
               <div className="flex items-center gap-1.5">
@@ -383,9 +394,9 @@ export function ChatMessage({
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               )}
             </button>
-            {toolsExpanded && oracleMsg?.tool_calls && (
+            {toolsExpanded && (allToolCalls || oracleMsg?.tool_calls) && (
               <div className="border-t border-border">
-                {oracleMsg.tool_calls.map((tool) => (
+                {(allToolCalls || oracleMsg?.tool_calls || []).map((tool) => (
                   <div
                     key={tool.id}
                     className={cn(

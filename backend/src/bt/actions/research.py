@@ -44,9 +44,17 @@ def bb_get(bb: "TypedBlackboard", key: str, default: Any = None) -> Any:
 
 
 def bb_set(bb: "TypedBlackboard", key: str, value: Any) -> None:
-    """Set value in blackboard without schema validation."""
-    bb._data[key] = value
-    bb._writes.add(key)
+    """Set value in blackboard without schema validation.
+
+    Now uses _store() method to ensure proper scope propagation.
+    """
+    # Use _store() instead of direct _data access to enable scope propagation
+    if hasattr(bb, '_store'):
+        bb._store(key, value)
+    else:
+        # Fallback for TypedBlackboard without _store
+        bb._data[key] = value
+        bb._writes.add(key)
 
 
 # =============================================================================

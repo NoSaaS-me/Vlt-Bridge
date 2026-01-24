@@ -229,6 +229,68 @@ def sync_retry():
     print(f"[yellow]Skipped (max retries): {result['skipped']}[/yellow]")
 
 
+@sync_app.command("all")
+def sync_all(
+    project: str = typer.Option(None, "--project", "-p", help="Sync threads for specific project only"),
+):
+    """
+    Sync all local threads to the backend server.
+
+    This command syncs ALL threads from your local database to the server,
+    ensuring they appear on the website. Useful when:
+    - You've created threads locally that haven't been synced
+    - You want to ensure all threads are visible on the website
+    - You're setting up a new client and want to sync existing threads
+
+    If --project is specified, only syncs threads for that project.
+    Otherwise, syncs threads from all projects.
+
+    Examples:
+        vlt sync all                    # Sync all threads from all projects
+        vlt sync all --project myproj   # Sync threads for 'myproj' only
+    """
+    from vlt.db import SessionLocal
+    from vlt.core.sync import sync_all_threads
+    from vlt.core.identity import load_project_identity
+    import asyncio
+
+    console = Console()
+
+    # Resolve project if not specified
+    if not project:
+        identity = load_project_identity()
+        if identity:
+            project = identity.id
+            console.print(f"[dim]Using project from vlt.toml: {project}[/dim]")
+        else:
+            console.print("[dim]Syncing threads from all projects...[/dim]")
+
+    with SessionLocal() as db:
+        console.print(f"[bold blue]Syncing threads to server...[/bold blue]")
+        if project:
+            console.print(f"  Project: {project}")
+        console.print()
+
+        try:
+            stats = asyncio.run(sync_all_threads(db, project_id=project))
+
+            console.print(f"[green]✓ Threads synced: {stats['threads_synced']}[/green]")
+            console.print(f"[red]✗ Threads failed: {stats['threads_failed']}[/red]")
+            console.print(f"[dim]  Total entries synced: {stats['total_entries']}[/dim]")
+
+            if stats.get("errors"):
+                console.print()
+                console.print("[yellow]Errors:[/yellow]")
+                for error in stats["errors"][:10]:  # Show first 10 errors
+                    console.print(f"  - {error}")
+                if len(stats["errors"]) > 10:
+                    console.print(f"  ... and {len(stats['errors']) - 10} more errors")
+
+        except Exception as e:
+            console.print(f"[red]Error syncing threads: {e}[/red]")
+            raise typer.Exit(code=1)
+
+
 # ============================================================================
 # Profile Commands
 # ============================================================================
@@ -1017,6 +1079,12 @@ def init(
         console.print("[bold blue]VLT Health Check[/bold blue]")
         console.print()
 
+        # Ensure project exists locally and on server before health check
+        vlt_config = load_vlt_config(target_path)
+        if vlt_config and vlt_config.project:
+            project_id = vlt_config.project.id
+            _ensure_project_exists_everywhere(console, service, project_id)
+
         health = _perform_health_check(console, target_path)
 
         # Display health status
@@ -1064,6 +1132,11 @@ def init(
                 vlt_config = load_vlt_config(target_path)
                 if vlt_config and vlt_config.project:
                     project_id = vlt_config.project.id
+                    
+                    # Ensure project exists locally and on server (fixes FK constraint errors)
+                    if not _ensure_project_exists_everywhere(console, service, project_id):
+                        raise typer.Exit(code=1)
+                    
                     console.print(f"[dim]Starting CodeRAG indexing for project '{project_id}'...[/dim]")
                     console.print()
 
@@ -1229,9 +1302,38 @@ def new_thread(
         # Project might already exist, which is fine for now
         pass
         
+    # Ensure project exists locally and on server
+    console = Console()
+    _ensure_project_exists_everywhere(console, service, project)
+    
     thread = service.create_thread(project_id=project, name=name, initial_thought=initial_thought, author=effective_author)
     print(f"[bold green]CREATED:[/bold green] {thread.project_id}/{thread.id}")
     print(f"STATUS: {thread.status}")
+    
+    # Sync thread to server immediately so it appears on the website
+    from vlt.core.sync import ThreadSyncClient
+    import asyncio
+    from vlt.db import SessionLocal
+    
+    # Sync the entire thread (includes thread metadata and all entries)
+    with SessionLocal() as db:
+        try:
+            client = ThreadSyncClient()
+            if client.sync_token:
+                result = asyncio.run(client.sync_thread_full(
+                    thread_id=thread.id,
+                    project_id=thread.project_id,
+                    name=thread.id,
+                    db=db,
+                ))
+                if result.success:
+                    print(f"[dim]✓ Thread synced to server ({result.synced_count} entries)[/dim]")
+                else:
+                    print(f"[yellow]⚠ Sync failed: {result.error}[/yellow]")
+            else:
+                print("[dim]ℹ No sync token configured - thread created locally only[/dim]")
+        except Exception as e:
+            print(f"[yellow]⚠ Sync failed (will retry): {e}[/yellow]")
     
     if effective_author == "user" and not os.environ.get("VLT_AUTHOR"):
         print("[dim](Tip: Use --author to sign your thoughts)[/dim]")
@@ -1660,6 +1762,87 @@ def _create_server_project(console: Console, name: str, description: str = "") -
         return None
 
 
+def _ensure_project_exists_everywhere(
+    console: Console,
+    svc: SqliteVaultService,
+    project_id: str,
+    name: str = None,
+    description: str = None,
+) -> bool:
+    """Ensure project exists both locally and on the backend server.
+
+    This function should be called before any operation that requires the project
+    to exist (e.g., CodeRAG indexing, thread creation) to prevent FK constraint
+    errors.
+
+    Args:
+        console: Rich Console for output
+        svc: SqliteVaultService for local operations
+        project_id: Project ID (slug)
+        name: Display name (defaults to project_id)
+        description: Project description
+
+    Returns:
+        True if project exists/was created successfully, False on error.
+    """
+    import httpx
+    from vlt.config import settings
+
+    effective_name = name or project_id
+    effective_description = description or "Auto-created project"
+
+    # 1. Ensure project exists locally
+    try:
+        svc.ensure_project_exists(project_id, effective_name, effective_description)
+    except Exception as e:
+        console.print(f"[red]Error ensuring local project: {e}[/red]")
+        return False
+
+    # 2. Ensure project exists on server (if configured)
+    vault_url = settings.vault_url
+    sync_token = settings.sync_token
+
+    if not vault_url or not sync_token:
+        # No server configured, local-only is fine
+        return True
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            headers = {
+                "Authorization": f"Bearer {sync_token}",
+                "Content-Type": "application/json",
+            }
+            
+            # Check if project exists on server
+            response = client.get(f"{vault_url}/api/projects/{project_id}", headers=headers)
+            
+            if response.status_code == 200:
+                # Project exists on server
+                return True
+            elif response.status_code == 404:
+                # Project doesn't exist - create it
+                console.print(f"[dim]Creating project '{project_id}' on server...[/dim]")
+                create_response = client.post(
+                    f"{vault_url}/api/projects",
+                    headers=headers,
+                    json={"name": effective_name, "description": effective_description},
+                )
+                create_response.raise_for_status()
+                console.print(f"[green]✓ Project '{project_id}' created on server[/green]")
+                return True
+            else:
+                # Some other error
+                console.print(f"[yellow]Warning: Could not verify project on server (status {response.status_code})[/yellow]")
+                return True  # Continue anyway, local project exists
+
+    except httpx.ConnectError:
+        console.print(f"[yellow]Warning: Cannot connect to server at {vault_url}. Using local project only.[/yellow]")
+        return True  # Local project exists, continue without server
+    except Exception as e:
+        console.print(f"[yellow]Warning: Server project check failed: {e}[/yellow]")
+        return True  # Local project exists, continue anyway
+
+
 def _interactive_project_selection(console: Console, svc: SqliteVaultService) -> str | None:
     """Interactive project selection with create option (T011-T014).
 
@@ -2043,6 +2226,17 @@ def coderag_init(
     # Resolve path
     if not path:
         path = Path(".")
+
+    # Ensure project exists locally and on server (fixes FK constraint errors)
+    if not _ensure_project_exists_everywhere(console, service, project):
+        raise typer.Exit(code=1)
+
+    # Ensure all database tables/indexes exist (including FTS5 virtual tables)
+    from vlt.core.migrations import init_db
+    try:
+        init_db()
+    except Exception as e:
+        console.print(f"[yellow]Warning: Migration check failed: {e}[/yellow]")
 
     console.print(f"[bold blue]Initializing CodeRAG index for project '{project}'[/bold blue]")
     console.print(f"Path: {path.resolve()}")

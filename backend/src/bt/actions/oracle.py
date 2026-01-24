@@ -1153,7 +1153,7 @@ def parse_tool_calls(ctx: "TickContext") -> RunStatus:
     for call in tool_calls:
         call_id = call.get("id", f"call_{len(parsed_calls)}")
         func = call.get("function", {})
-        name = func.get("name", "")
+        name = func.get("name") or ""  # Handle None values from API
         args = func.get("arguments", {})
 
         if isinstance(args, str):
@@ -1245,7 +1245,7 @@ def execute_single_tool(ctx: "TickContext") -> RunStatus:
         return RunStatus.FAILURE
 
     call_id = current_tool.get("id")
-    name = current_tool.get("name")
+    name = current_tool.get("name") or ""  # Defensive: handle None
     args = current_tool.get("arguments", {})
     user_id = bb_get(bb, "user_id") or "anonymous"
 
