@@ -1,0 +1,9 @@
+[package]
+name = "vlt-daemon"
+version = "0.1.0"
+description = "High-performance orchestrator for Vlt-Bridge agents"
+authors = ["Vlt Team"]
+license = "MIT"
+
+[dependencies]
+# Standard Mojo/Python interop is built-in

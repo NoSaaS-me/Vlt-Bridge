@@ -24,6 +24,7 @@ cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLO
 Python 3.11+ (Backend), TypeScript/React 18 (Frontend): Follow standard conventions
 
 ## Recent Changes
+- 021-desktop-app: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 - 003-chatgpt-app-integration: Added Python 3.11+, TypeScript/React 18 + `fastmcp`, `fastapi`, `vite`
 
 - 002-add-graph-view: Added Python 3.11+ (Backend), TypeScript/React 18 (Frontend) + `react-force-graph-2d` (New), `FastAPI`, `sqlite3`
