@@ -185,7 +185,7 @@ class UserSettingsService:
             Model identifier string (e.g., "deepseek/deepseek-chat")
         """
         settings = self.get_settings(user_id)
-        return settings.subagent_model or "deepseek/deepseek-chat"
+        return settings.subagent_model or "deepseek/deepseek-chat-v3"
 
     def get_subagent_provider(self, user_id: str) -> "ModelProvider":
         """

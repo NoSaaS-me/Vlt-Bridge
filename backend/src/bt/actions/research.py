@@ -67,10 +67,10 @@ DEFAULT_MAX_TOOL_CALLS = 10
 DEFAULT_MAX_CONCURRENT = 5
 
 # Model defaults
-DEFAULT_PLANNING_MODEL = "deepseek/deepseek-chat"
-DEFAULT_RESEARCH_MODEL = "deepseek/deepseek-chat"
-DEFAULT_COMPRESSION_MODEL = "deepseek/deepseek-chat"
-DEFAULT_REPORT_MODEL = "deepseek/deepseek-chat"
+DEFAULT_PLANNING_MODEL = "deepseek/deepseek-chat-v3"
+DEFAULT_RESEARCH_MODEL = "deepseek/deepseek-chat-v3"
+DEFAULT_COMPRESSION_MODEL = "deepseek/deepseek-chat-v3"
+DEFAULT_REPORT_MODEL = "deepseek/deepseek-chat-v3"
 
 
 # =============================================================================

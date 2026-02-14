@@ -104,7 +104,7 @@ class ResearchLLMService:
                 logger.info(f"No Google API key, falling back to OpenRouter for research")
                 provider = ModelProvider.OPENROUTER
                 if model.startswith("gemini") or model.startswith("models/"):
-                    model = "deepseek/deepseek-chat"
+                    model = "deepseek/deepseek-chat-v3"
             else:
                 raise ValueError("No API key configured for research LLM calls")
         elif provider == ModelProvider.OPENROUTER and not openrouter_key:

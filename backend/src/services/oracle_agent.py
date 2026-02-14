@@ -127,6 +127,7 @@ def _get_prompt_loader():
 DEFAULT_MODEL_CONTEXT_SIZES = {
     # DeepSeek models
     "deepseek/deepseek-chat": 64000,
+    "deepseek/deepseek-chat-v3": 64000,
     "deepseek/deepseek-coder": 64000,
     "deepseek/deepseek-v3": 64000,
     "deepseek/deepseek-r1": 64000,
@@ -406,7 +407,7 @@ class OracleAgent:
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
     MAX_TURNS = 30  # Increased from 15 to allow complex multi-step queries
     DEFAULT_MODEL = "anthropic/claude-sonnet-4"
-    DEFAULT_SUBAGENT_MODEL = "deepseek/deepseek-chat"
+    DEFAULT_SUBAGENT_MODEL = "deepseek/deepseek-chat-v3"
 
     # Thresholds for auto-delegation to Librarian
     DELEGATION_THRESHOLDS = {

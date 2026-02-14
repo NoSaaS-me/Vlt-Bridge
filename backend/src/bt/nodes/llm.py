@@ -1087,7 +1087,7 @@ class LLMCallNode(LeafNode):
         if self._model_key and ctx.blackboard:
             model = self._bb_get(ctx.blackboard, self._model_key) or self._model
         if not model:
-            model = "deepseek/deepseek-chat"  # Default fallback
+            model = "deepseek/deepseek-chat-v3"  # Default fallback
 
         # Get tools from blackboard if configured
         tools = None

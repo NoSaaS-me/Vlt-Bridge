@@ -74,6 +74,7 @@ CONTEXT_WARNING_THRESHOLD = 0.70
 # Default model context sizes
 DEFAULT_MODEL_CONTEXT_SIZES = {
     "deepseek/deepseek-chat": 64000,
+    "deepseek/deepseek-chat-v3": 64000,
     "deepseek/deepseek-r1": 64000,
     "anthropic/claude-3-opus": 200000,
     "anthropic/claude-sonnet-4": 200000,

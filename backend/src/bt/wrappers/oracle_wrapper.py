@@ -121,7 +121,7 @@ class OracleBTWrapper:
         self._user_id = user_id
         self._api_key = api_key
         self._project_id = project_id
-        self._model = model or "deepseek/deepseek-chat"
+        self._model = model or "deepseek/deepseek-chat-v3"
         self._max_tokens = max_tokens
 
         # Create LLM client for BT nodes
