@@ -1,5 +1,5 @@
 import type { ChatMessage as ChatMessageType } from '@/types/rag';
-import type { OracleMessage } from '@/types/oracle';
+import type { OracleMessage, ToolCallInfo } from '@/types/oracle';
 import { cn } from '@/lib/utils';
 import { User, Bot, FilePlus, Edit, RefreshCw, ChevronDown, ChevronUp, Brain, FileCode, BookOpen, MessageSquare, Wrench, CheckCircle, Loader2, AlertCircle, Clock, Copy, Check } from 'lucide-react';
 import { SourceList } from './SourceList';

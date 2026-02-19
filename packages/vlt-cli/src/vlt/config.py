@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     # Oracle configuration
     oracle_timeout: float = 60.0  # Request timeout for Oracle queries
     oracle_prefer_backend: bool = True  # Prefer backend when available
+    oracle_enabled: bool = True  # MCP oracle tool toggle (VLT_ORACLE_ENABLED)
 
     # Daemon configuration - will be overridden with profile-specific values
     daemon_port: int = 8765

@@ -351,3 +351,21 @@ export async function listThreads(projectId?: string): Promise<ThreadListRespons
 export async function getThread(threadId: string): Promise<Thread> {
   return apiFetch<Thread>(`/api/threads/${encodeURIComponent(threadId)}`);
 }
+
+/**
+ * Oracle settings API functions
+ */
+export interface OracleSettings {
+  oracle_mcp_enabled: boolean;
+}
+
+export async function getOracleSettings(): Promise<OracleSettings> {
+  return apiFetch<OracleSettings>('/api/settings/oracle');
+}
+
+export async function updateOracleSettings(enabled: boolean): Promise<OracleSettings> {
+  return apiFetch<OracleSettings>('/api/settings/oracle', {
+    method: 'PUT',
+    body: JSON.stringify({ oracle_mcp_enabled: enabled }),
+  });
+}

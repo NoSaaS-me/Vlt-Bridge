@@ -789,6 +789,88 @@ class UserSettingsService:
             conn.close()
 
 
+    def get_oracle_mcp_enabled(self, user_id: str) -> bool:
+        """
+        Get whether oracle MCP tools are enabled for this user.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            True if oracle MCP is enabled (default), False if disabled
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT oracle_mcp_enabled FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row and "oracle_mcp_enabled" in row.keys():
+                return bool(row["oracle_mcp_enabled"])
+            return True  # default: enabled
+        except Exception as e:
+            logger.error(f"Failed to get oracle_mcp_enabled for user {user_id}: {e}")
+            return True  # default on error
+        finally:
+            conn.close()
+
+    def set_oracle_mcp_enabled(self, user_id: str, enabled: bool) -> None:
+        """
+        Set whether oracle MCP tools are enabled for this user.
+
+        Args:
+            user_id: User identifier
+            enabled: True to enable, False to disable
+        """
+        conn = self.db.connect()
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            with conn:
+                cursor = conn.execute(
+                    "SELECT user_id FROM user_settings WHERE user_id = ?",
+                    (user_id,)
+                )
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    conn.execute(
+                        "UPDATE user_settings SET oracle_mcp_enabled = ?, updated = ? WHERE user_id = ?",
+                        (int(enabled), now, user_id)
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO user_settings (
+                            user_id, oracle_model, oracle_provider,
+                            subagent_model, subagent_provider, thinking_enabled,
+                            chat_center_mode, librarian_timeout, max_context_nodes,
+                            oracle_mcp_enabled, created, updated
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            "gemini-2.0-flash-exp",
+                            "google",
+                            "gemini-2.0-flash-exp",
+                            "google",
+                            0,
+                            0,
+                            1200,
+                            30,
+                            int(enabled),
+                            now,
+                            now,
+                        )
+                    )
+            logger.info(f"Set oracle_mcp_enabled={enabled} for user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to set oracle_mcp_enabled for user {user_id}: {e}")
+            raise
+        finally:
+            conn.close()
+
+
 def get_user_settings_service() -> UserSettingsService:
     """Get instance of UserSettingsService."""
     return UserSettingsService()

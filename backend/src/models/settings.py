@@ -11,6 +11,21 @@ class ModelProvider(str, Enum):
     GOOGLE = "google"
 
 
+class OracleSettings(BaseModel):
+    """Oracle MCP toggle settings."""
+    oracle_mcp_enabled: bool = Field(
+        default=True,
+        description="Whether oracle MCP tools are enabled for this user"
+    )
+
+
+class OracleSettingsUpdate(BaseModel):
+    """Request to update oracle MCP toggle."""
+    oracle_mcp_enabled: bool = Field(
+        description="Whether oracle MCP tools should be enabled"
+    )
+
+
 class ModelSettings(BaseModel):
     """User's model preferences for oracle and subagent."""
     oracle_model: str = Field(

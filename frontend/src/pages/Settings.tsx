@@ -21,7 +21,7 @@ import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
 import { NotificationSettings as NotificationSettingsComponent } from '@/components/NotificationSettings';
 import { RuleSettings } from '@/components/RuleSettings';
 import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
-import { getIndexHealth, rebuildIndex, type RebuildResponse } from '@/services/api';
+import { getIndexHealth, rebuildIndex, type RebuildResponse, getOracleSettings, updateOracleSettings } from '@/services/api';
 import { getModels, getModelSettings, saveModelSettings, testTavilyConnection } from '@/services/models';
 import { getContextSettings, updateContextSettings } from '@/services/context';
 import type { User } from '@/types/user';
@@ -71,6 +71,11 @@ export function Settings() {
   // GitHub connection state
   const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
   const [githubMessage, setGithubMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Oracle MCP toggle state
+  const [oracleMcpEnabled, setOracleMcpEnabled] = useState<boolean>(true);
+  const [isSavingOracle, setIsSavingOracle] = useState(false);
+  const [oracleSaved, setOracleSaved] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -203,6 +208,14 @@ export function Settings() {
       } catch (err) {
         console.debug('GitHub status not available:', err);
         setGithubStatus({ connected: false, username: null });
+      }
+
+      // Load oracle MCP toggle state
+      try {
+        const oracleSettings = await getOracleSettings();
+        setOracleMcpEnabled(oracleSettings.oracle_mcp_enabled);
+      } catch (err) {
+        console.debug('Oracle settings not available:', err);
       }
     } catch (err) {
       console.error('Error loading settings:', err);
@@ -346,6 +359,22 @@ export function Settings() {
     }
   };
 
+  const handleOracleToggle = async (enabled: boolean) => {
+    setIsSavingOracle(true);
+    setOracleSaved(false);
+    try {
+      await updateOracleSettings(enabled);
+      setOracleMcpEnabled(enabled);
+      setOracleSaved(true);
+      setTimeout(() => setOracleSaved(false), 2000);
+    } catch (err) {
+      setError('Failed to update oracle settings');
+      console.error('Error saving oracle settings:', err);
+    } finally {
+      setIsSavingOracle(false);
+    }
+  };
+
   // T052: Handle CodeRAG re-indexing
   const handleReindex = async () => {
     if (!selectedProjectId) {
@@ -446,12 +475,13 @@ export function Settings() {
         )}
 
         <Tabs defaultValue="account" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="models">Models</TabsTrigger>
             <TabsTrigger value="context">Context</TabsTrigger>
             <TabsTrigger value="rules">Rules</TabsTrigger>
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
+            <TabsTrigger value="oracle">Oracle</TabsTrigger>
           </TabsList>
 
           <TabsContent value="account" className="space-y-6 mt-6">
@@ -1282,6 +1312,46 @@ export function Settings() {
 
             {/* System Logs */}
             <SystemLogs />
+          </TabsContent>
+
+          <TabsContent value="oracle" className="space-y-6 mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Oracle MCP Tools</CardTitle>
+                <CardDescription>
+                  Control whether oracle tools are available to AI agents via the vlt-mcp server.
+                  When disabled, calls to <code>vlt_oracle_query</code> return a structured error
+                  with guidance instead of querying the oracle.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Enable oracle MCP tools</p>
+                    <p className="text-xs text-muted-foreground">
+                      Allows AI agents to call <code>vlt_oracle_status</code> and <code>vlt_oracle_query</code> via MCP.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={oracleMcpEnabled}
+                    onCheckedChange={handleOracleToggle}
+                    disabled={isSavingOracle}
+                  />
+                </div>
+
+                {oracleSaved && (
+                  <Alert>
+                    <AlertDescription>Oracle settings saved.</AlertDescription>
+                  </Alert>
+                )}
+
+                <Separator />
+                <p className="text-xs text-muted-foreground">
+                  Changes take effect on the next MCP session start. The vlt-mcp server reads this
+                  setting fresh at session launch.
+                </p>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>

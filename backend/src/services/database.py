@@ -327,6 +327,8 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     # Add search provider settings columns to user_settings
     "ALTER TABLE user_settings ADD COLUMN search_provider TEXT DEFAULT 'none'",
     "ALTER TABLE user_settings ADD COLUMN tavily_api_key TEXT",
+    # Add oracle_mcp_enabled column to user_settings (018-vlt-mcp-server)
+    "ALTER TABLE user_settings ADD COLUMN oracle_mcp_enabled INTEGER NOT NULL DEFAULT 1",
 )
 
 
