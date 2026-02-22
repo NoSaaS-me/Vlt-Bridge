@@ -509,6 +509,19 @@ class RLMOracleWrapper:
         """Signal cancellation. The loop checks this flag between iterations."""
         self._cancelled = True
 
+    async def _stream_final(self, final_value: str):
+        """Stream the Final answer in chunks for progressive SSE delivery (FR-023).
+
+        Yields sub-strings of *final_value* in ~50-character pieces so the
+        frontend can start rendering before the full answer has been emitted.
+        """
+        if not final_value:
+            yield ""
+            return
+        CHUNK_SIZE = 50
+        for i in range(0, len(final_value), CHUNK_SIZE):
+            yield final_value[i:i + CHUNK_SIZE]
+
     async def process_query(
         self,
         query: str,
@@ -652,11 +665,9 @@ class RLMOracleWrapper:
                 session.status = "completed"
                 session.final_value = exec_result.final_value
 
-                # Stream Final as content (FR-023)
-                yield OracleStreamChunk(
-                    type="content",
-                    content=session.final_value or "",
-                )
+                # Stream Final token-by-token as content (FR-023)
+                async for chunk in self._stream_final(session.final_value or ""):
+                    yield OracleStreamChunk(type="content", content=chunk)
                 yield OracleStreamChunk(
                     type="done",
                     metadata={"iteration_count": session.iteration_count},

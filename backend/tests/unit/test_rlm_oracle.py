@@ -363,6 +363,25 @@ class TestFocusedQueryEfficiency:
         assert iteration_count <= 3, f"Focused query took {iteration_count} iterations, expected ≤3"
 
     @pytest.mark.asyncio
+    async def test_stream_final_yields_multiple_content_chunks_for_long_answer(self):
+        """T028 — _stream_final() splits long answers into multiple content chunks."""
+        ctx_mock = _make_project_context_mock()
+        # Long answer: >50 chars so _stream_final() should yield multiple chunks
+        long_answer = "A" * 200
+        llm_mock = _make_llm_mock(f"```python\nFinal = '{long_answer}'\n```")
+
+        with patch(PATCH_LLM, return_value=llm_mock), \
+             patch(PATCH_CTX, return_value=ctx_mock):
+            wrapper = self._make_wrapper()
+            chunks = await _collect_chunks(wrapper, "Long answer query")
+
+        content_chunks = [c for c in chunks if c.type == "content"]
+        # Should have >1 content chunk since answer is 200 chars and chunk size is 50
+        assert len(content_chunks) > 1, "Long answer should be streamed in multiple content chunks"
+        combined = "".join(c.content or "" for c in content_chunks)
+        assert long_answer in combined
+
+    @pytest.mark.asyncio
     async def test_done_chunk_always_carries_iteration_count(self):
         """iteration_count must be present in done chunk metadata for all termination paths."""
         ctx_mock = _make_project_context_mock()
@@ -379,3 +398,93 @@ class TestFocusedQueryEfficiency:
         assert "iteration_count" in (done_chunk.metadata or {}), \
             "iteration_count must always be in done chunk metadata"
         assert (done_chunk.metadata or {})["iteration_count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: US4 — Streaming Progress Visibility (T029)
+# ---------------------------------------------------------------------------
+
+class TestStreamingProgressVisibility:
+    """T027 + T029 — progress events appear before content; no buffering."""
+
+    def _make_wrapper(self, **kwargs) -> RLMOracleWrapper:
+        return RLMOracleWrapper(
+            user_id="test-user",
+            api_key="test-key",
+            project_id="test-project",
+            model="test/model",
+            max_tokens=512,
+            **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_progress_appears_before_content_in_multi_iteration_query(self):
+        """T029 — with ≥5 print-only iterations before Final, progress precedes content."""
+        ctx_mock = _make_project_context_mock()
+        call_count = 0
+        TOTAL_ITERS = 5
+
+        async def _complete_side_effect(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < TOTAL_ITERS:
+                # Each early iteration prints but doesn't set Final
+                return {
+                    "content": f"```python\nprint('step {call_count}')\n```",
+                    "usage": {},
+                }
+            # Final iteration: set Final
+            return {"content": "```python\nFinal = 'synthesis complete'\n```", "usage": {}}
+
+        llm_mock = AsyncMock()
+        llm_mock.complete = AsyncMock(side_effect=_complete_side_effect)
+
+        with patch(PATCH_LLM, return_value=llm_mock), \
+             patch(PATCH_CTX, return_value=ctx_mock):
+            wrapper = self._make_wrapper()
+            chunks = await _collect_chunks(wrapper, "Multi-step synthesis query")
+
+        chunk_types = [c.type for c in chunks]
+
+        # At least one progress chunk must appear
+        assert "progress" in chunk_types, "Expected progress chunks from multi-iteration query"
+
+        # At least one content chunk must appear
+        assert "content" in chunk_types
+
+        # Exactly one done chunk
+        done_chunks = [c for c in chunks if c.type == "done"]
+        assert len(done_chunks) == 1, "Expected exactly 1 done chunk"
+
+        # First progress chunk must appear before first content chunk (SC-007)
+        first_progress_idx = next(i for i, c in enumerate(chunks) if c.type == "progress")
+        first_content_idx = next(i for i, c in enumerate(chunks) if c.type == "content")
+        assert first_progress_idx < first_content_idx, \
+            f"progress chunk (idx={first_progress_idx}) must precede content chunk (idx={first_content_idx})"
+
+    @pytest.mark.asyncio
+    async def test_no_progress_chunks_when_no_stdout(self):
+        """When iterations produce no stdout, no progress chunks should be emitted."""
+        ctx_mock = _make_project_context_mock()
+        call_count = 0
+
+        async def _complete_side_effect(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Silent iteration (no print)
+                return {"content": "```python\nx = 1 + 1\n```", "usage": {}}
+            return {"content": "```python\nFinal = 'done'\n```", "usage": {}}
+
+        llm_mock = AsyncMock()
+        llm_mock.complete = AsyncMock(side_effect=_complete_side_effect)
+
+        with patch(PATCH_LLM, return_value=llm_mock), \
+             patch(PATCH_CTX, return_value=ctx_mock):
+            wrapper = self._make_wrapper()
+            chunks = await _collect_chunks(wrapper, "Silent query")
+
+        progress_chunks = [c for c in chunks if c.type == "progress"]
+        # First iteration had no stdout → should produce no (or zero-content) progress chunks
+        for pc in progress_chunks:
+            assert pc.content, "empty progress chunks should not be emitted"

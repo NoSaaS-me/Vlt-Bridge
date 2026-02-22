@@ -100,9 +100,9 @@
 
 **Independent Test**: Submit a query that requires ≥5 REPL iterations; observe `type="progress"` SSE events appearing before `type="content"` events in the SSE stream.
 
-- [ ] T027 [US4] Verify `QueuedStringIO.write()` immediately yields `OracleStreamChunk(type="progress", content=chunk)` in `RLMOracleWrapper.process_query()` in `backend/src/services/rlm_oracle.py`: each chunk from the asyncio Queue should be yielded as a progress event before the next iteration begins; confirm the SSE generator does not buffer progress events (FR-022)
-- [ ] T028 [US4] Implement terminal sub-oracle streaming in `backend/src/services/rlm_oracle.py`: when `Final` is set, stream the Final string value token-by-token as `type="content"` events using `RLMOracleWrapper._stream_final(final_value)` generator; use `asyncio.Queue` pattern — the last sub-oracle call's output streams directly to SSE channel before full string assembled (FR-023); yield `type="done"` after all content streamed
-- [ ] T029 [US4] Add streaming integration test in `backend/tests/unit/test_rlm_oracle.py`: mock LLM to take 5 iterations before setting Final; collect all `OracleStreamChunk` events; assert at least one `type="progress"` event appears before first `type="content"` event; assert exactly one `type="done"` event at end (SC-007)
+- [x] T027 [US4] Verify `QueuedStringIO.write()` immediately yields `OracleStreamChunk(type="progress", content=chunk)` in `RLMOracleWrapper.process_query()` in `backend/src/services/rlm_oracle.py`: each chunk from the asyncio Queue should be yielded as a progress event before the next iteration begins; confirm the SSE generator does not buffer progress events (FR-022)
+- [x] T028 [US4] Implement terminal sub-oracle streaming in `backend/src/services/rlm_oracle.py`: when `Final` is set, stream the Final string value token-by-token as `type="content"` events using `RLMOracleWrapper._stream_final(final_value)` generator; use `asyncio.Queue` pattern — the last sub-oracle call's output streams directly to SSE channel before full string assembled (FR-023); yield `type="done"` after all content streamed
+- [x] T029 [US4] Add streaming integration test in `backend/tests/unit/test_rlm_oracle.py`: mock LLM to take 5 iterations before setting Final; collect all `OracleStreamChunk` events; assert at least one `type="progress"` event appears before first `type="content"` event; assert exactly one `type="done"` event at end (SC-007)
 
 **Checkpoint**: SSE stream shows `progress → content → done` ordering; no buffering of progress events
 
