@@ -30,6 +30,7 @@ dependencies = [
     "tavily-python>=0.5.0",
     "watchdog>=4.0.0",
     "ddgs>=9.10.0",
+    "RestrictedPython>=8.0",
 ]
 
 [dependency-groups]
