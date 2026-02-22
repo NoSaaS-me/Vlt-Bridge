@@ -287,7 +287,8 @@ def register_code_tools(mcp) -> None:
             project_id: Project identifier slug.
 
         Returns:
-            {status, indexed, job_status, progress_percent, stats, error_message}
+            {status, indexed, active_job: {job_id, status, progress_percent,
+            files_processed, files_total, chunks_created, error_message} | null, stats}
         """
         from vlt.mcp import _ok, _err
         from vlt.core.service import SqliteVaultService, VaultError

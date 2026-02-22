@@ -112,14 +112,14 @@
 
 **Purpose**: Remove all BT artifacts after new implementation is verified. Do NOT start this phase until Phases 3–6 are complete and all tests pass.
 
-- [ ] T030 Run full test suite `uv run pytest backend/tests/ -v` and confirm all tests pass before deletion
-- [ ] T031 Delete `backend/src/bt/` directory entirely (SC-008: "no BT imports remaining in any non-test file")
-- [ ] T032 [P] Delete `backend/src/models/signals.py`
-- [ ] T033 [P] Delete `backend/src/services/signal_parser.py`
-- [ ] T034 [P] Delete `backend/src/services/query_classifier.py`
-- [ ] T035 [P] Delete `backend/src/services/prompt_composer.py`
-- [ ] T036 Verify no BT imports remain: `grep -r "from.*bt\." backend/src/ --include="*.py" | grep -v test` must return empty; `grep -r "import.*bt\." backend/src/ --include="*.py" | grep -v test` must return empty (SC-008)
-- [ ] T037 Run full test suite again: `uv run pytest backend/tests/ -v` — all must pass with BT deleted (SC-006)
+- [x] T030 Run full test suite `uv run pytest backend/tests/ -v` and confirm all tests pass before deletion
+- [x] T031 Delete `backend/src/bt/` directory entirely (SC-008: "no BT imports remaining in any non-test file")
+- [x] T032 [P] Delete `backend/src/models/signals.py`
+- [x] T033 [P] Delete `backend/src/services/signal_parser.py`
+- [x] T034 [P] Delete `backend/src/services/query_classifier.py`
+- [x] T035 [P] Delete `backend/src/services/prompt_composer.py`
+- [x] T036 Verify no BT imports remain: `grep -r "from.*bt\." backend/src/ --include="*.py" | grep -v test` must return empty; `grep -r "import.*bt\." backend/src/ --include="*.py" | grep -v test` must return empty (SC-008)
+- [x] T037 Run full test suite again: `uv run pytest backend/tests/ -v` — all must pass with BT deleted (SC-006)
 
 **Checkpoint**: `bt/` directory gone; grep confirms zero BT imports; all tests green
 

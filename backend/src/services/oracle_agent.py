@@ -1,21 +1,8 @@
 """Oracle Agent - Main AI agent with tool calling (009-oracle-agent).
 
-DEPRECATED: This module is replaced by OracleBTWrapper (020-bt-oracle-agent).
-The BT-controlled Oracle uses the behavior tree runtime for execution control,
-with LLM calls routed through OpenRouterClient.
-
-To use the new implementation:
-    from backend.src.bt.wrappers import OracleBTWrapper
-
-    wrapper = OracleBTWrapper(
-        user_id="user-id",
-        api_key="openrouter-api-key",
-        project_id="project-id",
-        model="deepseek/deepseek-chat",
-    )
-
-    async for chunk in wrapper.process_query(query="Hello", context_id=None):
-        print(chunk.type, chunk.content)
+DEPRECATED: This module is replaced by RLMOracleWrapper (022-rlm-oracle).
+The RLM Oracle uses a Python REPL harness for codebase exploration.
+See: backend/src/services/rlm_oracle.py
 
 This legacy implementation is kept for reference but is no longer used.
 

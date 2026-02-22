@@ -595,10 +595,10 @@ async for chunk in wrapper.process_query(query="Hello", context_id=None):
 | `backend/src/prompts/oracle/*.md` | Prompt segment templates |
 
 ## Recent Changes
+- 022-rlm-oracle: Added Python 3.11+ (backend only; no frontend changes)
 - 018-vlt-mcp-server: Added vlt-mcp unified MCP server (`packages/vlt-cli/src/vlt/mcp/`) with 17 tools across 5 modules (thread_tools, meta_tools, code_tools, oracle_tools, vault_tools); Oracle toggle backend route (`/api/settings/oracle`); Oracle tab in Settings.tsx; 164ms cold-start via STDIO; registered as user-scope MCP in Claude Code
 - 020-bt-oracle-agent: Added Python 3.11+ (backend), TypeScript 5.x (frontend - no changes) + FastAPI, Pydantic, lupa (Lua), existing BT runtime (019)
-- 015-oracle-plugin-system: Added Python 3.11+ (backend), TypeScript 5.x (frontend)
 
 ## Active Technologies
-- Python 3.11+ (vlt-cli), TypeScript 5.x + React 19 (frontend) (018-vlt-mcp-server)
-- FastMCP 3.0+ (packages/vlt-cli), STDIO transport, user-scope `vlt` MCP registered via `claude mcp add --scope user`
+- Python 3.11+ (backend only; no frontend changes) (022-rlm-oracle)
+- No new persistence. Ephemeral `RLMSession` per query. `OracleBridge` (existing) handles conversation history via existing `context_nodes` table. (022-rlm-oracle)

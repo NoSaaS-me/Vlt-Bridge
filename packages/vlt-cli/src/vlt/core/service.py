@@ -99,17 +99,31 @@ class SqliteVaultService(IVaultService):
 
     def __init__(self, db: Session = None):
         self._db = db
+        self._owns_session = False
 
     @property
     def db(self) -> Session:
         if self._db is None:
-            self._db = next(get_db())
+            from vlt.db import SessionLocal
+            self._db = SessionLocal()
+            self._owns_session = True
         return self._db
-        
+
+    def close(self):
+        """Return the session to the connection pool."""
+        if self._owns_session and self._db is not None:
+            self._db.close()
+            self._db = None
+            self._owns_session = False
+
     def __del__(self):
-        # Optional cleanup if we created the session
-        # Realistically, for a CLI tool, process exit cleans up.
-        pass
+        self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
     def create_project(self, name: str, description: str, project_id: str = None) -> Project:
         try:
