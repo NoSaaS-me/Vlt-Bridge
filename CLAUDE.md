@@ -542,27 +542,30 @@ System messages appear in ChatPanel with distinct styling:
 
 Users can toggle non-core subscribers via Settings > Notifications tab. Core subscribers (marked `core = true`) cannot be disabled. Settings stored in `user_settings.disabled_subscribers_json`.
 
-## BT Oracle (020-bt-oracle-agent)
+## RLM Oracle (022-rlm-oracle)
 
-The Oracle now uses Behavior Tree-controlled execution exclusively (full cutover complete):
-- **XML Signal Protocol**: Agent emits structured self-reflection signals (`need_turn`, `context_sufficient`, `stuck`, etc.)
-- **Query Classification**: Automatic categorization (code/documentation/research/conversational/action)
-- **Dynamic Prompt Composition**: Context-aware prompt assembly from segments
-- **Budget Enforcement**: Turn limits and loop detection via BT conditions
-- **OpenRouterClient**: HTTP client implementing LLMClientProtocol for BT.llm_call nodes
+The Oracle uses a REPL-centric inference harness. The LLM is given a Python environment where the entire project lives as variables (`project`, `sub_oracle`, `Final`). It writes code to explore and synthesize answers programmatically.
+
+**Before (BT Oracle)**: Query classifier → prompt composer → BT XML signals → multi-turn loop
+**After (RLM Oracle)**: REPL environment → LLM writes Python → `Final` variable terminates loop
+
+- **REPLExecutor**: RestrictedPython sandbox with 30s timeout; approved modules (`re`, `json`, `math`, `datetime`, `collections`, `itertools`); `Final` sentinel detection
+- **ProjectContext**: Exposes project files, threads, notes as Python objects in REPL namespace
+- **SubOracleCallable**: Recursive sub-oracle calls (max depth 2, max 3 calls per root session)
+- **Streaming**: `progress` chunks carry REPL stdout; `content` chunks carry the Final answer; `done` chunk carries `metadata["iteration_count"]`
 
 ### Architecture
 
-The Oracle API routes (`/api/oracle` and `/api/oracle/stream`) use `OracleBTWrapper`:
+The Oracle API routes (`/api/oracle` and `/api/oracle/stream`) use `RLMOracleWrapper`:
 
 ```python
-from backend.src.bt.wrappers import OracleBTWrapper
+from backend.src.services.rlm_oracle import RLMOracleWrapper
 
-wrapper = OracleBTWrapper(
+wrapper = RLMOracleWrapper(
     user_id="user-id",
     api_key="openrouter-api-key",
     project_id="project-id",
-    model="deepseek/deepseek-chat",
+    model="deepseek/deepseek-chat-v3-0324",
     max_tokens=4096,
 )
 
@@ -574,31 +577,24 @@ async for chunk in wrapper.process_query(query="Hello", context_id=None):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ORACLE_MAX_TURNS` | `30` | Max iterations per query |
-| `ORACLE_PROMPT_BUDGET` | `8000` | Token limit for system prompt |
-| `ORACLE_ITERATION_WARNING_THRESHOLD` | `0.70` | Warn at this % of max turns |
-| `ORACLE_TOKEN_WARNING_THRESHOLD` | `0.80` | Warn at this % of token budget |
-| `ORACLE_LOOP_THRESHOLD` | `3` | Consecutive same-reason signals for stuck detection |
+| `ORACLE_MAX_TURNS` | `25` | Max REPL iterations per root session |
+| `ORACLE_SUB_MAX_TURNS` | `8` | Max iterations per sub-oracle session |
 
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `backend/src/models/signals.py` | Signal types and field schemas |
-| `backend/src/services/signal_parser.py` | XML signal extraction from LLM responses |
-| `backend/src/services/query_classifier.py` | Query type classification |
-| `backend/src/services/prompt_composer.py` | Dynamic prompt assembly |
-| `backend/src/bt/services/openrouter_client.py` | OpenRouter HTTP client for BT.llm_call |
-| `backend/src/bt/wrappers/oracle_wrapper.py` | BT-controlled Oracle wrapper |
-| `backend/src/bt/nodes/llm.py` | LLMCallNode for BT runtime |
-| `backend/src/bt/conditions/signals.py` | BT conditions for signal evaluation |
-| `backend/src/prompts/oracle/*.md` | Prompt segment templates |
+| `backend/src/services/rlm_oracle.py` | RLMOracleWrapper, RLMSession, RLMPromptBuilder, SubOracleCallable |
+| `backend/src/services/project_context.py` | ProjectContext, TextHandle, FileManifest |
+| `backend/src/services/repl_executor.py` | REPLExecutor, REPLNamespace (RestrictedPython sandbox) |
+| `backend/src/services/openrouter_client.py` | OpenRouter HTTP client (moved from bt/services/) |
+| `backend/src/api/routes/oracle.py` | Oracle API routes (updated to use RLMOracleWrapper) |
 
 ## Recent Changes
-- 022-rlm-oracle: Added Python 3.11+ (backend only; no frontend changes)
+- 022-rlm-oracle: Replaced BT Oracle with RLM Oracle harness; LLM writes Python in REPL with `project`/`sub_oracle`/`Final` namespace; deleted entire `backend/src/bt/` directory; added `REPLExecutor` (RestrictedPython), `ProjectContext` (file/thread/note handles), `RLMOracleWrapper`; Go symbol extraction + `end_line` field in CodeRAG repomap
 - 018-vlt-mcp-server: Added vlt-mcp unified MCP server (`packages/vlt-cli/src/vlt/mcp/`) with 17 tools across 5 modules (thread_tools, meta_tools, code_tools, oracle_tools, vault_tools); Oracle toggle backend route (`/api/settings/oracle`); Oracle tab in Settings.tsx; 164ms cold-start via STDIO; registered as user-scope MCP in Claude Code
-- 020-bt-oracle-agent: Added Python 3.11+ (backend), TypeScript 5.x (frontend - no changes) + FastAPI, Pydantic, lupa (Lua), existing BT runtime (019)
 
 ## Active Technologies
 - Python 3.11+ (backend only; no frontend changes) (022-rlm-oracle)
+- RestrictedPython>=8.0 for REPL sandbox (022-rlm-oracle)
 - No new persistence. Ephemeral `RLMSession` per query. `OracleBridge` (existing) handles conversation history via existing `context_nodes` table. (022-rlm-oracle)

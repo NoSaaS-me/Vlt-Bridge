@@ -127,11 +127,11 @@
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T038 [P] Add `end_line` field to `Symbol` dataclass in `packages/vlt-cli/src/vlt/core/coderag/repomap.py` using `node.end_point[0] + 1` from tree-sitter (enables accurate `TextHandle.chunks()` splitting)
-- [ ] T039 [P] Implement `_extract_go_symbols()` in `packages/vlt-cli/src/vlt/core/coderag/repomap.py` following the Python extraction pattern: handle `function_declaration`, `method_declaration`, `type_declaration`; return `List[Symbol]` with name, qualified_name, lineno, end_line, signature
-- [ ] T040 Run quickstart.md validation: execute each scenario in `specs/022-rlm-oracle/quickstart.md` and verify expected behavior (synthesis query, focused query, SSE stream ordering, BT grep check)
-- [ ] T041 [P] Update `CLAUDE.md` `## Active Technologies` section: replace BT Oracle entry with RLM Oracle entry; update `## Recent Changes` with 022-rlm-oracle summary
-- [ ] T042 [P] Update `backend/CLAUDE.md` (if it exists) or add RLM architecture note to `CLAUDE.md` `## BT Oracle` section: replace with RLM Oracle description, key files, environment variables
+- [x] T038 [P] Add `end_line` field to `Symbol` dataclass in `packages/vlt-cli/src/vlt/core/coderag/repomap.py` using `node.end_point[0] + 1` from tree-sitter (enables accurate `TextHandle.chunks()` splitting)
+- [x] T039 [P] Implement `_extract_go_symbols()` in `packages/vlt-cli/src/vlt/core/coderag/repomap.py` following the Python extraction pattern: handle `function_declaration`, `method_declaration`, `type_declaration`; return `List[Symbol]` with name, qualified_name, lineno, end_line, signature
+- [x] T040 Run quickstart.md validation: execute each scenario in `specs/022-rlm-oracle/quickstart.md` and verify expected behavior (synthesis query, focused query, SSE stream ordering, BT grep check)
+- [x] T041 [P] Update `CLAUDE.md` `## Active Technologies` section: replace BT Oracle entry with RLM Oracle entry; update `## Recent Changes` with 022-rlm-oracle summary
+- [x] T042 [P] Update `backend/CLAUDE.md` (if it exists) or add RLM architecture note to `CLAUDE.md` `## BT Oracle` section: replace with RLM Oracle description, key files, environment variables
 
 **Checkpoint**: All quickstart scenarios pass; CLAUDE.md reflects new architecture; Go symbol extraction works
 
