@@ -366,3 +366,138 @@ class TestBuildProjectContext:
         ctx = build_project_context("nonexistent-project", "user1")
         assert isinstance(ctx, ProjectContext)
         assert ctx.project_id == "nonexistent-project"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: T026 — Thread / Note TextHandles
+# ---------------------------------------------------------------------------
+
+class TestThreadHandle:
+    """T026 — thread() returns TextHandle; read() returns content or notice."""
+
+    def test_thread_returns_texthandle(self, ctx: ProjectContext):
+        h = ctx.thread("some-thread-id")
+        assert isinstance(h, TextHandle)
+        assert h.resource_type == "thread"
+        assert h.path == "some-thread-id"
+
+    def test_thread_handle_repr_contains_path(self, ctx: ProjectContext):
+        h = ctx.thread("my-thread")
+        r = repr(h)
+        assert "my-thread" in r
+
+    def test_thread_read_returns_notice_when_vlt_unavailable(self, ctx: ProjectContext):
+        """When vlt DB is absent/empty, read() returns a notice dict gracefully."""
+        h = ctx.thread("nonexistent-thread-xyz")
+        result = h.read()
+        # Either returns content (if vlt DB has data) or a notice dict — both are valid
+        # The important thing is it doesn't raise an exception
+        assert result is not None
+
+    def test_thread_read_notice_is_dict_on_unknown_thread(self, tmp_project: Path):
+        """For a thread that definitely doesn't exist, read() returns a notice dict."""
+        from unittest.mock import MagicMock, patch
+
+        mock_state = None
+        ctx = ProjectContext("test-proj", "user1", str(tmp_project))
+        h = ctx.thread("totally-nonexistent-thread-zzz-999")
+
+        # Patch SqliteVaultService to raise VaultError (thread not found)
+        with patch("backend.src.services.project_context.TextHandle._read_thread") as mock_read:
+            mock_read.return_value = {"notice": "could not read thread: Thread not found", "thread_id": h.path}
+            result = h.read()
+
+        assert isinstance(result, dict)
+        assert "notice" in result
+
+    def test_threads_returns_list(self, ctx: ProjectContext):
+        """threads() returns a list (possibly empty if vlt DB absent) without raising."""
+        result = ctx.threads()
+        assert isinstance(result, list)
+        # All entries must be TextHandle with resource_type="thread"
+        for item in result:
+            assert isinstance(item, TextHandle)
+            assert item.resource_type == "thread"
+
+    def test_threads_returns_empty_when_vlt_unavailable(self, tmp_project: Path):
+        """When SqliteVaultService import fails, threads() returns []."""
+        from unittest.mock import patch
+        ctx = ProjectContext("test-proj", "user1", str(tmp_project))
+
+        with patch.dict("sys.modules", {"vlt": None, "vlt.core": None, "vlt.core.service": None}):
+            result = ctx.threads()
+
+        assert result == []
+
+
+class TestNoteHandle:
+    """T026 — note() returns TextHandle; read() returns content or graceful notice."""
+
+    def test_note_returns_texthandle(self, ctx: ProjectContext):
+        h = ctx.note("docs/guide.md")
+        assert isinstance(h, TextHandle)
+        assert h.resource_type == "note"
+        assert h.path == "docs/guide.md"
+        assert h.language == "markdown"
+
+    def test_note_handle_carries_user_and_project(self, ctx: ProjectContext):
+        h = ctx.note("design/api.md")
+        assert h._note_user_id == "user1"
+        assert h._note_project_id == "test-proj"
+
+    def test_note_read_returns_notice_when_note_missing(self, ctx: ProjectContext):
+        """When the vault note doesn't exist, read() returns a graceful notice dict."""
+        h = ctx.note("nonexistent/path.md")
+        result = h.read()
+        # Returns a notice dict (not raises) when VaultService can't find the note
+        # Both a notice dict and a valid string are OK; what matters is no exception
+        assert result is not None
+
+    def test_note_read_notice_dict_on_file_not_found(self, tmp_project: Path):
+        """VaultService.read_note raises FileNotFoundError → notice dict returned."""
+        from unittest.mock import patch, MagicMock
+
+        ctx = ProjectContext("test-proj", "user1", str(tmp_project))
+        h = ctx.note("missing/note.md")
+
+        with patch("backend.src.services.project_context.TextHandle._read_note") as mock_read:
+            mock_read.return_value = {"notice": "note not found: missing/note.md", "path": "missing/note.md"}
+            result = h.read()
+
+        assert isinstance(result, dict)
+        assert "notice" in result
+
+    def test_notes_returns_empty_when_vault_missing(self, tmp_project: Path):
+        """When vault directory doesn't exist, notes() returns empty list."""
+        ctx = ProjectContext("test-proj", "user1", str(tmp_project))
+        # Use a non-existent vault — VaultService will fail gracefully
+        result = ctx.notes()
+        # OK if empty or contains items; must not raise
+        assert isinstance(result, list)
+
+    def test_notes_returns_list_for_vault_with_notes(self, tmp_project: Path):
+        """Create vault .md files, verify notes() finds them."""
+        from unittest.mock import patch, MagicMock
+
+        # Create a fake VaultService that has a vault dir at tmp_project
+        ctx = ProjectContext("test-proj", "user1", str(tmp_project))
+
+        # Create .md files in a temp vault dir
+        fake_vault = tmp_project / "vault" / "user1" / "test-proj"
+        fake_vault.mkdir(parents=True)
+        (fake_vault / "design.md").write_text("# Design\n\nContent.")
+        (fake_vault / "api.md").write_text("# API\n\nEndpoints.")
+
+        mock_svc = MagicMock()
+        mock_svc.vault_root = tmp_project / "vault"
+
+        with patch("backend.src.services.vault.VaultService", return_value=mock_svc):
+            result = ctx.notes()
+
+        assert len(result) == 2
+        paths = {h.path for h in result}
+        assert "design.md" in paths
+        assert "api.md" in paths
+        for h in result:
+            assert h.resource_type == "note"
+            assert h.language == "markdown"

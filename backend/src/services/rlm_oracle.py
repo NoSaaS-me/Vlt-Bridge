@@ -200,10 +200,12 @@ Where answer is: str, dict, list, or any Python literal.
 2. Read relevant files
 3. `Final = {{"root_cause": "...", "affected_files": [...]}}`
 
-### History / rationale (why we did X)
-1. `project.threads()` → read relevant threads
-2. `project.notes()` → read vault documentation
-3. `Final = {{"rationale": "...", "source_thread": "..."}}`
+### Project history / decision reconstruction (why we did X)
+1. **Threads first**: `threads = project.threads()` → scan `repr(t)` to find relevant ones → `t.read()` for each
+2. **Then code**: `project.search(query)` for implementation evidence
+3. **Then notes**: `notes = project.notes()` → scan for documentation
+4. Synthesize: cite specific thread IDs and node sequences
+5. `Final = {{"rationale": "...", "source_thread": "...", "supporting_code": "..."}}`
 
 ### Large document analysis (>50KB)
 1. `chunks = handle.chunks(200)`

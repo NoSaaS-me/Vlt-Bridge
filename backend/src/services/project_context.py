@@ -212,17 +212,19 @@ class SymbolInfo:
 class TextHandle:
     """Lazy reference to a text resource — file, thread, or note.
 
-    Content is not loaded until .read() is called.  Thread and note
-    resource types are reserved for Phase 5 (T022-T023).
+    Content is not loaded until .read() is called.
     """
 
-    path: str               # Relative path (files) or ID (threads/notes)
+    path: str               # Relative path (files), thread_id (threads), or note path
     size_bytes: int         # 0 if unknown
     language: Optional[str]
     resource_type: str = "file"   # "file" | "thread" | "note" | "chunk"
     _project_root: Optional[str] = field(default=None, repr=False)
     _chunk_start: Optional[int] = field(default=None, repr=False)
     _chunk_end: Optional[int] = field(default=None, repr=False)
+    # Phase 5: for note handles (user/project context needed to read vault notes)
+    _note_user_id: Optional[str] = field(default=None, repr=False)
+    _note_project_id: Optional[str] = field(default=None, repr=False)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -245,16 +247,80 @@ class TextHandle:
     # Public API
     # ------------------------------------------------------------------
 
-    def read(self, start_line: Optional[int] = None, end_line: Optional[int] = None) -> "str | dict":
-        """Return file content as a string, or an error dict for binary/large files.
+    # ------------------------------------------------------------------
+    # Thread read (T022)
+    # ------------------------------------------------------------------
 
-        Args:
+    def _read_thread(self) -> "str | dict":
+        """Read a vlt reasoning thread via SqliteVaultService."""
+        try:
+            from vlt.core.service import SqliteVaultService  # type: ignore
+            with SqliteVaultService() as svc:
+                state = svc.get_thread_state(self.path, limit=50)
+            lines = [
+                f"# Thread: {state.thread_id}",
+                f"Project: {state.project_id}",
+                "",
+                f"Summary: {state.summary}",
+                "",
+                "## Nodes",
+            ]
+            for node in state.recent_nodes:
+                ts = node.timestamp.strftime("%Y-%m-%d %H:%M") if node.timestamp else "?"
+                lines.append(f"\n[{node.sequence_id}] {node.author} ({ts}):")
+                lines.append(node.content)
+            return "\n".join(lines)
+        except ImportError:
+            return {"notice": "vlt not available — cannot read thread", "thread_id": self.path}
+        except Exception as exc:
+            logger.debug("TextHandle._read_thread() failed for %s: %s", self.path, exc)
+            return {"notice": f"could not read thread: {exc}", "thread_id": self.path}
+
+    # ------------------------------------------------------------------
+    # Note read (T023)
+    # ------------------------------------------------------------------
+
+    def _read_note(self) -> "str | dict":
+        """Read a vault Markdown note via VaultService."""
+        try:
+            from .vault import VaultService  # type: ignore
+            svc = VaultService()
+            note_data = svc.read_note(
+                user_id=self._note_user_id or "local-dev",
+                note_path=self.path,
+                project_id=self._note_project_id or "default",
+            )
+            body = note_data.get("body") or note_data.get("content") or ""
+            title = note_data.get("title", "")
+            header = f"# {title}\n\n" if title else ""
+            return header + body
+        except FileNotFoundError:
+            return {"notice": f"note not found: {self.path}", "path": self.path}
+        except Exception as exc:
+            logger.debug("TextHandle._read_note() failed for %s: %s", self.path, exc)
+            return {"notice": f"Document-MCP backend not running or note unavailable: {exc}", "path": self.path}
+
+    # ------------------------------------------------------------------
+    # Unified read
+    # ------------------------------------------------------------------
+
+    def read(self, start_line: Optional[int] = None, end_line: Optional[int] = None) -> "str | dict":
+        """Return resource content as a string, or an error dict on failure.
+
+        For files/chunks:
             start_line: 1-indexed start (inclusive).  None means from the top.
             end_line:   1-indexed end (inclusive).    None means to the bottom.
+
+        For threads/notes:
+            Line arguments are ignored; the full content is returned.
 
         Returns:
             str on success; dict with "notice" key on failure.
         """
+        if self.resource_type == "thread":
+            return self._read_thread()
+        if self.resource_type == "note":
+            return self._read_note()
         if self.resource_type not in ("file", "chunk"):
             return {"notice": f"read() not supported for resource_type={self.resource_type!r}"}
 
@@ -428,6 +494,10 @@ class TextHandle:
     def __repr__(self) -> str:
         if self.resource_type == "chunk":
             content_desc = f"lines {self._chunk_start}-{self._chunk_end}"
+        elif self.resource_type == "thread":
+            content_desc = "thread"
+        elif self.resource_type == "note":
+            content_desc = f"{self.size_bytes}B, note"
         else:
             content_desc = f"{self.size_bytes}B"
         lang = f", {self.language}" if self.language else ""
@@ -637,6 +707,104 @@ class ProjectContext:
                 logger.debug("ProjectContext.grep() skip %s: %s", entry.path, exc)
 
         return results
+
+    # ------------------------------------------------------------------
+    # Thread access (T022 / T024)
+    # ------------------------------------------------------------------
+
+    def thread(self, thread_id: str) -> TextHandle:
+        """Return a lazy TextHandle for a vlt reasoning thread.
+
+        Content is loaded from the vlt SQLite DB when .read() is called.
+        Returns a handle even if the thread doesn't exist — errors surface
+        only in .read().
+        """
+        return TextHandle(
+            path=thread_id,
+            size_bytes=0,
+            language=None,
+            resource_type="thread",
+        )
+
+    def threads(self, project_id: Optional[str] = None) -> "list[TextHandle]":
+        """Return TextHandles for all vlt threads in *project_id*.
+
+        Falls back to self.project_id when project_id is None.
+        Returns [] on any error (vlt DB unavailable, project not found, etc.).
+        """
+        target_project = project_id or self.project_id
+        try:
+            from vlt.core.service import SqliteVaultService  # type: ignore
+            with SqliteVaultService() as svc:
+                thread_list = svc.list_threads(target_project)
+            return [
+                TextHandle(path=t.id, size_bytes=0, language=None, resource_type="thread")
+                for t in thread_list
+            ]
+        except ImportError:
+            logger.debug("vlt not available — cannot list threads")
+            return []
+        except Exception as exc:
+            logger.debug("ProjectContext.threads() failed for project=%s: %s", target_project, exc)
+            return []
+
+    # ------------------------------------------------------------------
+    # Note access (T023 / T024)
+    # ------------------------------------------------------------------
+
+    def note(self, path: str) -> TextHandle:
+        """Return a lazy TextHandle for a vault Markdown note at *path*.
+
+        Content is loaded from Document-MCP vault when .read() is called.
+        Returns a handle even if the note doesn't exist — errors surface
+        only in .read().
+        """
+        full_path = Path(self.project_path) / path if not Path(path).is_absolute() else Path(path)
+        size_bytes = 0
+        try:
+            size_bytes = full_path.stat().st_size
+        except (OSError, ValueError):
+            pass
+        return TextHandle(
+            path=path,
+            size_bytes=size_bytes,
+            language="markdown",
+            resource_type="note",
+            _note_user_id=self.user_id,
+            _note_project_id=self.project_id,
+        )
+
+    def notes(self) -> "list[TextHandle]":
+        """Return TextHandles for all vault notes accessible to this user/project.
+
+        Scans the vault directory for .md files.  Returns [] if the vault
+        is empty or unavailable.
+        """
+        try:
+            from .vault import VaultService  # type: ignore
+            svc = VaultService()
+            vault_dir = svc.vault_root / self.user_id / self.project_id
+            if not vault_dir.exists():
+                return []
+            handles: list[TextHandle] = []
+            for md_file in sorted(vault_dir.rglob("*.md")):
+                rel = str(md_file.relative_to(vault_dir))
+                try:
+                    size = md_file.stat().st_size
+                except OSError:
+                    size = 0
+                handles.append(TextHandle(
+                    path=rel,
+                    size_bytes=size,
+                    language="markdown",
+                    resource_type="note",
+                    _note_user_id=self.user_id,
+                    _note_project_id=self.project_id,
+                ))
+            return handles
+        except Exception as exc:
+            logger.debug("ProjectContext.notes() failed: %s", exc)
+            return []
 
     # ------------------------------------------------------------------
     # Repr
