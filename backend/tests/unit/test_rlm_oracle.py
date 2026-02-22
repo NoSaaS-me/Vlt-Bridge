@@ -312,3 +312,70 @@ class TestSubOracleCallable:
         sub_oracle = self._make_sub_oracle(recursion_depth=0, call_count=3)
         with pytest.raises(RecursionDepthExceeded):
             sub_oracle("some prompt")
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: US2 — Focused Query Efficiency (T021)
+# ---------------------------------------------------------------------------
+
+class TestFocusedQueryEfficiency:
+    """T021 — focused query should complete in ≤3 iterations."""
+
+    def _make_wrapper(self, **kwargs) -> RLMOracleWrapper:
+        return RLMOracleWrapper(
+            user_id="test-user",
+            api_key="test-key",
+            project_id="test-project",
+            model="test/model",
+            max_tokens=512,
+            **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_focused_query_completes_in_few_iterations(self):
+        """Mock LLM returns Final on 2nd iteration; done chunk must have iteration_count <= 3."""
+        ctx_mock = _make_project_context_mock()
+        call_count = 0
+
+        async def _complete_side_effect(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First iteration: print something (simulate a search result), no Final yet
+                return {"content": "```python\nresults = project.search('foo')\nprint(results)\n```", "usage": {}}
+            # Second iteration: set Final
+            return {"content": "```python\nFinal = 'The function is in services/foo.py'\n```", "usage": {}}
+
+        llm_mock = AsyncMock()
+        llm_mock.complete = AsyncMock(side_effect=_complete_side_effect)
+
+        with patch(PATCH_LLM, return_value=llm_mock), \
+             patch(PATCH_CTX, return_value=ctx_mock):
+            wrapper = self._make_wrapper()
+            chunks = await _collect_chunks(wrapper, "Where is the foo function defined?")
+
+        done_chunks = [c for c in chunks if c.type == "done"]
+        assert len(done_chunks) == 1
+
+        done_chunk = done_chunks[0]
+        iteration_count = (done_chunk.metadata or {}).get("iteration_count")
+        assert iteration_count is not None, "done chunk must carry iteration_count in metadata"
+        assert iteration_count <= 3, f"Focused query took {iteration_count} iterations, expected ≤3"
+
+    @pytest.mark.asyncio
+    async def test_done_chunk_always_carries_iteration_count(self):
+        """iteration_count must be present in done chunk metadata for all termination paths."""
+        ctx_mock = _make_project_context_mock()
+        # Direct Final on first iteration
+        llm_mock = _make_llm_mock("```python\nFinal = 'quick answer'\n```")
+
+        with patch(PATCH_LLM, return_value=llm_mock), \
+             patch(PATCH_CTX, return_value=ctx_mock):
+            wrapper = self._make_wrapper()
+            chunks = await _collect_chunks(wrapper, "Quick question")
+
+        done_chunk = next((c for c in chunks if c.type == "done"), None)
+        assert done_chunk is not None
+        assert "iteration_count" in (done_chunk.metadata or {}), \
+            "iteration_count must always be in done chunk metadata"
+        assert (done_chunk.metadata or {})["iteration_count"] >= 1

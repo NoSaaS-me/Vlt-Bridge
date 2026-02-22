@@ -70,9 +70,9 @@
 
 **Independent Test**: POST `/api/oracle` with `"question": "What does vlt_code_lookup return when no index exists?"` completes in <20s and ≤3 iterations logged.
 
-- [ ] T019 [US2] Implement task-specific guidance routing in `RLMPromptBuilder.build_system_prompt()` in `backend/src/services/rlm_oracle.py`: add 4 guidance sections (Code Search / Symbol Lookup, Architecture Understanding, Bug Analysis / Root Cause, Long Document Analysis >50KB); add explicit instruction "If the answer can be found with 1 project.search() call, do so directly — never call sub_oracle for single-file lookups"; keep total prompt under 4,000 tokens (SC-002)
-- [ ] T020 [US2] Add `iteration_count` logging to `RLMOracleWrapper.process_query()` in `backend/src/services/rlm_oracle.py`: log session_id, query, iteration_count, final status at session end (DEBUG level); add `metadata.iteration_count` to the `type="done"` OracleStreamChunk payload so callers can observe
-- [ ] T021 [US2] Add focused-query efficiency unit test in `backend/tests/unit/test_rlm_oracle.py`: mock LLM to return Final on 2nd iteration for a focused single-file query; assert `OracleStreamChunk(type="done").metadata["iteration_count"] <= 3`
+- [x] T019 [US2] Implement task-specific guidance routing in `RLMPromptBuilder.build_system_prompt()` in `backend/src/services/rlm_oracle.py`: add 4 guidance sections (Code Search / Symbol Lookup, Architecture Understanding, Bug Analysis / Root Cause, Long Document Analysis >50KB); add explicit instruction "If the answer can be found with 1 project.search() call, do so directly — never call sub_oracle for single-file lookups"; keep total prompt under 4,000 tokens (SC-002)
+- [x] T020 [US2] Add `iteration_count` logging to `RLMOracleWrapper.process_query()` in `backend/src/services/rlm_oracle.py`: log session_id, query, iteration_count, final status at session end (DEBUG level); add `metadata.iteration_count` to the `type="done"` OracleStreamChunk payload so callers can observe
+- [x] T021 [US2] Add focused-query efficiency unit test in `backend/tests/unit/test_rlm_oracle.py`: mock LLM to return Final on 2nd iteration for a focused single-file query; assert `OracleStreamChunk(type="done").metadata["iteration_count"] <= 3`
 
 **Checkpoint**: Focused queries complete in ≤3 iterations in unit tests; `type="done"` chunk carries iteration metadata
 

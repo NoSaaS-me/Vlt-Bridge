@@ -153,7 +153,8 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
    - DO NOT rely on printed output being available next iteration
 3. **Recursion discipline** [CRITICAL]:
    - Ask: "Can I solve this with project.search/file/grep first?"
-   - sub_oracle is expensive — use for synthesizing >1KB of content
+   - **If the answer can be found with 1 `project.search()` call, do so directly — never call `sub_oracle` for single-file lookups**
+   - sub_oracle is expensive — use only for synthesizing >1KB of content across multiple sources
    - If you call sub_oracle more than 3 times, execution force-terminates
 4. **Chunking large content**: `chunks = file.chunks(200)` then iterate
 5. **Terminate decisively**: Set `Final` when you have sufficient evidence
@@ -162,7 +163,8 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 
 ## AVOID THESE PATTERNS
 
-\u274c Infinite recursion: calling sub_oracle on a small/focused question
+\u274c Calling sub_oracle when 1 project.search() call would answer the question
+\u274c Calling sub_oracle for single-file lookups — use project.file(path).read() instead
 \u274c Printing large results expecting to see them next iteration
 \u274c Hallucinating file paths — always use `project.get_manifest()` or `project.search()` first
 \u274c Over-verifying: calling sub_oracle when project.search already found the answer
@@ -657,9 +659,9 @@ class RLMOracleWrapper:
                     type="done",
                     metadata={"iteration_count": session.iteration_count},
                 )
-                logger.info(
-                    "RLM session %s completed in %d iterations",
-                    session.session_id, session.iteration_count,
+                logger.debug(
+                    "RLM session %s done: query=%r iter=%d status=%s",
+                    session.session_id, query[:80], session.iteration_count, session.status,
                 )
                 return
 
@@ -681,9 +683,9 @@ class RLMOracleWrapper:
         # Budget exhausted
         # ------------------------------------------------------------------ #
         session.status = "exhausted"
-        logger.warning(
-            "RLM session %s exhausted budget (%d iterations)",
-            session.session_id, session.iteration_count,
+        logger.debug(
+            "RLM session %s done: query=%r iter=%d status=%s",
+            session.session_id, query[:80], session.iteration_count, session.status,
         )
         partial = session.partial_result or "(No answer within iteration budget.)"
         yield OracleStreamChunk(
