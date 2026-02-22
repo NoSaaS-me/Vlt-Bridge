@@ -1,10 +1,10 @@
 """Oracle API endpoints - Multi-source intelligent context retrieval.
 
-This module provides the Oracle Agent API which uses OpenRouter function calling
-for autonomous tool execution. The Oracle can search code, read documentation,
-query development threads, and search the web to answer questions.
+This module provides the Oracle API which uses the RLM (Recursive Language Model)
+harness: the LLM writes Python code to explore the project via a restricted REPL
+and sets Final = <answer> to terminate.
 
-Updated for 020-bt-oracle-agent: Uses OracleBTWrapper with behavior tree runtime.
+Updated for 022-rlm-oracle: Uses RLMOracleWrapper (replaces OracleBTWrapper).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from ...models.oracle import (
     ConversationMessage,
     SourceReference,
 )
-from ...bt.wrappers.oracle_wrapper import OracleBTWrapper
+from ...services.rlm_oracle import RLMOracleWrapper
 from ...services.oracle_bridge import OracleBridge, OracleBridgeError
 from ...services.user_settings import UserSettingsService, get_user_settings_service
 
@@ -38,8 +38,8 @@ router = APIRouter(prefix="/api/oracle", tags=["oracle"])
 _oracle_bridge: OracleBridge | None = None
 
 # Active Oracle sessions for cancellation support
-# Maps user_id to active OracleBTWrapper instance
-_active_sessions: Dict[str, OracleBTWrapper] = {}
+# Maps user_id to active RLMOracleWrapper instance
+_active_sessions: Dict[str, RLMOracleWrapper] = {}
 
 
 def get_oracle_bridge() -> OracleBridge:
@@ -94,8 +94,8 @@ async def query_oracle(
 
         logger.debug(f"Using oracle_model={oracle_model}")
 
-        # Create OracleBTWrapper with BT runtime
-        wrapper = OracleBTWrapper(
+        # Create RLMOracleWrapper
+        wrapper = RLMOracleWrapper(
             user_id=auth.user_id,
             api_key=openrouter_api_key,
             project_id=request.project_id or "default",
@@ -202,8 +202,8 @@ async def query_oracle_stream(
 
     logger.debug(f"Stream using oracle_model={oracle_model}")
 
-    # Create OracleBTWrapper with BT runtime
-    wrapper = OracleBTWrapper(
+    # Create RLMOracleWrapper
+    wrapper = RLMOracleWrapper(
         user_id=auth.user_id,
         api_key=openrouter_api_key,
         project_id=request.project_id or "default",
@@ -215,10 +215,10 @@ async def query_oracle_stream(
     _active_sessions[auth.user_id] = wrapper
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        """Generate SSE events from OracleBTWrapper stream."""
+        """Generate SSE events from RLMOracleWrapper stream."""
         chunk_counter = 0
         try:
-            logger.info(f"Oracle BT query from user {auth.user_id}: {request.question[:100]}")
+            logger.info(f"Oracle RLM query from user {auth.user_id}: {request.question[:100]}")
 
             async for chunk in wrapper.process_query(
                 query=request.question,
