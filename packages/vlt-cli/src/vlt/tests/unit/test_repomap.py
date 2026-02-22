@@ -101,6 +101,83 @@ function validateToken(token: string): boolean {
         assert method_sym.symbol_type == 'method'
         assert method_sym.parent == "AuthService"
 
+    def test_extract_go_symbols(self):
+        """Test T039 — extracting Go functions, methods, and type declarations."""
+        source_code = '''package main
+
+type Server struct {
+    port int
+}
+
+type Handler interface {
+    Handle() error
+}
+
+func (s *Server) Run() error {
+    return nil
+}
+
+func NewServer(port int) *Server {
+    return &Server{port: port}
+}
+'''
+        from vlt.core.coderag.parser import parse_file
+        tree = parse_file(source_code, "go")
+        assert tree is not None
+
+        symbols = extract_symbols_from_ast(tree, source_code, "pkg/server.go", "go")
+
+        # Should extract 2 types, 1 method, 1 function
+        assert len(symbols) == 4
+
+        # Check struct type (maps to 'class')
+        struct_sym = next(s for s in symbols if s.name == "Server")
+        assert struct_sym.symbol_type == 'class'
+        assert "struct" in struct_sym.signature
+        assert struct_sym.qualified_name == "pkg.server.Server"
+        assert struct_sym.lineno is not None
+        assert struct_sym.end_line is not None
+        assert struct_sym.end_line >= struct_sym.lineno
+
+        # Check interface type
+        iface_sym = next(s for s in symbols if s.name == "Handler")
+        assert iface_sym.symbol_type == 'class'
+        assert "interface" in iface_sym.signature
+
+        # Check method (receiver-bound)
+        method_sym = next(s for s in symbols if s.name == "Run")
+        assert method_sym.symbol_type == 'method'
+        assert method_sym.parent == "Server"
+        assert method_sym.qualified_name == "pkg.server.Server.Run"
+        assert method_sym.end_line is not None
+
+        # Check top-level function
+        func_sym = next(s for s in symbols if s.name == "NewServer")
+        assert func_sym.symbol_type == 'function'
+        assert func_sym.qualified_name == "pkg.server.NewServer"
+        assert "NewServer" in func_sym.signature
+
+    def test_symbol_end_line_populated(self):
+        """Test T038 — Symbol.end_line is set for all extracted symbols."""
+        source_code = '''
+class Foo:
+    def bar(self):
+        pass
+
+def baz():
+    pass
+'''
+        from vlt.core.coderag.parser import parse_file
+        tree = parse_file(source_code, "python")
+        assert tree is not None
+
+        symbols = extract_symbols_from_ast(tree, source_code, "mod.py", "python")
+        assert len(symbols) >= 1
+        for sym in symbols:
+            assert sym.end_line is not None, f"{sym.qualified_name} missing end_line"
+            assert sym.lineno is not None
+            assert sym.end_line >= sym.lineno
+
 
 class TestReferenceGraph:
     """Test T032 - Reference graph construction."""
