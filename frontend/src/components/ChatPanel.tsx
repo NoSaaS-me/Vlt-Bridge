@@ -684,6 +684,16 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
                 );
                 return prev; // No state change
               }
+            } else if (chunk.type === 'progress') {
+              // RLM Oracle REPL stdout — show as thinking/exploration progress
+              updatedMsg = {
+                ...lastMsg,
+                thinking: (lastMsg.thinking || '') + (chunk.content || ''),
+              };
+              const iterLabel = chunk.metadata?.iteration
+                ? `Exploring (iteration ${chunk.metadata.iteration})...`
+                : 'Exploring...';
+              setStatusMessage(iterLabel);
             } else if (chunk.type === 'context_update') {
               // Update context window tracking (outside of message state)
               if (chunk.context_tokens !== undefined) {
@@ -698,9 +708,17 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
               const newToolCalls = lastMsg.tool_calls?.map(tc =>
                 tc.status === 'running' ? { ...tc, status: 'completed' as const } : tc
               );
+              // Extract RLM metadata (iteration_count, incomplete)
+              const iterCount = chunk.metadata?.iteration_count as number | undefined;
+              const incomplete = chunk.metadata?.incomplete as boolean | undefined;
+              if (incomplete) {
+                console.warn(`[ChatPanel] Oracle answer incomplete after ${iterCount} iterations`);
+              }
               updatedMsg = {
                 ...lastMsg,
-                model: chunk.model_used,
+                model: chunk.model_used
+                  ? `${chunk.model_used}${iterCount ? ` (${iterCount} iter)` : ''}`
+                  : lastMsg.model,
                 tool_calls: newToolCalls,
               };
               setStatusMessage('');

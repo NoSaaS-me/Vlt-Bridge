@@ -32,6 +32,94 @@ from typing import Any, AsyncGenerator, Optional
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Custom RestrictedPython policy that allows safe dunder attributes
+# ---------------------------------------------------------------------------
+
+# Dunder attributes that LLMs commonly use for introspection but are safe.
+_ALLOWED_DUNDER_ATTRS = frozenset({
+    "__name__", "__qualname__", "__module__", "__doc__",
+    "__len__", "__str__", "__repr__", "__bool__",
+    "__iter__", "__next__", "__contains__",
+    "__hash__", "__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__",
+    "__add__", "__sub__", "__mul__", "__truediv__", "__floordiv__", "__mod__",
+    "__abs__", "__neg__", "__pos__", "__invert__",
+    "__int__", "__float__", "__complex__",
+    "__enter__", "__exit__",
+    "__dict__",  # read-only introspection of dataclasses, etc.
+})
+
+
+def _make_policy():
+    """Create a custom RestrictedPython policy at import time."""
+    import ast
+    from RestrictedPython import RestrictingNodeTransformer
+    from RestrictedPython.transformer import INSPECT_ATTRIBUTES, copy_locations
+
+    class _RLMNodeTransformer(RestrictingNodeTransformer):
+        """Allow access to safe dunder attributes like __name__, __doc__.
+
+        Fully overrides visit_Attribute to relax the blanket underscore ban
+        for a curated set of safe dunder names while keeping all other
+        security transformations intact.
+        """
+
+        def visit_Attribute(self, node):
+            # Block non-allowed underscore attributes
+            if node.attr.startswith('_') and node.attr != '_':
+                if node.attr not in _ALLOWED_DUNDER_ATTRS:
+                    self.error(
+                        node,
+                        f'"{node.attr}" is an invalid attribute name because it '
+                        f'starts with "_".',
+                    )
+
+            if node.attr.endswith('__roles__'):
+                self.error(
+                    node,
+                    f'"{node.attr}" is an invalid attribute name because it ends '
+                    f'with "__roles__".',
+                )
+
+            if node.attr in INSPECT_ATTRIBUTES:
+                self.error(
+                    node,
+                    f'"{node.attr}" is a restricted name,'
+                    ' that is forbidden to access in RestrictedPython.',
+                )
+
+            # Transform reads: obj.attr → _getattr_(obj, "attr")
+            if isinstance(node.ctx, ast.Load):
+                node = self.node_contents_visit(node)
+                new_node = ast.Call(
+                    func=ast.Name('_getattr_', ast.Load()),
+                    args=[node.value, ast.Constant(node.attr)],
+                    keywords=[])
+                copy_locations(new_node, node)
+                return new_node
+
+            # Transform writes/deletes: obj.attr = val → _write_(obj).attr = val
+            elif isinstance(node.ctx, (ast.Store, ast.Del)):
+                node = self.node_contents_visit(node)
+                new_value = ast.Call(
+                    func=ast.Name('_write_', ast.Load()),
+                    args=[node.value],
+                    keywords=[])
+                copy_locations(new_value, node.value)
+                node.value = new_value
+                return node
+
+            else:
+                raise NotImplementedError(f"Unknown ctx type: {type(node.ctx)}")
+
+    return _RLMNodeTransformer
+
+
+try:
+    _RLMPolicy = _make_policy()
+except ImportError:
+    _RLMPolicy = None  # RestrictedPython not installed; will fail at execute()
+
+# ---------------------------------------------------------------------------
 # Sentinels
 # ---------------------------------------------------------------------------
 
@@ -204,11 +292,46 @@ class REPLNamespace:
         for blocked in ("__import__", "open", "eval", "exec", "compile", "globals", "locals"):
             safe_builtins_dict.pop(blocked, None)
 
-        # Provide safe getattr/hasattr that go through safer_getattr guard
-        # (blocks dunder access like __class__, __subclasses__, etc.)
+        # Dunder names that are safe to read (introspection, not jail-break)
+        _SAFE_DUNDERS = frozenset({
+            "__name__", "__qualname__", "__module__", "__doc__",
+            "__len__", "__str__", "__repr__", "__bool__",
+            "__iter__", "__next__", "__contains__",
+            "__hash__", "__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__",
+            "__add__", "__sub__", "__mul__", "__truediv__", "__floordiv__", "__mod__",
+            "__abs__", "__neg__", "__pos__", "__invert__",
+            "__int__", "__float__", "__complex__",
+            "__enter__", "__exit__",
+        })
+
+        # Dangerous dunders that enable sandbox escape
+        _BLOCKED_DUNDERS = frozenset({
+            "__subclasses__", "__bases__", "__mro__", "__class__",
+            "__init_subclass__", "__set_name__",
+            "__globals__", "__code__", "__func__",
+            "__self__", "__builtins__",
+            "__import__", "__loader__", "__spec__",
+            "__reduce__", "__reduce_ex__",
+            "__getattribute__", "__setattr__", "__delattr__",
+        })
+
+        def _guarded_getattr(obj: Any, name: str) -> Any:
+            """Attribute access guard: allows safe dunders, blocks dangerous ones."""
+            if name.startswith("_"):
+                if name in _SAFE_DUNDERS:
+                    return getattr(obj, name)
+                if name in _BLOCKED_DUNDERS:
+                    raise AttributeError(
+                        f"Access to '{name}' is restricted in the sandbox."
+                    )
+                # Other underscore names: use safer_getattr's default policy
+                return safer_getattr(obj, name)
+            return getattr(obj, name)
+
+        # Provide safe getattr/hasattr that go through our guard
         def _safe_getattr_builtin(obj: Any, name: str, *default: Any) -> Any:
             try:
-                return safer_getattr(obj, name)
+                return _guarded_getattr(obj, name)
             except AttributeError:
                 if default:
                     return default[0]
@@ -216,7 +339,7 @@ class REPLNamespace:
 
         def _safe_hasattr_builtin(obj: Any, name: str) -> bool:
             try:
-                safer_getattr(obj, name)
+                _guarded_getattr(obj, name)
                 return True
             except (AttributeError, TypeError):
                 return False
@@ -292,8 +415,8 @@ class REPLNamespace:
         # Compose globals.
         glb: dict = {
             "__builtins__": safe_builtins_dict,
-            # Attribute access guard (blocks __subclasses__ traversal, etc.).
-            "_getattr_": safer_getattr,
+            # Attribute access guard (allows safe dunders, blocks dangerous ones).
+            "_getattr_": _guarded_getattr,
             # Subscript read guard: obj[key].
             "_getitem_": _safe_getitem,
             # Write guard: obj[key]=val and obj.attr=val.
@@ -392,7 +515,13 @@ class REPLExecutor:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                byte_code = compile_restricted(code, "<rlm-repl>", "exec")
+                policy = _RLMPolicy  # Our custom policy allowing safe dunders
+                if policy is not None:
+                    byte_code = compile_restricted(
+                        code, "<rlm-repl>", "exec", policy=policy,
+                    )
+                else:
+                    byte_code = compile_restricted(code, "<rlm-repl>", "exec")
         except SyntaxError as exc:
             yield ExecutionResult(
                 success=False,

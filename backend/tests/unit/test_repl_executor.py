@@ -181,6 +181,39 @@ class TestSandboxSecurity:
         result = await _run("x = getattr(1, '__class__')")
         assert result.success is False
 
+    @pytest.mark.asyncio
+    async def test_safe_dunder_name_allowed(self):
+        """__name__ should be accessible (safe dunder)."""
+        result = await _run("Final = type([1,2,3]).__name__")
+        assert result.success is True
+        assert result.final_value == "list"
+
+    @pytest.mark.asyncio
+    async def test_safe_dunder_doc_allowed(self):
+        """__doc__ should be accessible (safe dunder)."""
+        result = await _run("Final = len.__doc__[:10]")
+        assert result.success is True
+        assert result.final_value is not None
+
+    @pytest.mark.asyncio
+    async def test_safe_dunder_len_allowed(self):
+        """__len__ should be callable (safe dunder)."""
+        result = await _run("Final = [1,2,3].__len__()")
+        assert result.success is True
+        assert result.final_value == "3"
+
+    @pytest.mark.asyncio
+    async def test_dangerous_dunder_subclasses_blocked(self):
+        """__subclasses__ must remain blocked (sandbox escape)."""
+        result = await _run("Final = type.__subclasses__(object)")
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_dangerous_dunder_globals_blocked(self):
+        """__globals__ must remain blocked (sandbox escape)."""
+        result = await _run("def f(): pass\nFinal = f.__globals__")
+        assert result.success is False
+
 
 # ---------------------------------------------------------------------------
 # Approved stdlib modules

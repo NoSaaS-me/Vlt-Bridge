@@ -116,8 +116,8 @@ async def query_oracle(
         ):
             if chunk.type == "content" and chunk.content:
                 content_parts.append(chunk.content)
-            elif chunk.type == "source" and chunk.sources:
-                sources.extend(chunk.sources)
+            elif chunk.type == "source" and chunk.source:
+                sources.append(chunk.source)
             elif chunk.type == "done":
                 # Extract metadata from done chunk if available
                 context_id = chunk.context_id
