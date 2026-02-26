@@ -117,8 +117,8 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 - `project.get_manifest()` → FileManifest (file list with sizes, languages)
 - `project.file(path)` → TextHandle (lazy file reference)
 - `project.files(pattern="**/*")` → list[TextHandle]
-- `project.search(query, limit=20)` → list[SearchMatch] (BM25/semantic)
-- `project.grep(pattern)` → list[GrepMatch] (regex across all files)
+- `project.search(query, limit=20)` → list[SearchMatch] (each has `.path`, `.snippet`, `.score`, `.line_number`)
+- `project.grep(pattern)` → list[GrepMatch] (each has `.path`, `.line_number`, `.line_content`)
 - `project.thread(thread_id)` → TextHandle (vlt reasoning thread)
 - `project.threads()` → list[TextHandle]
 - `project.note(path)` → TextHandle (vault markdown note)
@@ -126,7 +126,7 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 
 **TextHandle** supports:
 - `.read(start_line=None, end_line=None)` → str content
-- `.symbols()` → list of {{name, kind, line_number, end_line, signature}}
+- `.symbols()` → list[SymbolInfo] (each has `.name`, `.kind`, `.line_number`, `.end_line`, `.signature`)
 - `.grep(pattern)` → list[GrepMatch]
 - `.chunks(max_lines=200)` → list[TextHandle] (semantic chunks)
 - `repr(handle)` → "TextHandle(path, N lines, language)"
@@ -291,7 +291,8 @@ def _extract_code(llm_response: str) -> str:
     """Extract Python code from an LLM response.
 
     Prefers ```python ... ``` fenced blocks. Falls back to any ``` ... ```
-    block. Returns empty string if no code block found (avoids executing prose).
+    block. If no fences found, detects unfenced code by looking for Python
+    markers (Final, project., import, def, for/if with colon).
     """
     import re as _re
 
@@ -304,6 +305,43 @@ def _extract_code(llm_response: str) -> str:
     match = _re.search(r"```\w*\s*\n(.*?)```", llm_response, _re.DOTALL)
     if match:
         return match.group(1).strip()
+
+    # Unfenced code detection: if the response looks like Python code
+    # (contains REPL namespace references or common Python patterns),
+    # treat the whole response as code. This handles models like Grok
+    # that sometimes skip fencing.
+    text = llm_response.strip()
+    code_markers = (
+        "Final =", "Final=",
+        "project.", "sub_oracle(",
+        "print(", "for ", "if ",
+        "import ", "results =", "results=",
+    )
+    # Must contain at least one REPL-specific marker AND look like code
+    has_repl_marker = any(m in text for m in ("Final", "project.", "sub_oracle("))
+    has_code_marker = any(m in text for m in code_markers)
+    # Heuristic: mostly code if lines contain assignments, calls, or keywords
+    lines = text.split("\n")
+    non_empty = [ln for ln in lines if ln.strip()]
+    code_lines = sum(
+        1 for ln in non_empty
+        if ("=" in ln and not ln.strip().endswith(":"))    # assignments
+        or "(" in ln                                        # function calls
+        or ln.strip().startswith(("#", "for ", "if ", "while ", "try:",
+                                  "except", "with ", "import ", "from ",
+                                  "def ", "class ", "return "))
+    )
+    looks_like_code = len(non_empty) > 0 and code_lines / len(non_empty) > 0.4
+
+    if has_repl_marker and has_code_marker and looks_like_code:
+        # Strip at most one leading prose line (e.g., "Here is the code:")
+        # but preserve everything once code begins.
+        if lines and not ("=" in lines[0] or "(" in lines[0] or
+                          lines[0].strip().startswith(("#", "for ", "if ",
+                              "while ", "try:", "import ", "from ",
+                              "def ", "class "))):
+            return "\n".join(lines[1:]).strip()
+        return text
 
     return ""
 
@@ -618,10 +656,19 @@ class RLMOracleWrapper:
             llm_content = llm_response.get("content", "")
             session.llm_history.append({"role": "assistant", "content": llm_content})
 
+            logger.debug(
+                "RLM iter %d LLM raw (%d chars): %s",
+                session.iteration_count, len(llm_content), llm_content[:300],
+            )
+
             # ----------------------------------------------------------
             # 2. Extract code
             # ----------------------------------------------------------
             code = _extract_code(llm_content)
+            logger.debug(
+                "RLM iter %d extracted code (%d chars)",
+                session.iteration_count, len(code),
+            )
             if not code:
                 # Model returned prose without a code block.
                 # Treat as the final answer if it looks like one.
@@ -647,6 +694,13 @@ class RLMOracleWrapper:
 
             if exec_result is None:
                 continue
+
+            logger.debug(
+                "RLM iter %d REPL: has_final=%s stdout=%d error=%s",
+                session.iteration_count, exec_result.has_final,
+                exec_result.stdout_total_chars,
+                exec_result.error[:100] if exec_result.error else None,
+            )
 
             # ----------------------------------------------------------
             # 4. Stream REPL stdout as progress event (FR-022)

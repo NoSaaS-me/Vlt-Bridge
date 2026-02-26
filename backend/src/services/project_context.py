@@ -252,7 +252,7 @@ class TextHandle:
     # ------------------------------------------------------------------
 
     def _read_thread(self) -> "str | dict":
-        """Read a vlt reasoning thread via SqliteVaultService."""
+        """Read a vlt reasoning thread via SqliteVaultService or CLI fallback."""
         try:
             from vlt.core.service import SqliteVaultService  # type: ignore
             with SqliteVaultService() as svc:
@@ -271,9 +271,26 @@ class TextHandle:
                 lines.append(node.content)
             return "\n".join(lines)
         except ImportError:
-            return {"notice": "vlt not available — cannot read thread", "thread_id": self.path}
+            pass  # Fall through to CLI fallback
         except Exception as exc:
-            logger.debug("TextHandle._read_thread() failed for %s: %s", self.path, exc)
+            logger.debug("TextHandle._read_thread() import failed for %s: %s", self.path, exc)
+
+        # CLI subprocess fallback
+        return self._read_thread_via_cli()
+
+    def _read_thread_via_cli(self) -> "str | dict":
+        """Read a vlt thread using ``vlt thread read`` subprocess."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["vlt", "thread", "read", self.path],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return {"notice": f"vlt thread read failed: {result.stderr.strip()}", "thread_id": self.path}
+            return result.stdout
+        except Exception as exc:
+            logger.debug("_read_thread_via_cli failed for %s: %s", self.path, exc)
             return {"notice": f"could not read thread: {exc}", "thread_id": self.path}
 
     # ------------------------------------------------------------------
@@ -730,6 +747,7 @@ class ProjectContext:
         """Return TextHandles for all vlt threads in *project_id*.
 
         Falls back to self.project_id when project_id is None.
+        Tries direct import first, falls back to ``vlt overview --json`` CLI.
         Returns [] on any error (vlt DB unavailable, project not found, etc.).
         """
         target_project = project_id or self.project_id
@@ -742,10 +760,32 @@ class ProjectContext:
                 for t in thread_list
             ]
         except ImportError:
-            logger.debug("vlt not available — cannot list threads")
-            return []
+            pass  # Fall through to CLI fallback
         except Exception as exc:
-            logger.debug("ProjectContext.threads() failed for project=%s: %s", target_project, exc)
+            logger.debug("ProjectContext.threads() import failed for project=%s: %s", target_project, exc)
+
+        # CLI subprocess fallback
+        return self._threads_via_cli(target_project)
+
+    def _threads_via_cli(self, project_id: str) -> "list[TextHandle]":
+        """List threads using ``vlt overview --json`` subprocess."""
+        import json
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["vlt", "overview", project_id, "--json"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return []
+            data = json.loads(result.stdout)
+            thread_list = data.get("active_threads", [])
+            return [
+                TextHandle(path=t["id"], size_bytes=0, language=None, resource_type="thread")
+                for t in thread_list
+            ]
+        except Exception as exc:
+            logger.debug("threads CLI fallback failed: %s", exc)
             return []
 
     # ------------------------------------------------------------------

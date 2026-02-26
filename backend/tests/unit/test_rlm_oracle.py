@@ -171,6 +171,45 @@ class TestExtractCode:
         code = _extract_code(response)
         assert code == ""
 
+    def test_extract_unfenced_code_with_repl_markers(self):
+        """Grok-style: returns raw Python without fencing."""
+        response = (
+            'results = project.search("RLM Oracle")\n'
+            "key_files = []\n"
+            "\n"
+            "for match in results:\n"
+            "    path = match.file.path\n"
+            '    key_files.append({"file": path})\n'
+            "\n"
+            'Final = {"key_files": key_files}'
+        )
+        code = _extract_code(response)
+        assert code != ""
+        assert "Final" in code
+        assert "project.search" in code
+
+    def test_extract_unfenced_with_leading_prose_stripped(self):
+        """Leading prose lines should be stripped from unfenced code."""
+        response = (
+            "Here is my code to answer the question:\n"
+            'results = project.search("auth")\n'
+            "Final = str(results)"
+        )
+        code = _extract_code(response)
+        assert code != ""
+        assert "project.search" in code
+        assert "Here is my code" not in code
+
+    def test_extract_plain_prose_not_misdetected(self):
+        """Prose with no REPL markers should still return empty."""
+        response = (
+            "The RLM Oracle is a REPL-centric inference harness.\n"
+            "It uses RestrictedPython for sandboxing.\n"
+            "The system prompt is kept under 4000 tokens."
+        )
+        code = _extract_code(response)
+        assert code == ""
+
 
 # ---------------------------------------------------------------------------
 # TestRLMOracleWrapper — mock LLM + ProjectContext

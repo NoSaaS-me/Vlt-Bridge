@@ -204,11 +204,29 @@ class REPLNamespace:
         for blocked in ("__import__", "open", "eval", "exec", "compile", "globals", "locals"):
             safe_builtins_dict.pop(blocked, None)
 
+        # Provide safe getattr/hasattr that go through safer_getattr guard
+        # (blocks dunder access like __class__, __subclasses__, etc.)
+        def _safe_getattr_builtin(obj: Any, name: str, *default: Any) -> Any:
+            try:
+                return safer_getattr(obj, name)
+            except AttributeError:
+                if default:
+                    return default[0]
+                raise
+
+        def _safe_hasattr_builtin(obj: Any, name: str) -> bool:
+            try:
+                safer_getattr(obj, name)
+                return True
+            except (AttributeError, TypeError):
+                return False
+
         # RestrictedPython 8.x safe_builtins is very minimal — re-add the
         # common safe builtins that were omitted.  Deliberately excluded:
-        # getattr/hasattr (bypass safer_getattr), object/type/vars/dir
-        # (enable class hierarchy traversal / namespace inspection).
+        # object/type/vars/dir (enable class hierarchy traversal).
         _extra_safe = {
+            "getattr": _safe_getattr_builtin,
+            "hasattr": _safe_hasattr_builtin,
             "list": list,
             "dict": dict,
             "set": set,

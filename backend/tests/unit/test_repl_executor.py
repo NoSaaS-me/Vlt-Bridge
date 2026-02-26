@@ -147,6 +147,26 @@ class TestSandboxSecurity:
         result = await _run("x = (1).__class__")
         assert result.success is False
 
+    @pytest.mark.asyncio
+    async def test_getattr_available(self):
+        """getattr() should work for safe attributes."""
+        result = await _run("x = getattr('hello', 'upper')\nFinal = x()")
+        assert result.success is True
+        assert result.final_value == "HELLO"
+
+    @pytest.mark.asyncio
+    async def test_hasattr_available(self):
+        """hasattr() should work for safe attributes."""
+        result = await _run("Final = str(hasattr('hello', 'upper'))")
+        assert result.success is True
+        assert result.final_value == "True"
+
+    @pytest.mark.asyncio
+    async def test_getattr_blocks_dunder(self):
+        """getattr() must still block dunder access."""
+        result = await _run("x = getattr(1, '__class__')")
+        assert result.success is False
+
 
 # ---------------------------------------------------------------------------
 # Approved stdlib modules
