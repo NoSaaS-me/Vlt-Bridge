@@ -149,6 +149,51 @@ class TestRLMPromptBuilder:
         msg = self.builder.build_initial_user_message(query, "10 files, 20KB. Languages: python:10")
         assert query in msg
 
+    def test_budget_warning_at_80_percent(self):
+        """Budget warning appears when 80%+ iterations used."""
+        msg = self.builder.build_iteration_message(
+            stdout_full="some output",
+            stdout_total_chars=11,
+            error=None,
+            iteration_number=20,
+            max_iterations=25,
+        )
+        assert "BUDGET WARNING" in msg
+        assert "5 iteration(s) remaining" in msg
+
+    def test_no_budget_warning_before_80_percent(self):
+        """No warning when under 80%."""
+        msg = self.builder.build_iteration_message(
+            stdout_full="some output",
+            stdout_total_chars=11,
+            error=None,
+            iteration_number=10,
+            max_iterations=25,
+        )
+        assert "BUDGET WARNING" not in msg
+
+    def test_budget_warning_at_last_iteration(self):
+        """Warning at the very last iteration."""
+        msg = self.builder.build_iteration_message(
+            stdout_full="",
+            stdout_total_chars=0,
+            error=None,
+            iteration_number=24,
+            max_iterations=25,
+        )
+        assert "BUDGET WARNING" in msg
+        assert "1 iteration(s) remaining" in msg
+
+    def test_no_budget_warning_without_max_iterations(self):
+        """No warning when max_iterations not passed."""
+        msg = self.builder.build_iteration_message(
+            stdout_full="output",
+            stdout_total_chars=6,
+            error=None,
+            iteration_number=20,
+        )
+        assert "BUDGET WARNING" not in msg
+
 
 # ---------------------------------------------------------------------------
 # TestExtractCode
@@ -351,6 +396,14 @@ class TestSubOracleCallable:
         sub_oracle = self._make_sub_oracle(recursion_depth=0, call_count=3)
         with pytest.raises(RecursionDepthExceeded):
             sub_oracle("some prompt")
+
+    def test_extra_args_accepted_without_error(self):
+        """LLMs sometimes pass extra args; sub_oracle should accept and ignore them."""
+        sub_oracle = self._make_sub_oracle(recursion_depth=2, call_count=0)
+        # Even though it will raise RecursionDepthExceeded, the extra args should
+        # not cause a TypeError
+        with pytest.raises(RecursionDepthExceeded):
+            sub_oracle("prompt", "extra_context", model="override")
 
 
 # ---------------------------------------------------------------------------

@@ -44,7 +44,13 @@ SKIP_DIRS = {
     '.env', 'dist', 'build', '.next', '.nuxt', 'target',
     '.pytest_cache', '.mypy_cache', '.ruff_cache',
     'vendor', '.idea', '.vscode',
+    # Build / runtime artifacts
+    'egg-info', '.eggs', 'htmlcov', 'coverage',
+    '.tox', '.nox', 'site-packages',
 }
+
+# Directory name suffixes to also skip (e.g., "mypackage.egg-info")
+SKIP_DIR_SUFFIXES = {'.egg-info', '.dist-info'}
 
 # Language detection by extension
 EXTENSION_TO_LANGUAGE = {
@@ -129,25 +135,97 @@ class FileManifest:
 
 
 def build_manifest(project_path: Path) -> FileManifest:
-    """Build a FileManifest by walking the filesystem.
+    """Build a FileManifest by listing project files.
+
+    Strategy:
+        1. If inside a git repo, uses ``git ls-files`` (fast, respects .gitignore).
+        2. Falls back to ``os.walk`` with SKIP_DIRS / BINARY_EXTENSIONS filtering.
 
     Args:
         project_path: Absolute path to project root directory.
 
     Returns:
         FileManifest with all non-skipped files catalogued.
-
-    Notes:
-        - Skips SKIP_DIRS directories
-        - Marks BINARY_EXTENSIONS files as is_binary=True
-        - Truncates at MAX_MANIFEST_FILES with a log warning
-        - Catches and logs errors for individual files (keeps going)
     """
+    manifest = _try_git_manifest(project_path)
+    if manifest is not None:
+        return manifest
+    return _walk_manifest(project_path)
+
+
+def _try_git_manifest(project_path: Path) -> Optional[FileManifest]:
+    """Build manifest via ``git ls-files``. Returns None if git unavailable."""
+    import subprocess as _sp
+
+    try:
+        result = _sp.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=str(project_path),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+    except (FileNotFoundError, _sp.TimeoutExpired):
+        return None
+
+    manifest = FileManifest(root_path=str(project_path))
+    paths = [p for p in result.stdout.split("\0") if p]
+
+    for rel_path in sorted(paths):
+        if len(manifest.files) >= MAX_MANIFEST_FILES:
+            manifest.truncated = True
+            logger.warning(
+                "FileManifest truncated at %d files (git) for %s",
+                MAX_MANIFEST_FILES, project_path,
+            )
+            break
+
+        # Skip directories that SKIP_DIRS would exclude (git may include them)
+        parts = Path(rel_path).parts
+        if any(p in SKIP_DIRS for p in parts):
+            continue
+        if any(p.startswith('.') for p in parts[:-1]):  # hidden dirs, not hidden files
+            continue
+        if any(any(p.endswith(sfx) for sfx in SKIP_DIR_SUFFIXES) for p in parts):
+            continue
+
+        filepath = project_path / rel_path
+        try:
+            stat = filepath.stat()
+        except OSError:
+            continue
+
+        suffix = filepath.suffix.lower()
+        entry = FileEntry(
+            path=rel_path,
+            size_bytes=stat.st_size,
+            language=EXTENSION_TO_LANGUAGE.get(suffix),
+            last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            is_binary=(suffix in BINARY_EXTENSIONS),
+        )
+        manifest.files.append(entry)
+
+    logger.debug(
+        "FileManifest built via git ls-files: %d files for %s",
+        len(manifest.files), project_path,
+    )
+    return manifest
+
+
+def _walk_manifest(project_path: Path) -> FileManifest:
+    """Build manifest via os.walk (fallback when git unavailable)."""
     manifest = FileManifest(root_path=str(project_path))
 
     for root, dirs, files in os.walk(project_path):
         # Prune skipped directories in-place (modifies dirs for os.walk)
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('.')]
+        dirs[:] = [
+            d for d in dirs
+            if d not in SKIP_DIRS
+            and not d.startswith('.')
+            and not any(d.endswith(sfx) for sfx in SKIP_DIR_SUFFIXES)
+        ]
 
         for filename in sorted(files):
             if len(manifest.files) >= MAX_MANIFEST_FILES:
@@ -915,13 +993,33 @@ class ProjectContext:
 # Factory
 # ---------------------------------------------------------------------------
 
+def _find_git_root(start: str) -> Optional[str]:
+    """Walk up from *start* to find the git repository root."""
+    import subprocess as _sp
+    try:
+        result = _sp.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=start,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (FileNotFoundError, _sp.TimeoutExpired):
+        pass
+    return None
+
+
 def build_project_context(project_id: str, user_id: str) -> ProjectContext:
     """Build a ProjectContext for *project_id*.
 
-    Looks up the project path from the vlt project database.
-    Falls back to the current working directory when the project is not
-    found or vlt is unavailable.
+    Resolution order:
+        1. vlt project database (has explicit path stored)
+        2. Git repo root (walk up from cwd)
+        3. Current working directory
     """
+    # 1. vlt project database
     try:
         from vlt.core.service import VltService  # type: ignore
         svc = VltService()
@@ -929,6 +1027,14 @@ def build_project_context(project_id: str, user_id: str) -> ProjectContext:
         if project and getattr(project, "path", None):
             return ProjectContext(project_id, user_id, project.path)
     except Exception:
-        logger.debug("Could not load project from vlt DB, falling back to cwd")
+        logger.debug("Could not load project from vlt DB, trying git root")
 
-    return ProjectContext(project_id, user_id, os.getcwd())
+    # 2. Git repo root
+    cwd = os.getcwd()
+    git_root = _find_git_root(cwd)
+    if git_root:
+        logger.debug("Using git root %s for project %s", git_root, project_id)
+        return ProjectContext(project_id, user_id, git_root)
+
+    # 3. Fall back to cwd
+    return ProjectContext(project_id, user_id, cwd)

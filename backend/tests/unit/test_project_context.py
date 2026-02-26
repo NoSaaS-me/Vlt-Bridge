@@ -19,6 +19,9 @@ from backend.src.services.project_context import (
     TextHandle,
     build_manifest,
     build_project_context,
+    _try_git_manifest,
+    _walk_manifest,
+    _find_git_root,
 )
 
 
@@ -76,6 +79,53 @@ class TestBuildManifest:
         # Should mention file count and python language
         assert str(m.file_count) in s
         assert "python" in s
+
+    def test_manifest_skips_egg_info_suffix(self, tmp_project: Path):
+        """Directories ending in .egg-info should be excluded."""
+        egg = tmp_project / "mypackage.egg-info"
+        egg.mkdir()
+        (egg / "PKG-INFO").write_text("Name: mypackage")
+        m = build_manifest(tmp_project)
+        paths = {f.path for f in m.files}
+        assert not any("egg-info" in p for p in paths)
+
+
+class TestGitManifest:
+    """Tests for the git-based manifest builder."""
+
+    def test_git_manifest_returns_none_for_non_git_dir(self, tmp_project: Path):
+        """Non-git directory returns None from _try_git_manifest."""
+        result = _try_git_manifest(tmp_project)
+        assert result is None
+
+    def test_walk_manifest_fallback(self, tmp_project: Path):
+        """_walk_manifest should list files like the old build_manifest."""
+        m = _walk_manifest(tmp_project)
+        paths = {f.path for f in m.files}
+        assert "main.py" in paths
+        assert "utils.py" in paths
+
+    def test_build_manifest_uses_walk_for_non_git(self, tmp_project: Path):
+        """build_manifest falls back to _walk_manifest for non-git dirs."""
+        m = build_manifest(tmp_project)
+        assert m.file_count > 0
+        paths = {f.path for f in m.files}
+        assert "main.py" in paths
+
+
+class TestFindGitRoot:
+    def test_finds_root_from_subdir(self):
+        """_find_git_root should return repo root from a subdirectory."""
+        # This test runs inside the actual git repo
+        root = _find_git_root(os.getcwd())
+        if root:
+            assert Path(root).is_dir()
+            assert (Path(root) / ".git").exists()
+
+    def test_returns_none_for_non_git_dir(self, tmp_path: Path):
+        """Non-git dirs should return None."""
+        result = _find_git_root(str(tmp_path))
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

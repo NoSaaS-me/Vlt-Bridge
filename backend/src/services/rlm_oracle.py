@@ -239,6 +239,7 @@ class RLMPromptBuilder:
         stdout_total_chars: int,
         error: Optional[str],
         iteration_number: int,
+        max_iterations: int = 0,
     ) -> str:
         """Build the user-turn message appended after each REPL iteration.
 
@@ -250,6 +251,7 @@ class RLMPromptBuilder:
             stdout_total_chars: Total chars printed
             error: Exception message if the code failed
             iteration_number: Current iteration number (for context)
+            max_iterations: Total iteration budget (for budget warnings)
 
         Returns:
             A compact metadata message the LLM sees as the "result" of its code.
@@ -267,6 +269,16 @@ class RLMPromptBuilder:
 
         if error:
             lines.append(f"error: {error}")
+
+        # Budget warning at 80% usage
+        if max_iterations > 0:
+            remaining = max_iterations - iteration_number
+            pct_used = iteration_number / max_iterations
+            if pct_used >= 0.8:
+                lines.append(
+                    f"⚠ BUDGET WARNING: {remaining} iteration(s) remaining. "
+                    "Set `Final = <answer>` NOW with your best answer."
+                )
 
         lines.append("")
         lines.append(
@@ -382,8 +394,14 @@ class SubOracleCallable:
         self._project_id = project_id
         self._max_tokens = max_tokens
 
-    def __call__(self, prompt: str) -> str:
-        """Run a child RLM loop synchronously and return its Final value."""
+    def __call__(self, prompt: str, *args: Any, **kwargs: Any) -> str:
+        """Run a child RLM loop synchronously and return its Final value.
+
+        Extra *args and **kwargs are accepted but ignored — LLMs sometimes
+        pass additional arguments (e.g. ``sub_oracle("query", "context")``).
+        """
+        if args or kwargs:
+            logger.debug("sub_oracle ignoring extra args=%r kwargs=%r", args, kwargs)
         if self._parent.recursion_depth >= 2:
             raise RecursionDepthExceeded(
                 f"Max recursion depth (2) reached at depth "
@@ -486,9 +504,22 @@ async def _run_rlm_child_loop(
 
         code = _extract_code(llm_content)
         if not code:
-            # No Python block — treat the prose as the answer.
-            session.status = "completed"
-            return llm_content.strip() or "(no code or answer)"
+            if llm_content.strip():
+                if session.iteration_count == 1:
+                    # Nudge back into REPL mode on first iteration
+                    session.llm_history.append({
+                        "role": "user",
+                        "content": (
+                            "You must write Python code to explore the project. "
+                            "Use `project.search()`, `project.file()`, etc. "
+                            "Set `Final = <answer>` when done."
+                        ),
+                    })
+                    continue
+                # Later iterations: treat prose as the answer
+                session.status = "completed"
+                return llm_content.strip()
+            continue
 
         exec_result = None
         async for r in executor.execute(code):
@@ -510,6 +541,7 @@ async def _run_rlm_child_loop(
             stdout_total_chars=exec_result.stdout_total_chars,
             error=exec_result.error,
             iteration_number=session.iteration_count,
+            max_iterations=session.max_iterations,
         )
         session.llm_history.append({"role": "user", "content": iteration_msg})
 
@@ -672,8 +704,20 @@ class RLMOracleWrapper:
             )
             if not code:
                 # Model returned prose without a code block.
-                # Treat as the final answer if it looks like one.
                 if llm_content.strip():
+                    if session.iteration_count == 1:
+                        # First iteration: LLM should write code, not prose.
+                        # Nudge it back into REPL mode.
+                        session.llm_history.append({
+                            "role": "user",
+                            "content": (
+                                "You must write Python code to explore the project. "
+                                "Use `project.search()`, `project.file()`, etc. "
+                                "Set `Final = <answer>` when you have your answer."
+                            ),
+                        })
+                        continue
+                    # Later iterations: treat prose as the final answer.
                     session.status = "completed"
                     session.final_value = llm_content.strip()
                     yield OracleStreamChunk(
