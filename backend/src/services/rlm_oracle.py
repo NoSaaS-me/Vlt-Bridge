@@ -658,7 +658,7 @@ class RLMOracleWrapper:
 
             logger.debug(
                 "RLM iter %d LLM raw (%d chars): %s",
-                session.iteration_count, len(llm_content), llm_content[:300],
+                session.iteration_count, len(llm_content), llm_content[:500],
             )
 
             # ----------------------------------------------------------

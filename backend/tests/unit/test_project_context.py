@@ -197,10 +197,10 @@ class TestTextHandleRead:
             _project_root=str(tmp_project),
         )
         result = h.read()
-        assert isinstance(result, dict)
-        assert "notice" in result
+        assert isinstance(result, str)
+        assert "[error]" in result
 
-    def test_read_oversized_returns_notice_dict(self, tmp_project: Path):
+    def test_read_oversized_returns_error_string(self, tmp_project: Path):
         h = TextHandle(
             path="main.py",
             size_bytes=2_000_000,  # > 1 MB threshold
@@ -208,10 +208,10 @@ class TestTextHandleRead:
             _project_root=str(tmp_project),
         )
         result = h.read()
-        assert isinstance(result, dict)
-        assert "notice" in result
+        assert isinstance(result, str)
+        assert "[error]" in result
 
-    def test_read_missing_file_returns_notice_dict(self, tmp_project: Path):
+    def test_read_missing_file_returns_error_string(self, tmp_project: Path):
         h = TextHandle(
             path="does_not_exist.py",
             size_bytes=0,
@@ -219,8 +219,8 @@ class TestTextHandleRead:
             _project_root=str(tmp_project),
         )
         result = h.read()
-        assert isinstance(result, dict)
-        assert "notice" in result
+        assert isinstance(result, str)
+        assert "[error]" in result
 
 
 class TestTextHandleSymbols:
@@ -394,21 +394,19 @@ class TestThreadHandle:
         # The important thing is it doesn't raise an exception
         assert result is not None
 
-    def test_thread_read_notice_is_dict_on_unknown_thread(self, tmp_project: Path):
-        """For a thread that definitely doesn't exist, read() returns a notice dict."""
+    def test_thread_read_error_string_on_unknown_thread(self, tmp_project: Path):
+        """For a thread that doesn't exist, read() returns an error string."""
         from unittest.mock import MagicMock, patch
 
-        mock_state = None
         ctx = ProjectContext("test-proj", "user1", str(tmp_project))
         h = ctx.thread("totally-nonexistent-thread-zzz-999")
 
-        # Patch SqliteVaultService to raise VaultError (thread not found)
         with patch("backend.src.services.project_context.TextHandle._read_thread") as mock_read:
-            mock_read.return_value = {"notice": "could not read thread: Thread not found", "thread_id": h.path}
+            mock_read.return_value = "[error] could not read thread: Thread not found"
             result = h.read()
 
-        assert isinstance(result, dict)
-        assert "notice" in result
+        assert isinstance(result, str)
+        assert "[error]" in result
 
     def test_threads_returns_list(self, ctx: ProjectContext):
         """threads() returns a list (possibly empty if vlt DB absent) without raising."""
@@ -454,18 +452,18 @@ class TestNoteHandle:
         assert result is not None
 
     def test_note_read_notice_dict_on_file_not_found(self, tmp_project: Path):
-        """VaultService.read_note raises FileNotFoundError → notice dict returned."""
+        """VaultService.read_note raises FileNotFoundError → error string returned."""
         from unittest.mock import patch, MagicMock
 
         ctx = ProjectContext("test-proj", "user1", str(tmp_project))
         h = ctx.note("missing/note.md")
 
         with patch("backend.src.services.project_context.TextHandle._read_note") as mock_read:
-            mock_read.return_value = {"notice": "note not found: missing/note.md", "path": "missing/note.md"}
+            mock_read.return_value = "[error] note not found: missing/note.md"
             result = h.read()
 
-        assert isinstance(result, dict)
-        assert "notice" in result
+        assert isinstance(result, str)
+        assert "[error]" in result
 
     def test_notes_returns_empty_when_vault_missing(self, tmp_project: Path):
         """When vault directory doesn't exist, notes() returns empty list."""

@@ -267,7 +267,7 @@ class TextHandle:
     # Thread read (T022)
     # ------------------------------------------------------------------
 
-    def _read_thread(self) -> "str | dict":
+    def _read_thread(self) -> str:
         """Read a vlt reasoning thread via SqliteVaultService or CLI fallback."""
         try:
             from vlt.core.service import SqliteVaultService  # type: ignore
@@ -294,7 +294,7 @@ class TextHandle:
         # CLI subprocess fallback
         return self._read_thread_via_cli()
 
-    def _read_thread_via_cli(self) -> "str | dict":
+    def _read_thread_via_cli(self) -> str:
         """Read a vlt thread using ``vlt thread read`` subprocess."""
         import subprocess
         try:
@@ -303,17 +303,17 @@ class TextHandle:
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
-                return {"notice": f"vlt thread read failed: {result.stderr.strip()}", "thread_id": self.path}
+                return f"[error] vlt thread read failed for {self.path}: {result.stderr.strip()}"
             return result.stdout
         except Exception as exc:
             logger.debug("_read_thread_via_cli failed for %s: %s", self.path, exc)
-            return {"notice": f"could not read thread: {exc}", "thread_id": self.path}
+            return f"[error] could not read thread {self.path}: {exc}"
 
     # ------------------------------------------------------------------
     # Note read (T023)
     # ------------------------------------------------------------------
 
-    def _read_note(self) -> "str | dict":
+    def _read_note(self) -> str:
         """Read a vault Markdown note via VaultService."""
         try:
             from .vault import VaultService  # type: ignore
@@ -328,17 +328,17 @@ class TextHandle:
             header = f"# {title}\n\n" if title else ""
             return header + body
         except FileNotFoundError:
-            return {"notice": f"note not found: {self.path}", "path": self.path}
+            return f"[error] note not found: {self.path}"
         except Exception as exc:
             logger.debug("TextHandle._read_note() failed for %s: %s", self.path, exc)
-            return {"notice": f"Document-MCP backend not running or note unavailable: {exc}", "path": self.path}
+            return f"[error] note unavailable ({self.path}): {exc}"
 
     # ------------------------------------------------------------------
     # Unified read
     # ------------------------------------------------------------------
 
-    def read(self, start_line: Optional[int] = None, end_line: Optional[int] = None) -> "str | dict":
-        """Return resource content as a string, or an error dict on failure.
+    def read(self, start_line: Optional[int] = None, end_line: Optional[int] = None) -> str:
+        """Return resource content as a string.
 
         For files/chunks:
             start_line: 1-indexed start (inclusive).  None means from the top.
@@ -348,26 +348,34 @@ class TextHandle:
             Line arguments are ignored; the full content is returned.
 
         Returns:
-            str on success; dict with "notice" key on failure.
+            str — always a string.  On error, returns a human-readable
+            notice string (e.g. ``"[error] could not read file: ..."``).
         """
         if self.resource_type == "thread":
-            return self._read_thread()
+            result = self._read_thread()
+            # CLI fallbacks may return dicts — coerce to string
+            if isinstance(result, dict):
+                return str(result)
+            return result
         if self.resource_type == "note":
-            return self._read_note()
+            result = self._read_note()
+            if isinstance(result, dict):
+                return str(result)
+            return result
         if self.resource_type not in ("file", "chunk"):
-            return {"notice": f"read() not supported for resource_type={self.resource_type!r}"}
+            return f"[error] read() not supported for resource_type={self.resource_type!r}"
 
         if self._is_binary_file():
-            return {"notice": "file too large or binary", "size_bytes": self.size_bytes, "path": self.path}
+            return f"[error] file too large or binary: {self.path} ({self.size_bytes} bytes)"
 
         if self.size_bytes > 1_048_576:
-            return {"notice": "file too large or binary", "size_bytes": self.size_bytes, "path": self.path}
+            return f"[error] file too large or binary: {self.path} ({self.size_bytes} bytes)"
 
         try:
             lines = self._read_raw_lines()
         except Exception as exc:
             logger.debug("TextHandle.read() failed for %s: %s", self.path, exc)
-            return {"notice": f"could not read file: {exc}", "path": self.path}
+            return f"[error] could not read file {self.path}: {exc}"
 
         # Determine effective slice bounds (1-indexed → 0-indexed)
         if self._chunk_start is not None:
@@ -584,11 +592,15 @@ class ProjectContext:
     def file(self, path: str) -> TextHandle:
         """Return a lazy TextHandle for *path* (relative to project root).
 
+        Supports exact match or fuzzy suffix match (e.g. "foo.py" matches
+        "src/services/foo.py").  If multiple suffix matches, prefers the
+        shortest (most specific) path.
+
         Does not raise even if the file doesn't exist — content errors
         surface only when .read() is called.
         """
         manifest = self.get_manifest()
-        # Quick lookup by path
+        # Quick lookup by exact path
         entry_map = {e.path: e for e in manifest.files}
         entry = entry_map.get(path)
         if entry:
@@ -596,6 +608,22 @@ class ProjectContext:
                 path=path,
                 size_bytes=entry.size_bytes,
                 language=entry.language,
+                resource_type="file",
+                _project_root=str(self.project_path),
+            )
+        # Fuzzy suffix match: "rlm_oracle.py" → "src/services/rlm_oracle.py"
+        suffix_path = f"/{path}" if not path.startswith("/") else path
+        candidates = [
+            e for e in manifest.files
+            if e.path.endswith(suffix_path) or e.path == path
+        ]
+        if candidates:
+            # Prefer shortest path (most specific match)
+            best = min(candidates, key=lambda e: len(e.path))
+            return TextHandle(
+                path=best.path,
+                size_bytes=best.size_bytes,
+                language=best.language,
                 resource_type="file",
                 _project_root=str(self.project_path),
             )
