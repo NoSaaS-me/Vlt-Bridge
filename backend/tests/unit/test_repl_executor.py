@@ -102,10 +102,24 @@ class TestFinalSentinel:
 class TestSandboxSecurity:
     @pytest.mark.asyncio
     async def test_import_os_blocked(self):
-        """RestrictedPython removes __import__ — importing any module is blocked."""
+        """Importing unapproved modules is blocked with clear error."""
         result = await _run("import os")
         assert result.success is False
-        assert result.error is not None
+        assert "not available" in result.error
+
+    @pytest.mark.asyncio
+    async def test_import_approved_module_works(self):
+        """Importing approved modules (re, json, etc.) should work."""
+        result = await _run("import re\nFinal = re.search(r'\\d+', 'abc123').group()")
+        assert result.success is True
+        assert result.final_value == "123"
+
+    @pytest.mark.asyncio
+    async def test_import_subprocess_blocked(self):
+        """subprocess must not be importable."""
+        result = await _run("import subprocess")
+        assert result.success is False
+        assert "not available" in result.error
 
     @pytest.mark.asyncio
     async def test_open_blocked(self):

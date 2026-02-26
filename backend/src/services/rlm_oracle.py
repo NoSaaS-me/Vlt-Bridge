@@ -114,7 +114,7 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 ### Available Namespace
 
 **`project`** (ProjectContext): Explore the codebase:
-- `project.get_manifest()` → FileManifest (file list with sizes, languages)
+- `project.get_manifest()` → FileManifest (iterable of FileEntry; each has `.path`, `.size_bytes`, `.language`)
 - `project.file(path)` → TextHandle (lazy file reference)
 - `project.files(pattern="**/*")` → list[TextHandle]
 - `project.search(query, limit=20)` → list[SearchMatch] (each has `.path`, `.snippet`, `.score`, `.line_number`)
@@ -140,7 +140,7 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 - `Final = "your answer here"` → terminates and returns
 - `Final = {{"key": "value"}}` → dict/list accepted too
 
-**Standard library**: `re`, `json`, `math`, `datetime`, `collections`, `itertools`
+**Standard library** (pre-loaded, use directly OR `import`): `re`, `json`, `math`, `datetime`, `collections`, `itertools`
 **NOT available**: `os`, `subprocess`, `open`, `requests`, `threading`, `socket`
 
 ---

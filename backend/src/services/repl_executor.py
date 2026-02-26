@@ -223,10 +223,11 @@ class REPLNamespace:
 
         # RestrictedPython 8.x safe_builtins is very minimal — re-add the
         # common safe builtins that were omitted.  Deliberately excluded:
-        # object/type/vars/dir (enable class hierarchy traversal).
+        # object/vars/dir (enable class hierarchy traversal / namespace inspection).
         _extra_safe = {
             "getattr": _safe_getattr_builtin,
             "hasattr": _safe_hasattr_builtin,
+            "type": type,
             "list": list,
             "dict": dict,
             "set": set,
@@ -271,6 +272,22 @@ class REPLNamespace:
             if fn is None:
                 raise NotImplementedError(f"Unsupported in-place operator: {op!r}")
             return fn(x, y)
+
+        # Restricted __import__ that only allows approved modules.
+        # LLMs naturally write "import re" etc. — this makes it work
+        # without opening the full import system.
+        _allowed_import_names = set(self.ALLOWED_MODULES.keys())
+        _allowed_import_map = dict(self.ALLOWED_MODULES)
+
+        def _restricted_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name in _allowed_import_names:
+                return _allowed_import_map[name]
+            raise ImportError(
+                f"Module '{name}' is not available. "
+                f"Allowed: {', '.join(sorted(_allowed_import_names))}"
+            )
+
+        safe_builtins_dict["__import__"] = _restricted_import
 
         # Compose globals.
         glb: dict = {

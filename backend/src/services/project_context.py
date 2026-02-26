@@ -117,6 +117,13 @@ class FileManifest:
         trunc = " [TRUNCATED]" if self.truncated else ""
         return f"{self.file_count} files, {size_kb}KB{trunc}. Languages: {lang_str}"
 
+    def __iter__(self):
+        """Iterate over files in the manifest."""
+        return iter(self.files)
+
+    def __len__(self) -> int:
+        return len(self.files)
+
     def __repr__(self) -> str:
         return f"FileManifest({self.file_count} files, root={self.root_path})"
 
@@ -180,6 +187,9 @@ class GrepMatch:
     context_before: list[str] = field(default_factory=list)  # Up to 2 lines before
     context_after: list[str] = field(default_factory=list)   # Up to 2 lines after
 
+    def __repr__(self) -> str:
+        return f"GrepMatch({self.path}:{self.line_number} {self.line_content[:60]!r})"
+
 
 @dataclass
 class SearchMatch:
@@ -189,6 +199,9 @@ class SearchMatch:
     snippet: str                    # Relevant excerpt
     score: float = 0.0
     language: Optional[str] = None
+
+    def __repr__(self) -> str:
+        return f"SearchMatch({self.path}:{self.line_number} {self.snippet[:50]!r})"
 
 
 @dataclass
@@ -202,6 +215,9 @@ class SymbolInfo:
     qualified_name: str             # e.g., "MyClass.my_method"
     docstring: Optional[str] = None
     parent_class: Optional[str] = None
+
+    def __repr__(self) -> str:
+        return f"SymbolInfo({self.qualified_name}, {self.kind}, L{self.line_number})"
 
 
 # ---------------------------------------------------------------------------
@@ -401,19 +417,31 @@ class TextHandle:
         except Exception:
             return []
 
-        pattern = re.compile(r'^(class|def)\s+(\w+)')
+        pattern = re.compile(r'^(\s*)(?:async\s+)?(class|def)\s+(\w+)')
+        current_class: Optional[str] = None
         for idx, line in enumerate(lines):
             m = pattern.match(line)
             if m:
-                kind = "class" if m.group(1) == "class" else "function"
-                name = m.group(2)
+                indent, keyword, name = m.group(1), m.group(2), m.group(3)
+                indent_level = len(indent)
+                if keyword == "class":
+                    kind = "class"
+                    current_class = name
+                    qualified = name
+                elif indent_level > 0 and current_class:
+                    kind = "method"
+                    qualified = f"{current_class}.{name}"
+                else:
+                    kind = "function"
+                    current_class = None
+                    qualified = name
                 results.append(SymbolInfo(
                     name=name,
                     kind=kind,
                     line_number=idx + 1,
                     end_line=idx + 1,
                     signature=line.rstrip(),
-                    qualified_name=name,
+                    qualified_name=qualified,
                 ))
         return results
 
