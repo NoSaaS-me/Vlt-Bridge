@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import re
+import string
 import sys
 import threading
 import time
@@ -234,6 +235,7 @@ class REPLNamespace:
         "datetime": datetime,
         "collections": collections,
         "itertools": itertools,
+        "string": string,
     }
 
     def __init__(self) -> None:

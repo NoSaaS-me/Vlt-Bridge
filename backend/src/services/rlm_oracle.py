@@ -140,7 +140,7 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 - `Final = "your answer here"` → terminates and returns
 - `Final = {{"key": "value"}}` → dict/list accepted too
 
-**Standard library** (pre-loaded, use directly OR `import`): `re`, `json`, `math`, `datetime`, `collections`, `itertools`
+**Standard library** (pre-loaded, use directly OR `import`): `re`, `json`, `math`, `datetime`, `collections`, `itertools`, `string`
 **NOT available**: `os`, `subprocess`, `open`, `requests`, `threading`, `socket`, `locals`, `globals`, `eval`, `exec`
 **Tip**: Instead of `if 'x' in locals()`, initialize variables first: `x = None` then check `if x is not None`
 
