@@ -115,7 +115,7 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 
 **`project`** (ProjectContext): Explore the codebase:
 - `project.get_manifest()` → FileManifest (iterable of FileEntry; each has `.path`, `.size_bytes`, `.language`)
-- `project.file(path)` → TextHandle (lazy file reference)
+- `project.file(path)` → TextHandle (lazy; supports fuzzy: `"foo.py"` → `"src/services/foo.py"`)
 - `project.files(pattern="**/*")` → list[TextHandle]
 - `project.search(query, limit=20)` → list[SearchMatch] (each has `.path`, `.snippet`, `.score`, `.line_number`)
 - `project.grep(pattern)` → list[GrepMatch] (each has `.path`, `.line_number`, `.line_content`)
@@ -125,7 +125,7 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 - `project.notes()` → list[TextHandle]
 
 **TextHandle** supports:
-- `.read(start_line=None, end_line=None)` → str content
+- `.read(start_line=None, end_line=None)` → str (always string; errors return "[error] ..." prefix)
 - `.symbols()` → list[SymbolInfo] (each has `.name`, `.kind`, `.line_number`, `.end_line`, `.signature`)
 - `.grep(pattern)` → list[GrepMatch]
 - `.chunks(max_lines=200)` → list[TextHandle] (semantic chunks)
@@ -141,7 +141,8 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 - `Final = {{"key": "value"}}` → dict/list accepted too
 
 **Standard library** (pre-loaded, use directly OR `import`): `re`, `json`, `math`, `datetime`, `collections`, `itertools`
-**NOT available**: `os`, `subprocess`, `open`, `requests`, `threading`, `socket`
+**NOT available**: `os`, `subprocess`, `open`, `requests`, `threading`, `socket`, `locals`, `globals`, `eval`, `exec`
+**Tip**: Instead of `if 'x' in locals()`, initialize variables first: `x = None` then check `if x is not None`
 
 ---
 
