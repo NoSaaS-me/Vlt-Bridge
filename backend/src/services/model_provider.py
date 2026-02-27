@@ -11,6 +11,91 @@ from ..models.settings import ModelInfo, ModelProvider
 
 logger = logging.getLogger(__name__)
 
+# Hardcoded Z.AI GLM models — fallback when API key not set or fetch fails
+GLM_MODELS_FALLBACK = [
+    ModelInfo(
+        id="glm-5",
+        name="GLM-5",
+        provider=ModelProvider.GLM,
+        is_free=False,
+        supports_thinking=False,
+        context_length=128000,
+        description="Z.AI flagship reasoning + coding model"
+    ),
+    ModelInfo(
+        id="glm-4.7",
+        name="GLM-4.7",
+        provider=ModelProvider.GLM,
+        is_free=False,
+        supports_thinking=False,
+        context_length=128000,
+        description="Z.AI top-tier coding model"
+    ),
+    ModelInfo(
+        id="glm-4.7-flash",
+        name="GLM-4.7 Flash",
+        provider=ModelProvider.GLM,
+        is_free=False,
+        supports_thinking=False,
+        context_length=128000,
+        description="Z.AI fast coding model"
+    ),
+    ModelInfo(
+        id="glm-4.6",
+        name="GLM-4.6",
+        provider=ModelProvider.GLM,
+        is_free=False,
+        supports_thinking=False,
+        context_length=128000,
+        description="Z.AI unified reasoning + coding model"
+    ),
+    ModelInfo(
+        id="glm-4.6v",
+        name="GLM-4.6V",
+        provider=ModelProvider.GLM,
+        is_free=False,
+        supports_thinking=False,
+        context_length=128000,
+        description="Z.AI vision + coding model"
+    ),
+    ModelInfo(
+        id="glm-4.5",
+        name="GLM-4.5",
+        provider=ModelProvider.GLM,
+        is_free=False,
+        supports_thinking=False,
+        context_length=128000,
+        description="Z.AI standard coding model"
+    ),
+    ModelInfo(
+        id="glm-4.5-air",
+        name="GLM-4.5 Air",
+        provider=ModelProvider.GLM,
+        is_free=False,
+        supports_thinking=False,
+        context_length=128000,
+        description="Z.AI lightweight efficient model"
+    ),
+    ModelInfo(
+        id="glm-4.5-flash",
+        name="GLM-4.5 Flash",
+        provider=ModelProvider.GLM,
+        is_free=False,
+        supports_thinking=False,
+        context_length=128000,
+        description="Z.AI fast standard coding model"
+    ),
+    ModelInfo(
+        id="glm-4-32b",
+        name="GLM-4 32B",
+        provider=ModelProvider.GLM,
+        is_free=False,
+        supports_thinking=False,
+        context_length=128000,
+        description="Z.AI 32B parameter model"
+    ),
+]
+
 # Hardcoded Google models
 GOOGLE_MODELS = [
     ModelInfo(
@@ -132,6 +217,46 @@ class ModelProviderService:
             logger.error(f"Unexpected error fetching OpenRouter models: {e}")
             return []
 
+    async def get_glm_models_from_api(self, glm_api_key: str) -> List[ModelInfo]:
+        """
+        Fetch available models from Z.AI API (OpenAI-compatible /models endpoint).
+
+        Returns:
+            List of GLM ModelInfo objects, or empty list on failure
+        """
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.get(
+                    "https://api.z.ai/api/paas/v4/models",
+                    headers={"Authorization": f"Bearer {glm_api_key}"}
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                models = []
+                for model_data in data.get("data", []):
+                    model_id = model_data.get("id", "")
+                    if not model_id:
+                        continue
+                    models.append(ModelInfo(
+                        id=model_id,
+                        name=model_data.get("name", model_id),
+                        provider=ModelProvider.GLM,
+                        is_free=False,
+                        supports_thinking=False,
+                        context_length=model_data.get("context_length", 128000),
+                        description=model_data.get("description")
+                    ))
+
+                if models:
+                    logger.info(f"Fetched {len(models)} GLM models from Z.AI API")
+                    return models
+
+        except Exception as e:
+            logger.debug(f"Z.AI models API fetch failed (using fallback): {e}")
+
+        return []
+
     def get_google_models(self) -> List[ModelInfo]:
         """
         Get hardcoded Google models.
@@ -141,7 +266,23 @@ class ModelProviderService:
         """
         return GOOGLE_MODELS.copy()
 
-    async def get_all_models(self) -> List[ModelInfo]:
+    async def get_glm_models(self, glm_api_key: Optional[str] = None) -> List[ModelInfo]:
+        """
+        Get Z.AI GLM models.
+
+        If glm_api_key is provided, attempts to fetch live model list from Z.AI API.
+        Falls back to hardcoded list on failure or when no key provided.
+
+        Returns:
+            List of GLM ModelInfo objects
+        """
+        if glm_api_key:
+            api_models = await self.get_glm_models_from_api(glm_api_key)
+            if api_models:
+                return api_models
+        return GLM_MODELS_FALLBACK.copy()
+
+    async def get_all_models(self, glm_api_key: Optional[str] = None) -> List[ModelInfo]:
         """
         Get all available models from all providers.
 
@@ -149,10 +290,11 @@ class ModelProviderService:
             Combined list of ModelInfo objects from all providers
         """
         google_models = self.get_google_models()
+        glm_models = await self.get_glm_models(glm_api_key=glm_api_key)
         openrouter_models = await self.get_openrouter_models()
 
-        # Combine and deduplicate (Google takes priority)
-        all_models = google_models + openrouter_models
+        # Combine: Google + GLM first (hardcoded), then OpenRouter
+        all_models = google_models + glm_models + openrouter_models
 
         # Remove duplicates based on provider+id
         seen = set()

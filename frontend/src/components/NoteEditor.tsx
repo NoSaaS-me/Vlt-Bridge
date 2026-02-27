@@ -19,9 +19,10 @@ interface NoteEditorProps {
   onSave: (updatedNote: Note) => void;
   onCancel: () => void;
   onWikilinkClick: (linkText: string) => void;
+  projectId?: string;
 }
 
-export function NoteEditor({ note, onSave, onCancel, onWikilinkClick }: NoteEditorProps) {
+export function NoteEditor({ note, onSave, onCancel, onWikilinkClick, projectId }: NoteEditorProps) {
   const [body, setBody] = useState(note.body);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +45,7 @@ export function NoteEditor({ note, onSave, onCancel, onWikilinkClick }: NoteEdit
       const updatedNote = await updateNote(note.note_path, {
         body,
         if_version: note.version,
-      });
+      }, projectId);
       
       onSave(updatedNote);
     } catch (err) {

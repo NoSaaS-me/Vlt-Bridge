@@ -452,7 +452,7 @@ class IndexerService:
         ]
 
     def get_graph_data(self, user_id: str, project_id: str = DEFAULT_PROJECT_ID) -> Dict[str, Any]:
-        """Return graph data for a project (nodes and edges)."""
+        """Return graph data for a project (nodes and links)."""
         conn = self.db_service.connect()
         try:
             # Get all notes in the project
@@ -468,7 +468,7 @@ class IndexerService:
             # Get all resolved links in the project
             link_rows = conn.execute(
                 """
-                SELECT source_path, target_path, link_text
+                SELECT source_path, target_path
                 FROM note_links
                 WHERE user_id = ? AND project_id = ? AND is_resolved = 1
                 """,
@@ -477,24 +477,29 @@ class IndexerService:
         finally:
             conn.close()
 
-        nodes = [
-            {
-                "id": row["note_path"] if isinstance(row, sqlite3.Row) else row[0],
-                "label": row["title"] if isinstance(row, sqlite3.Row) else row[1],
-            }
-            for row in note_rows
-        ]
+        nodes = []
+        for row in note_rows:
+            note_path = row["note_path"] if isinstance(row, sqlite3.Row) else row[0]
+            title = row["title"] if isinstance(row, sqlite3.Row) else row[1]
+            # group = top-level folder (first path component), or empty string for root notes
+            parts = Path(note_path).parts
+            group = parts[0] if len(parts) > 1 else ""
+            nodes.append({
+                "id": note_path,
+                "label": title,
+                "val": 1,
+                "group": group,
+            })
 
-        edges = [
+        links = [
             {
                 "source": row["source_path"] if isinstance(row, sqlite3.Row) else row[0],
                 "target": row["target_path"] if isinstance(row, sqlite3.Row) else row[1],
-                "label": row["link_text"] if isinstance(row, sqlite3.Row) else row[2],
             }
             for row in link_rows
         ]
 
-        return {"nodes": nodes, "edges": edges}
+        return {"nodes": nodes, "links": links}
 
     def _prepare_tags(self, tags: Any) -> List[str]:
         """Extract and normalize tags from metadata."""

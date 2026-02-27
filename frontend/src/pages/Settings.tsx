@@ -14,7 +14,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
@@ -418,19 +418,35 @@ export function Settings() {
     }
   };
 
-  const groupModelsByProvider = (models: ModelInfo[]) => {
-    const grouped: Record<string, ModelInfo[]> = {
-      openrouter: [],
-      google: [],
-    };
+  const PROVIDER_LABELS: Record<string, string> = {
+    openrouter: 'OpenRouter',
+    google: 'Google',
+    glm: 'Z.AI (GLM)',
+  };
 
-    models.forEach((model) => {
-      if (grouped[model.provider]) {
-        grouped[model.provider].push(model);
-      }
+  const PROVIDERS: ModelProvider[] = ['google', 'glm', 'openrouter'];
+
+  const modelsForProvider = (provider: ModelProvider) =>
+    availableModels.filter((m) => m.provider === provider);
+
+  const handleOracleProviderChange = (provider: ModelProvider) => {
+    if (!modelSettings) return;
+    const first = modelsForProvider(provider)[0];
+    setModelSettings({
+      ...modelSettings,
+      oracle_provider: provider,
+      oracle_model: first?.id ?? modelSettings.oracle_model,
     });
+  };
 
-    return grouped;
+  const handleSubagentProviderChange = (provider: ModelProvider) => {
+    if (!modelSettings) return;
+    const first = modelsForProvider(provider)[0];
+    setModelSettings({
+      ...modelSettings,
+      subagent_provider: provider,
+      subagent_model: first?.id ?? modelSettings.subagent_model,
+    });
   };
 
   const getModelInfo = (modelId: string): ModelInfo | undefined => {
@@ -888,6 +904,21 @@ export function Settings() {
                 <p className="text-xs text-muted-foreground mb-2">
                   Primary model for answering questions and synthesizing context
                 </p>
+                {/* Provider selector */}
+                <div className="flex gap-1 p-1 bg-muted rounded-md w-fit">
+                  {PROVIDERS.map((p) => (
+                    <Button
+                      key={p}
+                      variant={modelSettings.oracle_provider === p ? 'default' : 'ghost'}
+                      size="sm"
+                      className="h-7 px-3 text-xs"
+                      onClick={() => handleOracleProviderChange(p)}
+                    >
+                      {PROVIDER_LABELS[p]}
+                    </Button>
+                  ))}
+                </div>
+                {/* Model dropdown — filtered to selected provider */}
                 <Select
                   value={modelSettings.oracle_model}
                   onValueChange={(value) => setModelSettings({ ...modelSettings, oracle_model: value })}
@@ -896,22 +927,15 @@ export function Settings() {
                     <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(groupModelsByProvider(availableModels)).map(([provider, models]) => (
-                      models.length > 0 && (
-                        <SelectGroup key={provider}>
-                          <SelectLabel className="capitalize">{provider}</SelectLabel>
-                          {models.map((model) => (
-                            <SelectItem key={model.id} value={model.id}>
-                              <div className="flex items-center gap-2">
-                                <span>{model.name}</span>
-                                {model.is_free && (
-                                  <Badge variant="secondary" className="text-xs">FREE</Badge>
-                                )}
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      )
+                    {modelsForProvider(modelSettings.oracle_provider).map((model) => (
+                      <SelectItem key={model.id} value={model.id}>
+                        <div className="flex items-center gap-2">
+                          <span>{model.name}</span>
+                          {model.is_free && (
+                            <Badge variant="secondary" className="text-xs">FREE</Badge>
+                          )}
+                        </div>
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -923,14 +947,6 @@ export function Settings() {
                     )}
                   </div>
                 )}
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-xs text-muted-foreground">Routes via:</span>
-                  {modelSettings.oracle_model.startsWith('glm-') ? (
-                    <Badge variant="secondary" className="text-xs">Z.AI (GLM key)</Badge>
-                  ) : (
-                    <Badge variant="secondary" className="text-xs">OpenRouter</Badge>
-                  )}
-                </div>
               </div>
 
               <Separator />
@@ -941,6 +957,21 @@ export function Settings() {
                 <p className="text-xs text-muted-foreground mb-2">
                   Model for parallel research and code analysis tasks
                 </p>
+                {/* Provider selector */}
+                <div className="flex gap-1 p-1 bg-muted rounded-md w-fit">
+                  {PROVIDERS.map((p) => (
+                    <Button
+                      key={p}
+                      variant={modelSettings.subagent_provider === p ? 'default' : 'ghost'}
+                      size="sm"
+                      className="h-7 px-3 text-xs"
+                      onClick={() => handleSubagentProviderChange(p)}
+                    >
+                      {PROVIDER_LABELS[p]}
+                    </Button>
+                  ))}
+                </div>
+                {/* Model dropdown — filtered to selected provider */}
                 <Select
                   value={modelSettings.subagent_model}
                   onValueChange={(value) => setModelSettings({ ...modelSettings, subagent_model: value })}
@@ -949,22 +980,15 @@ export function Settings() {
                     <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(groupModelsByProvider(availableModels)).map(([provider, models]) => (
-                      models.length > 0 && (
-                        <SelectGroup key={provider}>
-                          <SelectLabel className="capitalize">{provider}</SelectLabel>
-                          {models.map((model) => (
-                            <SelectItem key={model.id} value={model.id}>
-                              <div className="flex items-center gap-2">
-                                <span>{model.name}</span>
-                                {model.is_free && (
-                                  <Badge variant="secondary" className="text-xs">FREE</Badge>
-                                )}
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      )
+                    {modelsForProvider(modelSettings.subagent_provider).map((model) => (
+                      <SelectItem key={model.id} value={model.id}>
+                        <div className="flex items-center gap-2">
+                          <span>{model.name}</span>
+                          {model.is_free && (
+                            <Badge variant="secondary" className="text-xs">FREE</Badge>
+                          )}
+                        </div>
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

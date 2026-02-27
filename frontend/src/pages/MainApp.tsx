@@ -533,7 +533,7 @@ export function MainApp() {
             note_path: notePath,
             title: baseName,
             body: `# ${baseName}\n\nStart writing your note here...`,
-          });
+          }, selectedProjectId || undefined);
 
           // Refresh notes list
           const notesList = await listNotes(selectedProjectId || undefined);
@@ -597,7 +597,7 @@ export function MainApp() {
         note_path: placeholderPath,
         title: 'Folder',
         body: `# ${folderPath}\n\nThis folder was created.`,
-      });
+      }, selectedProjectId || undefined);
 
       // Refresh notes list
       const notesList = await listNotes(selectedProjectId || undefined);
@@ -959,6 +959,7 @@ export function MainApp() {
                       onSave={handleNoteSave}
                       onCancel={handleEditCancel}
                       onWikilinkClick={handleWikilinkClick}
+                      projectId={selectedProjectId || undefined}
                     />
                   ) : (
                     <NoteViewer

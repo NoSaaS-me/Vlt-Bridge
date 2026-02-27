@@ -83,11 +83,12 @@ def sanitize_path(user_id: str, vault_root: Path, note_path: str, project_id: st
     # Use os.path.commonpath instead of str.startswith to prevent prefix collisions
     # e.g. /vault/user vs /vault/user-evil both share the prefix /vault/user
     try:
-        if os.path.commonpath([str(vault), str(full_path)]) != str(vault):
-            raise ValueError(f"Path escapes vault root: {note_path}")
+        common = os.path.commonpath([str(vault), str(full_path)])
     except ValueError as exc:
         # commonpath raises ValueError for mixed absolute/relative paths
         raise ValueError(f"Path escapes vault root: {note_path}") from exc
+    if common != str(vault):
+        raise ValueError(f"Path escapes vault root: {note_path}")
     return full_path
 
 

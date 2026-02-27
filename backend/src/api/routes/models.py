@@ -28,21 +28,47 @@ router = APIRouter(prefix="/api", tags=["models"])
 @router.get("/models", response_model=ModelsListResponse)
 async def list_models(
     auth: AuthContext = Depends(get_auth_context),
-    provider_service: ModelProviderService = Depends(get_model_provider_service)
+    provider_service: ModelProviderService = Depends(get_model_provider_service),
+    settings_service: UserSettingsService = Depends(get_user_settings_service)
 ):
     """
     Get all available models from all providers.
 
-    Returns a combined list of models from Google AI and OpenRouter.
+    Returns a combined list of models from Google AI, Z.AI GLM, and OpenRouter.
     """
     try:
-        models = await provider_service.get_all_models()
+        glm_api_key = settings_service.get_glm_api_key(auth.user_id)
+        models = await provider_service.get_all_models(glm_api_key=glm_api_key)
         return ModelsListResponse(models=models)
     except Exception as e:
         logger.error(f"Failed to fetch models: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch models: {str(e)}"
+        )
+
+
+@router.get("/models/glm", response_model=ModelsListResponse)
+async def list_glm_models(
+    auth: AuthContext = Depends(get_auth_context),
+    provider_service: ModelProviderService = Depends(get_model_provider_service),
+    settings_service: UserSettingsService = Depends(get_user_settings_service)
+):
+    """
+    Get available Z.AI GLM models.
+
+    If a GLM API key is configured, fetches live model list from Z.AI API.
+    Falls back to hardcoded list otherwise.
+    """
+    try:
+        glm_api_key = settings_service.get_glm_api_key(auth.user_id)
+        models = await provider_service.get_glm_models(glm_api_key=glm_api_key)
+        return ModelsListResponse(models=models)
+    except Exception as e:
+        logger.error(f"Failed to fetch GLM models: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch GLM models: {str(e)}"
         )
 
 

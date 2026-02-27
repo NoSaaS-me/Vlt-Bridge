@@ -1,4 +1,5 @@
 # Vlt-Bridge
+Work in Progress
 
 Agent memory and vault bridge in one repo: the **vlt** CLI (threads, CodeRAG, Oracle) and the **Document-MCP** web app (Obsidian-style vault + MCP server). They share the vault concept — markdown on disk — and that’s it. No runtime dependency: agents shell out to `vlt` or talk to the MCP server over HTTP; the CLI does not route through the backend.
 
