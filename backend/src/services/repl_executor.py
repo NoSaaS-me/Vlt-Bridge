@@ -272,12 +272,25 @@ class REPLNamespace:
         """
         from RestrictedPython import safe_builtins
         from RestrictedPython.Guards import (
-            full_write_guard,
             guarded_iter_unpack_sequence,
             guarded_unpack_sequence,
             safer_getattr,
         )
         from RestrictedPython.PrintCollector import PrintCollector
+
+        def _dict_aware_write_guard(ob: Any) -> Any:
+            """Write guard that allows dict/list subclasses (Counter, defaultdict, etc.).
+
+            RestrictedPython's full_write_guard uses ``type(ob) is dict`` — an exact
+            type check — which rejects Counter, defaultdict, OrderedDict, etc.
+            Using isinstance() is equally safe because dict subclasses have the
+            same item-assignment semantics.
+            """
+            if isinstance(ob, (dict, list)):
+                return ob
+            if hasattr(ob, "_guarded_writes"):
+                return ob
+            raise TypeError("object does not support item or slice assignment")
 
         # Build a per-call PrintCollector subclass that streams to our capture.
         _capture = stdout_capture  # closed over
@@ -423,7 +436,8 @@ class REPLNamespace:
             # Subscript read guard: obj[key].
             "_getitem_": _safe_getitem,
             # Write guard: obj[key]=val and obj.attr=val.
-            "_write_": full_write_guard,
+            # Uses isinstance() so dict subclasses (Counter, defaultdict, etc.) work.
+            "_write_": _dict_aware_write_guard,
             # Iteration guard: for x in iterable.
             "_getiter_": iter,
             # Sequence unpacking guards: a, b = seq.
@@ -450,12 +464,23 @@ class REPLNamespace:
         return namespace.get("Final", _FINAL_NOT_SET) is not _FINAL_NOT_SET
 
     def get_final(self, namespace: dict) -> Any:
-        """Return the Final value, coerced to str if it is not already."""
+        """Return the Final value, coerced to a human-readable string.
+
+        Preference order:
+        1. str  → returned as-is
+        2. dict/list → JSON pretty-printed (readable; avoids Python repr single-quotes)
+        3. anything else → str() fallback
+        """
         value = namespace.get("Final", _FINAL_NOT_SET)
         if value is _FINAL_NOT_SET:
             return None
         if isinstance(value, str):
             return value
+        if isinstance(value, (dict, list)):
+            try:
+                return json.dumps(value, indent=2, default=str)
+            except Exception:
+                pass
         return str(value)
 
     def update_variables(self, namespace: dict) -> None:

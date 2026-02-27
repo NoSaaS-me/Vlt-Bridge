@@ -138,7 +138,8 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 
 **`Final`**: Set this variable to terminate the loop.
 - `Final = "your answer here"` → terminates and returns
-- `Final = {{"key": "value"}}` → dict/list accepted too
+- **Always set Final to a markdown-formatted string** — prose, headings, code blocks, bullet lists.
+- Do NOT set Final to a raw dict or list; format your findings as readable markdown instead.
 
 **Standard library** (pre-loaded, use directly OR `import`): `re`, `json`, `math`, `datetime`, `collections`, `itertools`, `string`
 **NOT available**: `os`, `subprocess`, `open`, `requests`, `threading`, `socket`, `locals`, `globals`, `eval`, `exec`
@@ -177,9 +178,10 @@ You are a code-writing AI agent in a Python 3.11 REPL environment. The project y
 
 Your response MUST end with:
 
-    Final = <answer>
+    Final = "your markdown-formatted answer"
 
-Where answer is: str, dict, list, or any Python literal.
+**Final MUST be a string.** Write your answer as markdown — prose, headings (`##`), bullet lists, code blocks (` ``` `), etc.
+Do NOT assign a raw dict or list to Final; format findings as readable text instead.
 
 ---
 
@@ -188,31 +190,31 @@ Where answer is: str, dict, list, or any Python literal.
 ### Code search / symbol lookup
 1. `project.search(query)` or `project.grep(pattern)` to locate
 2. `handle.read(start_line, end_line)` to read relevant section
-3. `Final = {{"location": "...", "explanation": "..."}}`
+3. `Final = f"Found in **{{path}}** (line {{line}}):\\n\\n```python\\n{{snippet}}\\n```\\n\\n{{explanation}}"`
 
 ### Architecture / cross-cutting
 1. `project.get_manifest()` to see all files
 2. `project.search()` for patterns across codebase
 3. sub_oracle on each module for analysis (max 3 calls)
-4. `Final = {{"summary": "...", "key_files": [...]}}`
+4. `Final = f"## Architecture Summary\\n\\n{{summary}}\\n\\n**Key files:**\\n{{chr(10).join('- ' + f for f in key_files)}}"`
 
 ### Bug / root cause
 1. Search for error patterns
 2. Read relevant files
-3. `Final = {{"root_cause": "...", "affected_files": [...]}}`
+3. `Final = f"## Root Cause\\n\\n{{root_cause}}\\n\\n**Affected files:** {{', '.join(affected_files)}}"`
 
 ### Project history / decision reconstruction (why we did X)
 1. **Threads first**: `threads = project.threads()` → scan `repr(t)` to find relevant ones → `t.read()` for each
 2. **Then code**: `project.search(query)` for implementation evidence
 3. **Then notes**: `notes = project.notes()` → scan for documentation
 4. Synthesize: cite specific thread IDs and node sequences
-5. `Final = {{"rationale": "...", "source_thread": "...", "supporting_code": "..."}}`
+5. `Final = f"## Decision Rationale\\n\\n{{rationale}}\\n\\n**Source:** thread `{{thread_id}}`, node {{seq}}"`
 
 ### Large document analysis (>50KB)
 1. `chunks = handle.chunks(200)`
 2. For each chunk: `sub_oracle("Extract X from this", chunk.read())`  [use max 3 calls]
 3. Aggregate and synthesize locally
-4. `Final = {{"synthesis": "..."}}`\
+4. `Final = f"## Analysis\\n\\n{{synthesis}}"`
 """
 
 

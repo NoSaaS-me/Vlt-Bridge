@@ -29,6 +29,7 @@ from ...models.oracle import (
 from ...services.rlm_oracle import RLMOracleWrapper
 from ...services.oracle_bridge import OracleBridge, OracleBridgeError
 from ...services.user_settings import UserSettingsService, get_user_settings_service
+from ...services.context_tree_service import ContextTreeService, get_context_tree_service
 from ...services.openrouter_client import GLM_BASE_URL
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,56 @@ def get_oracle_bridge() -> OracleBridge:
     if _oracle_bridge is None:
         _oracle_bridge = OracleBridge()
     return _oracle_bridge
+
+
+def _save_oracle_turn_to_tree(
+    tree_service: ContextTreeService,
+    settings_service: UserSettingsService,
+    user_id: str,
+    project_id: str,
+    question: str,
+    answer: str,
+    parent_context_id: Optional[str],
+    model_used: Optional[str] = None,
+) -> Optional[str]:
+    """Persist a completed Q&A turn to the context tree.
+
+    Returns the new node's ID (to be sent back as context_id in the done chunk),
+    or None if persistence fails (non-fatal).
+    """
+    try:
+        if parent_context_id:
+            parent_node = tree_service.get_node(user_id, parent_context_id)
+            if parent_node:
+                node = tree_service.create_node(
+                    user_id=user_id,
+                    root_id=parent_node.root_id,
+                    parent_id=parent_context_id,
+                    question=question,
+                    answer=answer,
+                    model_used=model_used,
+                )
+                return node.id
+            # parent_context_id set but node not found (e.g. deleted) — fall through to new tree
+
+        max_nodes = settings_service.get_max_context_nodes(user_id)
+        tree = tree_service.create_tree(
+            user_id=user_id,
+            project_id=project_id,
+            max_nodes=max_nodes,
+        )
+        node = tree_service.create_node(
+            user_id=user_id,
+            root_id=tree.root_id,
+            parent_id=tree.root_id,
+            question=question,
+            answer=answer,
+            model_used=model_used,
+        )
+        return node.id
+    except Exception as exc:
+        logger.error("Failed to save oracle turn to context tree: %s", exc)
+        return None
 
 
 @router.post("", response_model=OracleResponse)
@@ -165,6 +216,7 @@ async def query_oracle_stream(
     request: OracleRequest,
     auth: AuthContext = Depends(require_auth_context),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
+    tree_service: ContextTreeService = Depends(get_context_tree_service),
 ):
     """
     Query the oracle with streaming response (Server-Sent Events).
@@ -246,6 +298,9 @@ async def query_oracle_stream(
     async def event_generator() -> AsyncGenerator[str, None]:
         """Generate SSE events from RLMOracleWrapper stream."""
         chunk_counter = 0
+        answer_parts: list[str] = []
+        model_used_final: Optional[str] = oracle_model
+
         try:
             logger.info(f"Oracle RLM query from user {auth.user_id}: {request.question[:100]}")
 
@@ -254,12 +309,35 @@ async def query_oracle_stream(
                 context_id=request.context_id,
             ):
                 chunk_counter += 1
-                chunk_json = chunk.model_dump(exclude_none=True)
                 logger.debug(
                     f"[SSE #{chunk_counter}] type={chunk.type} "
                     f"content_preview={str(chunk.content)[:50] if chunk.content else 'N/A'}"
                 )
-                yield json.dumps(chunk_json)
+
+                if chunk.type == "content" and chunk.content:
+                    answer_parts.append(chunk.content)
+                elif chunk.type == "done":
+                    # Persist Q&A turn to context tree, get back new node ID
+                    new_context_id = _save_oracle_turn_to_tree(
+                        tree_service=tree_service,
+                        settings_service=settings_service,
+                        user_id=auth.user_id,
+                        project_id=request.project_id or "default",
+                        question=request.question,
+                        answer="".join(answer_parts),
+                        parent_context_id=request.context_id,
+                        model_used=model_used_final,
+                    )
+                    # Emit done chunk with context_id so frontend can continue the thread
+                    done_chunk = OracleStreamChunk(
+                        type="done",
+                        context_id=new_context_id,
+                        metadata=chunk.metadata,
+                    )
+                    yield json.dumps(done_chunk.model_dump(exclude_none=True))
+                    continue
+
+                yield json.dumps(chunk.model_dump(exclude_none=True))
 
         except Exception as e:
             logger.exception("Oracle streaming failed")
