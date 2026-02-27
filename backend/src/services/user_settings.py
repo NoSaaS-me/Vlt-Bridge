@@ -39,7 +39,7 @@ class UserSettingsService:
                 SELECT oracle_model, oracle_provider, subagent_model,
                        subagent_provider, thinking_enabled, chat_center_mode,
                        librarian_timeout, max_context_nodes, openrouter_api_key,
-                       search_provider, tavily_api_key
+                       search_provider, tavily_api_key, glm_api_key
                 FROM user_settings
                 WHERE user_id = ?
                 """,
@@ -54,6 +54,9 @@ class UserSettingsService:
 
                 tavily_key = row["tavily_api_key"] if "tavily_api_key" in row.keys() else None
                 has_tavily_key = tavily_key is not None and len(tavily_key) > 0
+
+                glm_key = row["glm_api_key"] if "glm_api_key" in row.keys() else None
+                has_glm_key = glm_key is not None and len(glm_key) > 0
 
                 # Handle search_provider - may be None for legacy rows
                 search_provider = row["search_provider"] if "search_provider" in row.keys() and row["search_provider"] else "none"
@@ -77,7 +80,9 @@ class UserSettingsService:
                     openrouter_api_key_set=has_api_key,
                     search_provider=search_provider,
                     tavily_api_key=None,  # Never return the actual key
-                    tavily_api_key_set=has_tavily_key
+                    tavily_api_key_set=has_tavily_key,
+                    glm_api_key=None,  # Never return the actual key
+                    glm_api_key_set=has_glm_key,
                 )
             else:
                 # Return defaults for new users
@@ -112,6 +117,32 @@ class UserSettingsService:
             return None
         except Exception as e:
             logger.error(f"Failed to get API key for user {user_id}: {e}")
+            return None
+        finally:
+            conn.close()
+
+    def get_glm_api_key(self, user_id: str) -> Optional[str]:
+        """
+        Get user's Z.AI GLM API key (for internal use only).
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            The API key or None if not set
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT glm_api_key FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row and "glm_api_key" in row.keys() and row["glm_api_key"]:
+                return row["glm_api_key"]
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get GLM API key for user {user_id}: {e}")
             return None
         finally:
             conn.close()
@@ -378,7 +409,8 @@ class UserSettingsService:
         max_context_nodes: Optional[int] = None,
         openrouter_api_key: Optional[str] = None,
         search_provider: Optional[str] = None,
-        tavily_api_key: Optional[str] = None
+        tavily_api_key: Optional[str] = None,
+        glm_api_key: Optional[str] = None,
     ) -> ModelSettings:
         """
         Update user's model settings.
@@ -408,6 +440,7 @@ class UserSettingsService:
             # Get current API keys (not returned by get_settings for security)
             current_api_key = self.get_openrouter_api_key(user_id)
             current_tavily_key = self.get_tavily_api_key(user_id)
+            current_glm_key = self.get_glm_api_key(user_id)
 
             # Determine new OpenRouter API key value
             # None = don't change, "" = clear, otherwise = set new key
@@ -425,6 +458,14 @@ class UserSettingsService:
                 new_tavily_key = None  # Clear the key
             else:
                 new_tavily_key = tavily_api_key
+
+            # Determine new GLM API key value
+            if glm_api_key is None:
+                new_glm_key = current_glm_key
+            elif glm_api_key == "":
+                new_glm_key = None  # Clear the key
+            else:
+                new_glm_key = glm_api_key
 
             # Determine new search provider value
             new_search_provider = search_provider if search_provider is not None else current.search_provider
@@ -453,7 +494,9 @@ class UserSettingsService:
                 openrouter_api_key_set=new_api_key is not None and len(new_api_key) > 0,
                 search_provider=new_search_provider,
                 tavily_api_key=None,  # Never return the key
-                tavily_api_key_set=new_tavily_key is not None and len(new_tavily_key) > 0
+                tavily_api_key_set=new_tavily_key is not None and len(new_tavily_key) > 0,
+                glm_api_key=None,  # Never return the key
+                glm_api_key_set=new_glm_key is not None and len(new_glm_key) > 0,
             )
 
             now = datetime.now(timezone.utc).isoformat()
@@ -467,8 +510,8 @@ class UserSettingsService:
                         subagent_model, subagent_provider, thinking_enabled,
                         chat_center_mode, librarian_timeout, max_context_nodes,
                         openrouter_api_key, search_provider, tavily_api_key,
-                        created, updated
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        glm_api_key, created, updated
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(user_id) DO UPDATE SET
                         oracle_model = excluded.oracle_model,
                         oracle_provider = excluded.oracle_provider,
@@ -481,6 +524,7 @@ class UserSettingsService:
                         openrouter_api_key = excluded.openrouter_api_key,
                         search_provider = excluded.search_provider,
                         tavily_api_key = excluded.tavily_api_key,
+                        glm_api_key = excluded.glm_api_key,
                         updated = excluded.updated
                     """,
                     (
@@ -496,6 +540,7 @@ class UserSettingsService:
                         new_api_key,
                         new_search_provider,
                         new_tavily_key,
+                        new_glm_key,
                         now,
                         now
                     )

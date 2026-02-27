@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 # OpenRouter API base URL
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
+# Z.AI GLM Code Plan API base URL
+# Monthly subscription endpoint for GLM coding models (glm-4.7, glm-4.7-flash, etc.)
+GLM_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+
 
 @dataclass
 class BTServices:
@@ -407,4 +411,5 @@ __all__ = [
     "OpenRouterClient",
     "BTServices",
     "OPENROUTER_BASE",
+    "GLM_BASE_URL",
 ]

@@ -29,6 +29,8 @@ from ...models.oracle import (
 from ...services.rlm_oracle import RLMOracleWrapper
 from ...services.oracle_bridge import OracleBridge, OracleBridgeError
 from ...services.user_settings import UserSettingsService, get_user_settings_service
+from ...services.openrouter_client import GLM_BASE_URL
+from ...models.settings import ModelProvider
 
 logger = logging.getLogger(__name__)
 
@@ -77,30 +79,46 @@ async def query_oracle(
     - `model_used`: Model that generated the response
     - `retrieval_traces`: Debug information (if explain=True)
     """
-    # Get user's OpenRouter API key
-    openrouter_api_key = settings_service.get_openrouter_api_key(auth.user_id)
+    # Resolve API key and base URL based on provider / model
+    user_settings = settings_service.get_settings(auth.user_id)
+    oracle_model = request.model or user_settings.oracle_model
+    oracle_provider = user_settings.oracle_provider
 
-    if not openrouter_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OpenRouter API key not configured. Please add your API key in Settings.",
-        )
+    # GLM provider: direct access to Z.AI code plan API
+    is_glm = (
+        oracle_provider == ModelProvider.GLM
+        or oracle_model.startswith("glm-")
+    )
+
+    if is_glm:
+        api_key = settings_service.get_glm_api_key(auth.user_id)
+        base_url = GLM_BASE_URL
+        if not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Z.AI GLM API key not configured. Please add your GLM API key in Settings.",
+            )
+    else:
+        api_key = settings_service.get_openrouter_api_key(auth.user_id)
+        base_url = None  # OpenRouterClient default
+        if not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OpenRouter API key not configured. Please add your API key in Settings.",
+            )
 
     try:
         logger.info(f"Oracle query from user {auth.user_id}: {request.question[:100]}")
-
-        # Get user's model settings for Oracle
-        oracle_model = request.model or settings_service.get_oracle_model(auth.user_id)
-
-        logger.debug(f"Using oracle_model={oracle_model}")
+        logger.debug(f"Using oracle_model={oracle_model} provider={'glm' if is_glm else 'openrouter'}")
 
         # Create RLMOracleWrapper
         wrapper = RLMOracleWrapper(
             user_id=auth.user_id,
-            api_key=openrouter_api_key,
+            api_key=api_key,
             project_id=request.project_id or "default",
             model=oracle_model,
             max_tokens=request.max_tokens or 4096,
+            base_url=base_url,
         )
 
         # Collect all chunks from the stream
@@ -178,37 +196,54 @@ async def query_oracle_stream(
     data: {"type": "content", "content": "Based on the code..."}
     ```
     """
-    # Get user's OpenRouter API key
-    openrouter_api_key = settings_service.get_openrouter_api_key(auth.user_id)
+    # Resolve API key and base URL based on provider / model
+    user_settings = settings_service.get_settings(auth.user_id)
+    oracle_model = request.model or user_settings.oracle_model
+    oracle_provider = user_settings.oracle_provider
 
-    if not openrouter_api_key:
-        # Return error if no API key configured
-        async def error_generator():
-            error_chunk = OracleStreamChunk(
-                type="error",
-                error="OpenRouter API key not configured. Please add your API key in Settings."
-            )
-            yield json.dumps(error_chunk.model_dump(exclude_none=True))
+    is_glm = (
+        oracle_provider == ModelProvider.GLM
+        or oracle_model.startswith("glm-")
+    )
 
-        return EventSourceResponse(error_generator())
+    if is_glm:
+        api_key = settings_service.get_glm_api_key(auth.user_id)
+        base_url = GLM_BASE_URL
+        if not api_key:
+            async def glm_error_generator():
+                error_chunk = OracleStreamChunk(
+                    type="error",
+                    error="Z.AI GLM API key not configured. Please add your GLM API key in Settings."
+                )
+                yield json.dumps(error_chunk.model_dump(exclude_none=True))
+            return EventSourceResponse(glm_error_generator())
+    else:
+        api_key = settings_service.get_openrouter_api_key(auth.user_id)
+        base_url = None  # OpenRouterClient default
+        if not api_key:
+            async def or_error_generator():
+                error_chunk = OracleStreamChunk(
+                    type="error",
+                    error="OpenRouter API key not configured. Please add your API key in Settings."
+                )
+                yield json.dumps(error_chunk.model_dump(exclude_none=True))
+            return EventSourceResponse(or_error_generator())
 
     # Cancel any existing session for this user
     if auth.user_id in _active_sessions:
         logger.info(f"Cancelling existing session for user {auth.user_id}")
         _active_sessions[auth.user_id].cancel()
 
-    # Get user's model settings for Oracle
-    oracle_model = request.model or settings_service.get_oracle_model(auth.user_id)
-
-    logger.debug(f"Stream using oracle_model={oracle_model}")
+    logger.debug(f"Stream using oracle_model={oracle_model} provider={'glm' if is_glm else 'openrouter'}")
 
     # Create RLMOracleWrapper
     wrapper = RLMOracleWrapper(
         user_id=auth.user_id,
-        api_key=openrouter_api_key,
+        api_key=api_key,
         project_id=request.project_id or "default",
         model=oracle_model,
         max_tokens=request.max_tokens or 4096,
+        base_url=base_url,
     )
 
     # Register the wrapper for cancellation support

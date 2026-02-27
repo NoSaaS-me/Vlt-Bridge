@@ -329,6 +329,8 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE user_settings ADD COLUMN tavily_api_key TEXT",
     # Add oracle_mcp_enabled column to user_settings (018-vlt-mcp-server)
     "ALTER TABLE user_settings ADD COLUMN oracle_mcp_enabled INTEGER NOT NULL DEFAULT 1",
+    # Add glm_api_key column to user_settings (022-rlm-oracle GLM provider)
+    "ALTER TABLE user_settings ADD COLUMN glm_api_key TEXT",
 )
 
 

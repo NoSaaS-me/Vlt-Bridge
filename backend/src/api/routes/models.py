@@ -135,7 +135,8 @@ async def update_model_settings(
             librarian_timeout=request.librarian_timeout,
             openrouter_api_key=request.openrouter_api_key,
             search_provider=request.search_provider,
-            tavily_api_key=request.tavily_api_key
+            tavily_api_key=request.tavily_api_key,
+            glm_api_key=request.glm_api_key,
         )
         return updated_settings
     except Exception as e:

@@ -9,6 +9,7 @@ class ModelProvider(str, Enum):
     """Available model providers."""
     OPENROUTER = "openrouter"
     GOOGLE = "google"
+    GLM = "glm"
 
 
 class OracleSettings(BaseModel):
@@ -84,6 +85,14 @@ class ModelSettings(BaseModel):
         default=False,
         description="Whether a Tavily API key has been configured (key itself is not returned)"
     )
+    glm_api_key: Optional[str] = Field(
+        default=None,
+        description="User's Z.AI GLM API key for direct access to GLM coding models"
+    )
+    glm_api_key_set: bool = Field(
+        default=False,
+        description="Whether a Z.AI GLM API key has been configured (key itself is not returned)"
+    )
 
 
 class ModelInfo(BaseModel):
@@ -142,4 +151,8 @@ class ModelSettingsUpdateRequest(BaseModel):
     tavily_api_key: Optional[str] = Field(
         default=None,
         description="Tavily API key (set to empty string to clear)"
+    )
+    glm_api_key: Optional[str] = Field(
+        default=None,
+        description="Z.AI GLM API key (set to empty string to clear)"
     )

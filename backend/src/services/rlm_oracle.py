@@ -387,12 +387,14 @@ class SubOracleCallable:
         model: str,
         project_id: str,
         max_tokens: int = 4096,
+        base_url: Optional[str] = None,
     ) -> None:
         self._parent = parent_session
         self._api_key = api_key
         self._model = model
         self._project_id = project_id
         self._max_tokens = max_tokens
+        self._base_url = base_url
 
     def __call__(self, prompt: str, *args: Any, **kwargs: Any) -> str:
         """Run a child RLM loop synchronously and return its Final value.
@@ -432,6 +434,7 @@ class SubOracleCallable:
                 model=self._model,
                 project_id=self._project_id,
                 max_tokens=self._max_tokens,
+                base_url=self._base_url,
             )
         )
 
@@ -446,6 +449,7 @@ async def _run_rlm_child_loop(
     model: str,
     project_id: str,
     max_tokens: int = 4096,
+    base_url: Optional[str] = None,
 ) -> str:
     """Execute the RLM loop for a sub-oracle child session.
 
@@ -456,7 +460,10 @@ async def _run_rlm_child_loop(
     from .openrouter_client import OpenRouterClient
     from .repl_executor import REPLExecutor, REPLNamespace
 
-    llm = OpenRouterClient(api_key=api_key)
+    child_client_kwargs = {"api_key": api_key}
+    if base_url:
+        child_client_kwargs["base_url"] = base_url
+    llm = OpenRouterClient(**child_client_kwargs)
     prompt_builder = RLMPromptBuilder()
 
     project_context = build_project_context(project_id, session.user_id)
@@ -568,12 +575,14 @@ class RLMOracleWrapper:
         project_id: str,
         model: str = "deepseek/deepseek-chat-v3-0324",
         max_tokens: int = 4096,
+        base_url: Optional[str] = None,
     ) -> None:
         self._user_id = user_id
         self._api_key = api_key
         self._project_id = project_id
         self._model = model
         self._max_tokens = max_tokens
+        self._base_url = base_url  # None = use OpenRouterClient default (OpenRouter)
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -646,12 +655,16 @@ class RLMOracleWrapper:
             model=self._model,
             project_id=self._project_id,
             max_tokens=self._max_tokens,
+            base_url=self._base_url,
         )
 
         namespace = REPLNamespace()
         namespace.inject(project_context, sub_oracle_fn)
         executor = REPLExecutor(namespace=namespace, timeout_s=30.0)
-        llm = OpenRouterClient(api_key=self._api_key)
+        client_kwargs = {"api_key": self._api_key}
+        if self._base_url:
+            client_kwargs["base_url"] = self._base_url
+        llm = OpenRouterClient(**client_kwargs)
 
         while not session.is_budget_exhausted():
             if self._cancelled:
