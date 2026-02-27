@@ -6,9 +6,18 @@ import { useState, useEffect, useCallback } from 'react';
 import { DataGrid } from 'react-data-grid';
 import 'react-data-grid/lib/styles.css';
 import Papa from 'papaparse';
-// formulajs ships a UMD bundle; import the namespace for SUM, AVERAGE, etc.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const formulas = require('formulajs') as Record<string, (...args: unknown[]) => number>;
+// Basic formula implementations (inline — avoids UMD/CJS dependency issues with Vite)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const formulas: Record<string, (...args: any[]) => number> = {
+  SUM: (ns: number[]) => ns.reduce((a: number, b: number) => a + b, 0),
+  AVERAGE: (ns: number[]) => ns.length ? ns.reduce((a: number, b: number) => a + b, 0) / ns.length : 0,
+  AVG: (ns: number[]) => ns.length ? ns.reduce((a: number, b: number) => a + b, 0) / ns.length : 0,
+  MIN: (ns: number[]) => Math.min(...ns),
+  MAX: (ns: number[]) => Math.max(...ns),
+  COUNT: (ns: number[]) => ns.length,
+  ABS: (n: number) => Math.abs(n),
+  ROUND: (n: number, d = 0) => Math.round(n * Math.pow(10, d)) / Math.pow(10, d),
+};
 import { Save, Plus, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
