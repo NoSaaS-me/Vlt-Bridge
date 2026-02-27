@@ -14,6 +14,24 @@ import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { createWikilinkComponent } from '@/lib/markdown';
 
+/**
+ * Safe URL transform for react-markdown.
+ * Allows the internal wikilink: protocol but blocks javascript:, vbscript:, and data: URIs
+ * to prevent XSS via malicious markdown content authored by the AI or embedded in notes.
+ */
+function safeUrlTransform(url: string): string {
+  if (url.startsWith('wikilink:')) return url;
+  const lower = url.toLowerCase().trimStart();
+  if (
+    lower.startsWith('javascript:') ||
+    lower.startsWith('vbscript:') ||
+    lower.startsWith('data:')
+  ) {
+    return '';
+  }
+  return url;
+}
+
 interface ChatMessageProps {
   message: ChatMessageType | OracleMessage;
   onSourceClick: (path: string) => void;
@@ -345,7 +363,7 @@ export function ChatMessage({
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={markdownComponents}
-                    urlTransform={(url) => url} // Allow wikilink: protocol
+                    urlTransform={safeUrlTransform}
                   >
                     {processedThinking}
                   </ReactMarkdown>
@@ -525,7 +543,7 @@ export function ChatMessage({
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={markdownComponents}
-                    urlTransform={(url) => url}
+                    urlTransform={safeUrlTransform}
                   >
                     {processedContent}
                   </ReactMarkdown>
@@ -579,7 +597,7 @@ export function ChatMessage({
                 remarkPlugins={[remarkGfm, remarkMath]}
                 rehypePlugins={[rehypeKatex]}
                 components={markdownComponents}
-                urlTransform={(url) => url}
+                urlTransform={safeUrlTransform}
               >
                 {processedContent}
               </ReactMarkdown>
@@ -603,7 +621,7 @@ export function ChatMessage({
                 remarkPlugins={[remarkGfm, remarkMath]}
                 rehypePlugins={[rehypeKatex]}
                 components={markdownComponents}
-                urlTransform={(url) => url} // Allow all protocols including wikilink:
+                urlTransform={safeUrlTransform}
               >
                 {processedContent}
               </ReactMarkdown>

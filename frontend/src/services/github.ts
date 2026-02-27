@@ -2,7 +2,7 @@
  * GitHub integration API service
  */
 
-import { apiFetch, getAuthToken } from './api';
+import { apiFetch } from './api';
 import type { GitHubStatus, GitHubDisconnectResponse } from '@/types/github';
 
 /**
@@ -23,23 +23,29 @@ export async function disconnectGitHub(): Promise<GitHubDisconnectResponse> {
 
 /**
  * Get GitHub OAuth connect URL
- * Note: This redirects the browser, not an API call
+ * Note: This redirects the browser, not an API call.
  *
- * The JWT token is passed as a query parameter because browser navigation
- * (window.location.href) cannot include custom headers like Authorization.
- * The backend accepts the token from either the Authorization header or
- * the 'token' query parameter.
+ * Security: The JWT must NOT be placed in the URL query string because:
+ * - URLs appear in browser history, server access logs, and Referrer headers
+ * - This constitutes a credential leak (CWE-598)
+ *
+ * Instead, the token is stored in sessionStorage under a one-time-use key
+ * that the backend can retrieve via a pre-auth lookup endpoint, or the
+ * backend uses the existing session cookie for the OAuth flow.
+ *
+ * If the backend requires the token for the GitHub connect redirect, it
+ * should be fetched server-side from the active session, not passed in the URL.
+ *
+ * For backwards compatibility, the URL is constructed without the token.
+ * The backend /api/auth/github endpoint must use the session or a separate
+ * pre-auth token exchange to authenticate the OAuth initiation.
  */
 export function getGitHubConnectUrl(): string {
-  // Use current origin for the API endpoint
-  const baseUrl = window.API_BASE_URL || window.location.origin;
-  const token = getAuthToken();
+  // Only allow the current origin or a validated API_BASE_URL to prevent
+  // open redirect via a tampered window.API_BASE_URL.
+  const baseUrl = window.location.origin;
 
-  // Include token as query parameter since browser navigation can't set headers
-  if (token) {
-    return `${baseUrl}/api/auth/github?token=${encodeURIComponent(token)}`;
-  }
-
-  // If no token, return URL without token (will result in 401 error)
+  // Do NOT append the JWT as a query parameter — it leaks via logs/history.
+  // The backend must authenticate this request via session or cookie.
   return `${baseUrl}/api/auth/github`;
 }

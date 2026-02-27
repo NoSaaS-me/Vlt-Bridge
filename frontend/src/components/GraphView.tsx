@@ -27,9 +27,19 @@ export function GraphView({ onSelectNote, refreshTrigger, projectId }: GraphView
     if (!isLoading && graphRef.current) {
       const savedView = localStorage.getItem('graph-view-state');
       if (savedView) {
-        const { x, y, k } = JSON.parse(savedView);
-        graphRef.current.centerAt(x, y, 0);
-        graphRef.current.zoom(k, 0);
+        try {
+          const parsed = JSON.parse(savedView);
+          // Validate that parsed values are finite numbers before use to guard
+          // against type confusion from tampered localStorage values.
+          const x = typeof parsed.x === 'number' && isFinite(parsed.x) ? parsed.x : 0;
+          const y = typeof parsed.y === 'number' && isFinite(parsed.y) ? parsed.y : 0;
+          const k = typeof parsed.k === 'number' && isFinite(parsed.k) && parsed.k > 0 ? parsed.k : 1;
+          graphRef.current.centerAt(x, y, 0);
+          graphRef.current.zoom(k, 0);
+        } catch {
+          // Ignore malformed saved view state
+          localStorage.removeItem('graph-view-state');
+        }
       }
     }
   }, [isLoading]);

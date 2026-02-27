@@ -45,8 +45,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       }
 
       const token = localStorage.getItem('auth_token');
-      // Skip validation for local dev token
-      if (token === 'local-dev-token') {
+      // Skip server-side validation for local dev tokens.
+      // Local dev tokens start with 'local-dev-' prefix; the well-known literal
+      // 'local-dev-token' is also accepted for backwards compatibility with
+      // existing local development sessions.
+      if (token === 'local-dev-token' || token?.startsWith('local-dev-')) {
         setIsChecking(false);
         return;
       }

@@ -369,7 +369,8 @@ class REPLNamespace:
             "iter": iter,
             "reversed": reversed,
             "format": format,
-            "super": super,
+            # super() omitted: not useful in top-level REPL scripts and can aid
+            # class hierarchy traversal attacks (__mro__ / __subclasses__ via super()).
         }
         safe_builtins_dict.update(_extra_safe)
 

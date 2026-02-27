@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import abc
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, List
 
@@ -74,13 +73,6 @@ class JWTValidator(TokenValidator):
     def _require_secret(self) -> str:
         secret = self.config.jwt_secret_key
         if not secret:
-            # If strictly in dev mode, allow a fallback, otherwise fail
-            # logic moved from old AuthService
-            env = os.getenv("ENVIRONMENT", "").lower()
-            is_dev = env in ("development", "dev")
-            if is_dev and self.config.enable_local_mode and self.config.local_dev_token:
-                 return "local-dev-secret-key-123"
-
             raise AuthError(
                 "missing_jwt_secret",
                 "JWT secret is not configured.",
@@ -172,11 +164,6 @@ class AuthService:
         # Re-implement simple check for issuance context
         secret = self.config.jwt_secret_key
         if not secret:
-             # Allow fallback for issuance in dev mode
-            env = os.getenv("ENVIRONMENT", "").lower()
-            is_dev = env in ("development", "dev")
-            if is_dev and self.config.enable_local_mode:
-                 return "local-dev-secret-key-123"
             raise AuthError("missing_jwt_secret", "JWT secret not configured", status_code=500)
         return secret
 

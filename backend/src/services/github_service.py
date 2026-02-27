@@ -241,8 +241,10 @@ class GitHubService:
     def store_token(self, user_id: str, token: str, username: str) -> None:
         """Store GitHub access token for a user.
 
-        The token is stored encrypted in the database (simple base64 for now,
-        should use proper encryption in production).
+        WARNING: The token is stored as base64-encoded plaintext. Base64 is NOT
+        encryption — anyone with database read access can recover the token.
+        In production, replace with proper authenticated encryption (e.g. AES-GCM
+        with a server-side key stored in an environment variable or secret store).
 
         Args:
             user_id: User identifier
@@ -251,7 +253,7 @@ class GitHubService:
         """
         conn = self.db.connect()
         try:
-            # Simple encoding (in production, use proper encryption)
+            # Base64-encode for storage — NOT encryption, see docstring warning above
             encoded_token = base64.b64encode(token.encode()).decode()
             now = datetime.now(timezone.utc).isoformat()
 
@@ -304,7 +306,7 @@ class GitHubService:
             user_id: User identifier
 
         Returns:
-            Decrypted token or None if not set
+            Token or None if not set (base64-decoded, see store_token warning)
         """
         conn = self.db.connect()
         try:
@@ -315,7 +317,7 @@ class GitHubService:
             row = cursor.fetchone()
 
             if row and row["github_token_encrypted"]:
-                # Simple decoding (in production, use proper decryption)
+                # Decode base64 — NOT decryption, see store_token docstring warning
                 return base64.b64decode(row["github_token_encrypted"]).decode()
             return None
         finally:

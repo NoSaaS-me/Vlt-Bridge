@@ -73,14 +73,18 @@ app = FastAPI(
 
 config = get_config()
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+# CORS middleware — build allowed origins list, filtering out empty/falsy values
+_cors_origins = [
+    origin for origin in [
         "http://localhost:5173",
         "http://localhost:3000",
         config.chatgpt_cors_origin,
-    ],
+    ]
+    if origin and origin.strip() and origin.lower() not in ("none", "null", "")
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

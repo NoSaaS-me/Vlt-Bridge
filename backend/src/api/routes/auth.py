@@ -213,9 +213,14 @@ async def callback(
             },
         )
 
-        # Redirect to frontend with token in URL hash
+        # Redirect to frontend with token in URL hash.
+        # NOTE: Hash fragments are not sent to the server in subsequent requests, so
+        # this avoids token leakage via Referer headers on server calls.
+        # However, the token may still appear in browser history on some clients.
         redirect_url = f"{base_url}/#token={jwt_token}"
-        logger.info(f"Redirecting to frontend: {redirect_url}")
+        # Log the redirect destination without the token to avoid leaking credentials
+        logger.info(f"Redirecting to frontend after successful GitHub OAuth login",
+                    extra={"user_id": user_id, "base_url": base_url})
         return RedirectResponse(url=redirect_url, status_code=302)
 
     except GitHubError as e:
@@ -271,7 +276,8 @@ async def get_current_user(auth: AuthContext = Depends(require_auth_context)):
     return User(
         user_id=user_id,
         gh_profile=profile,
-        vault_path=str(vault_path),
+        # Expose only a sanitized relative vault indicator, not the absolute filesystem path
+        vault_path=f"vaults/{user_id}",
         created=created_dt,
     )
 

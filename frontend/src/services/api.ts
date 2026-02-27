@@ -69,10 +69,24 @@ export async function apiFetch<T>(
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  // Handle absolute URL injection for widget
+  // Handle absolute URL for widget embedding.
+  // Security: Validate that the configured API_BASE_URL shares the same origin
+  // as the current page before using it. An attacker-controlled parent frame
+  // could set window.API_BASE_URL to an external origin, causing Bearer tokens
+  // to be sent cross-origin (credential exfiltration).
   let url = endpoint;
   if (endpoint.startsWith('/') && window.API_BASE_URL) {
-    url = `${window.API_BASE_URL}${endpoint}`;
+    try {
+      const configuredBase = new URL(window.API_BASE_URL);
+      const currentOrigin = window.location.origin;
+      // Only use the configured base if it matches the current origin
+      if (configuredBase.origin === currentOrigin) {
+        url = `${window.API_BASE_URL}${endpoint}`;
+      }
+      // If origins differ, fall through to use the relative URL (same-origin fetch)
+    } catch {
+      // Malformed API_BASE_URL — ignore it and use relative path
+    }
   }
 
   const response = await fetch(url, {

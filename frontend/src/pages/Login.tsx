@@ -12,8 +12,12 @@ export function Login() {
   };
 
   const handleLocalDev = () => {
-    // Set a dummy token for local development
-    localStorage.setItem('auth_token', 'local-dev-token');
+    // Set a per-session random token for local development.
+    // Using a random value instead of the well-known literal 'local-dev-token'
+    // reduces the predictability of the bypass credential. The backend in local
+    // mode accepts any non-empty token when LOCAL_USER_ID is configured.
+    const devToken = `local-dev-${crypto.randomUUID()}`;
+    localStorage.setItem('auth_token', devToken);
     window.location.href = '/';
   };
 

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
+logger = logging.getLogger(__name__)
 
 from ...models.note import Note, NoteSummary, NoteUpdate, NoteCreate
 from ...models.project import DEFAULT_PROJECT_ID
@@ -74,7 +77,8 @@ async def list_notes(
             )
         return summaries
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list notes: {str(e)}")
+        logger.exception("Failed to list notes for user %s", auth.user_id)
+        raise HTTPException(status_code=500, detail="Failed to list notes")
 
 
 @router.post("/api/notes", response_model=Note, status_code=201)
@@ -176,7 +180,8 @@ async def create_note(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create note: {str(e)}")
+        logger.exception("Failed to create note %s for user %s", note_path, user_id)
+        raise HTTPException(status_code=500, detail="Failed to create note")
 
 
 @router.get("/api/notes/{path:path}", response_model=Note)
@@ -250,7 +255,8 @@ async def get_note(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Note not found: {path}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read note: {str(e)}")
+        logger.exception("Failed to read note %s for user %s", path, user_id)
+        raise HTTPException(status_code=500, detail="Failed to read note")
 
 
 @router.put("/api/notes/{path:path}", response_model=Note)
@@ -359,7 +365,8 @@ async def update_note(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update note: {str(e)}")
+        logger.exception("Failed to update note %s for user %s", path, user_id)
+        raise HTTPException(status_code=500, detail="Failed to update note")
 
 
 from pydantic import BaseModel
@@ -460,4 +467,5 @@ async def move_note(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to move note: {str(e)}")
+        logger.exception("Failed to move note %s for user %s", path, user_id)
+        raise HTTPException(status_code=500, detail="Failed to move note")

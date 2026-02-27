@@ -2,6 +2,8 @@
 
 Agent memory and vault bridge in one repo: the **vlt** CLI (threads, CodeRAG, Oracle) and the **Document-MCP** web app (Obsidian-style vault + MCP server). They share the vault concept — markdown on disk — and that’s it. No runtime dependency: agents shell out to `vlt` or talk to the MCP server over HTTP; the CLI does not route through the backend.
 
+This is a RAG for any document. A memory system for agents. And a web chat provider to give agents a phone a friend feature.
+
 **Audience:** Developers and MCP integrators wiring agents to memory/vault; CLI users; anyone running the web UI.
 
 ## Quick start by goal

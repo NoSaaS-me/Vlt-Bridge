@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -310,6 +311,28 @@ class ThreadService:
         finally:
             conn.close()
 
+    @staticmethod
+    def _prepare_fts_query(query: str) -> str:
+        """Sanitize user-supplied query for FTS5 MATCH usage.
+
+        Extracts alphanumeric tokens and wraps each in double quotes to
+        neutralize FTS5 operator injection (AND, OR, NOT, NEAR, etc.).
+        A single trailing '*' is preserved to allow prefix searches.
+        Raises ValueError if no valid tokens are found.
+        """
+        token_pattern = re.compile(r"[0-9A-Za-z]+(?:\*)?")
+        sanitized_terms: List[str] = []
+        for match in token_pattern.finditer(query or ""):
+            token = match.group()
+            has_prefix_star = token.endswith("*")
+            core = token[:-1] if has_prefix_star else token
+            if not core:
+                continue
+            sanitized_terms.append(f'"{core}"{"*" if has_prefix_star else ""}')
+        if not sanitized_terms:
+            raise ValueError("Search query must contain alphanumeric characters")
+        return " ".join(sanitized_terms)
+
     # T011: search_threads
     def search_threads(
         self,
@@ -322,6 +345,9 @@ class ThreadService:
         conn = self._db.connect()
 
         try:
+            # Sanitize query to prevent FTS5 operator injection
+            sanitized_query = self._prepare_fts_query(query)
+
             # Use FTS5 for search with BM25 ranking
             sql = """
                 SELECT
@@ -336,7 +362,7 @@ class ThreadService:
                 JOIN threads t ON te.user_id = t.user_id AND te.thread_id = t.thread_id
                 WHERE thread_entries_fts MATCH ? AND te.user_id = ?
             """
-            params = [query, user_id]
+            params = [sanitized_query, user_id]
 
             if project_id:
                 sql += " AND t.project_id = ?"

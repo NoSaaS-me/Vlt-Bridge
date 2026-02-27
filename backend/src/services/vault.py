@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+import os
 from pathlib import Path
 import re
 import time
@@ -79,8 +80,14 @@ def sanitize_path(user_id: str, vault_root: Path, note_path: str, project_id: st
     # Project vault is now: vault_root / user_id / project_id
     vault = (vault_root / user_id / project_id).resolve()
     full_path = (vault / note_path).resolve()
-    if not str(full_path).startswith(str(vault)):
-        raise ValueError(f"Path escapes vault root: {note_path}")
+    # Use os.path.commonpath instead of str.startswith to prevent prefix collisions
+    # e.g. /vault/user vs /vault/user-evil both share the prefix /vault/user
+    try:
+        if os.path.commonpath([str(vault), str(full_path)]) != str(vault):
+            raise ValueError(f"Path escapes vault root: {note_path}")
+    except ValueError as exc:
+        # commonpath raises ValueError for mixed absolute/relative paths
+        raise ValueError(f"Path escapes vault root: {note_path}") from exc
     return full_path
 
 
@@ -325,8 +332,11 @@ class VaultService:
             if "\\" in cleaned or ".." in cleaned:
                 raise ValueError("Folder path contains invalid characters")
             folder_path = (base / cleaned).resolve() if cleaned else base
-            if not str(folder_path).startswith(str(base)):
-                raise ValueError("Folder path escapes vault root")
+            try:
+                if os.path.commonpath([str(base), str(folder_path)]) != str(base):
+                    raise ValueError("Folder path escapes vault root")
+            except ValueError as exc:
+                raise ValueError("Folder path escapes vault root") from exc
             if not folder_path.exists():
                 return []
             if folder_path.is_file():

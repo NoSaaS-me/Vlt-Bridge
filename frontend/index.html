@@ -4,7 +4,34 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <!--
+      Content Security Policy (meta tag — ideally set via HTTP header in production).
+      - default-src 'self': Only load resources from the same origin by default.
+      - script-src 'self': No inline scripts, no eval (hardens against XSS).
+      - style-src 'self' 'unsafe-inline': Tailwind/shadcn-ui use inline styles.
+      - img-src 'self' data: blob:: Allow data URIs for avatars, blob for audio.
+      - connect-src 'self': API calls only to same origin.
+      - font-src 'self': Fonts from same origin only.
+      - frame-ancestors 'none': Prevent clickjacking by denying all framing.
+      - base-uri 'self': Prevent base tag injection attacks.
+      - form-action 'self': Restrict form submissions to same origin.
+      NOTE: KaTeX CSS is bundled so no CDN needed. Google Fonts are loaded via CSS
+      import in App.css — if removed, font-src can stay as 'self'.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self';
+      style-src 'self' 'unsafe-inline';
+      img-src 'self' data: blob:;
+      connect-src 'self';
+      font-src 'self' data:;
+      frame-ancestors 'none';
+      base-uri 'self';
+      form-action 'self';
+    " />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta http-equiv="X-Frame-Options" content="DENY" />
+    <title>Vault.MCP</title>
   </head>
   <body>
     <div id="root"></div>

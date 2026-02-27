@@ -242,7 +242,20 @@ export function NoteViewer({
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={markdownComponents}
-                urlTransform={(url) => url} // Allow all protocols including wikilink:
+                urlTransform={(url) => {
+                  // Allow wikilink: custom protocol used for internal note navigation.
+                  // Block javascript:, vbscript:, and data: to prevent XSS.
+                  if (url.startsWith('wikilink:')) return url;
+                  const lower = url.toLowerCase().trimStart();
+                  if (
+                    lower.startsWith('javascript:') ||
+                    lower.startsWith('vbscript:') ||
+                    lower.startsWith('data:')
+                  ) {
+                    return '';
+                  }
+                  return url;
+                }}
               >
                 {processedBody}
               </ReactMarkdown>

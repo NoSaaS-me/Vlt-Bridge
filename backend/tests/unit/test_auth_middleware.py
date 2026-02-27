@@ -19,21 +19,38 @@ from backend.src.services.auth import AuthService
 
 
 @pytest.fixture(autouse=True)
-def restore_config_cache():
-    """Restore config cache after each test."""
-    config_module.reload_config()
+def restore_config_cache(monkeypatch, tmp_path: Path):
+    """Restore config cache after each test and ensure a JWT secret is always set.
+
+    This patches the middleware's module-level auth_service singleton with a
+    test-secret-backed instance so that tests that don't use the auth_service
+    fixture still get a working validator (no missing-secret 500 errors).
+    """
+    import backend.src.api.middleware.auth_middleware as middleware_module
+
+    secret = "test-secret-key-at-least-16-chars"
+    monkeypatch.setenv("JWT_SECRET_KEY", secret)
+    monkeypatch.setenv("VAULT_BASE_PATH", str(tmp_path))
+    cfg = config_module.reload_config()
+    default_service = AuthService(config=cfg)
+    monkeypatch.setattr(middleware_module, "auth_service", default_service)
     yield
     config_module.reload_config()
 
 
 @pytest.fixture
 def auth_service(monkeypatch, tmp_path: Path):
-    """Create auth service with a test secret."""
+    """Create auth service with a test secret and patch the middleware singleton."""
+    import backend.src.api.middleware.auth_middleware as middleware_module
+
     secret = "test-secret-key-at-least-16-chars"
     monkeypatch.setenv("JWT_SECRET_KEY", secret)
     monkeypatch.setenv("VAULT_BASE_PATH", str(tmp_path))
     cfg = config_module.reload_config()
-    return AuthService(config=cfg)
+    service = AuthService(config=cfg)
+    # Patch the module-level singleton so middleware functions use the test secret
+    monkeypatch.setattr(middleware_module, "auth_service", service)
+    return service
 
 
 @pytest.fixture
