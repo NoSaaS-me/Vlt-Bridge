@@ -500,6 +500,14 @@ async def _run_indexing_job(job):
             logger.error(f"Job {job_id} not found in database")
             return
 
+    # Temporarily set the embedding API key for this job if stored with the job.
+    # This allows the daemon (which may have been started without the key) to
+    # generate embeddings using the user's key passed at job-creation time.
+    _prev_api_key = os.environ.get("VLT_OPENROUTER_API_KEY")
+    if job.embedding_api_key:
+        os.environ["VLT_OPENROUTER_API_KEY"] = job.embedding_api_key
+        logger.debug(f"Set VLT_OPENROUTER_API_KEY from job {job_id} for embedding generation")
+
     try:
         # Create indexer
         target_path = Path(job.target_path)
@@ -609,6 +617,14 @@ async def _run_indexing_job(job):
                 j.completed_at = datetime.now(timezone.utc)
                 j.error_message = error_msg
                 session.commit()
+
+    finally:
+        # Restore the previous API key state (remove or revert to prior value)
+        if job.embedding_api_key:
+            if _prev_api_key is None:
+                os.environ.pop("VLT_OPENROUTER_API_KEY", None)
+            else:
+                os.environ["VLT_OPENROUTER_API_KEY"] = _prev_api_key
 
 
 async def process_coderag_jobs():

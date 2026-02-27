@@ -180,6 +180,8 @@ export function Settings() {
           librarian_timeout: 1200,
           openrouter_api_key: null,
           openrouter_api_key_set: false,
+          glm_api_key: null,
+          glm_api_key_set: false,
           search_provider: 'none',
           tavily_api_key: null,
           tavily_api_key_set: false,
@@ -921,6 +923,14 @@ export function Settings() {
                     )}
                   </div>
                 )}
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-muted-foreground">Routes via:</span>
+                  {modelSettings.oracle_model.startsWith('glm-') ? (
+                    <Badge variant="secondary" className="text-xs">Z.AI (GLM key)</Badge>
+                  ) : (
+                    <Badge variant="secondary" className="text-xs">OpenRouter</Badge>
+                  )}
+                </div>
               </div>
 
               <Separator />
@@ -1070,7 +1080,8 @@ export function Settings() {
               <div className="space-y-2">
                 <label className="text-sm font-medium">OpenRouter API Key</label>
                 <p className="text-xs text-muted-foreground mb-2">
-                  Required for paid models. Get your key at{' '}
+                  Required for CodeRAG embeddings and Oracle when model is not a{' '}
+                  <code className="text-xs bg-muted px-1 rounded">glm-*</code> model. Get your key at{' '}
                   <a
                     href="https://openrouter.ai/keys"
                     target="_blank"
@@ -1104,6 +1115,52 @@ export function Settings() {
                 {modelSettings.openrouter_api_key_set && (
                   <p className="text-xs text-green-600 dark:text-green-400">
                     API key is configured
+                  </p>
+                )}
+              </div>
+
+              <Separator />
+
+              {/* Z.AI GLM API Key */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Z.AI GLM API Key</label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Used when Oracle model starts with{' '}
+                  <code className="text-xs bg-muted px-1 rounded">glm-</code>{' '}
+                  (e.g. glm-4.7, glm-4.5-flash). Get your key at{' '}
+                  <a
+                    href="https://bigmodel.cn"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    bigmodel.cn
+                  </a>
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    type="password"
+                    placeholder={modelSettings.glm_api_key_set ? '••••••••••••••••' : 'your-glm-api-key'}
+                    value={modelSettings.glm_api_key || ''}
+                    onChange={(e) =>
+                      setModelSettings({ ...modelSettings, glm_api_key: e.target.value })
+                    }
+                    className="font-mono text-xs"
+                  />
+                  {modelSettings.glm_api_key_set && !modelSettings.glm_api_key && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setModelSettings({ ...modelSettings, glm_api_key: '' })}
+                      title="Clear saved GLM API key"
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
+                {modelSettings.glm_api_key_set && (
+                  <p className="text-xs text-green-600 dark:text-green-400">
+                    GLM API key is configured
                   </p>
                 )}
               </div>

@@ -1974,6 +1974,7 @@ def _queue_background_indexing(
     target_path: Path,
     force: bool = False,
     priority: int = 0,
+    embedding_api_key: Optional[str] = None,
 ) -> str:
     """Queue a background indexing job for daemon processing.
 
@@ -1985,6 +1986,9 @@ def _queue_background_indexing(
         target_path: Directory to index
         force: If True, ignore incremental caching
         priority: Job priority (higher = processed first)
+        embedding_api_key: OpenRouter API key for vector embeddings. Stored
+            with the job so the daemon can use it when running the indexer,
+            even if the daemon was started without the key in its environment.
 
     Returns:
         Job ID (UUID string)
@@ -2008,6 +2012,7 @@ def _queue_background_indexing(
             chunks_created=0,
             progress_percent=0,
             created_at=datetime.now(timezone.utc),
+            embedding_api_key=embedding_api_key,
         )
         session.add(job)
         session.commit()
@@ -2264,7 +2269,11 @@ def coderag_init(
                 raise typer.Exit(code=1)
         else:
             # Daemon is running - queue job for background processing
-            job_id = _queue_background_indexing(project, path, force)
+            # Pass the API key (from env or None) so daemon can use it for embeddings
+            job_id = _queue_background_indexing(
+                project, path, force,
+                embedding_api_key=os.environ.get("VLT_OPENROUTER_API_KEY"),
+            )
             console.print(f"[green]Indexing job queued.[/green] Job ID: {job_id[:8]}...")
             console.print()
             console.print("[dim]The daemon will process this job in the background.[/dim]")

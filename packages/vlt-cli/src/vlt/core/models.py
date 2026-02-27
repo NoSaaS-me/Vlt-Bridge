@@ -364,5 +364,8 @@ class CodeRAGIndexJob(Base):
     # Error handling
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # API key for embedding generation (stored with job so daemon can use it)
+    embedding_api_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
     # Relationship
     project: Mapped["Project"] = relationship()

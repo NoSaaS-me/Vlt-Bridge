@@ -183,6 +183,14 @@ def apply_oracle_migrations():
             WHERE status IN ('pending', 'running')
         """))
 
+        # Add embedding_api_key column if it doesn't exist (idempotent)
+        try:
+            conn.execute(text(
+                "ALTER TABLE coderag_index_jobs ADD COLUMN embedding_api_key TEXT"
+            ))
+        except Exception:
+            pass  # Column already exists
+
         conn.commit()
 
 

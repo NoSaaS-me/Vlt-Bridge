@@ -3,7 +3,7 @@
  * Note: Field names match backend snake_case (Pydantic default)
  */
 
-export type ModelProvider = 'openrouter' | 'google';
+export type ModelProvider = 'openrouter' | 'google' | 'glm';
 
 export interface ModelInfo {
   id: string;
@@ -27,6 +27,8 @@ export interface ModelSettings {
   librarian_timeout: number;
   openrouter_api_key?: string | null;
   openrouter_api_key_set: boolean;
+  glm_api_key?: string | null;
+  glm_api_key_set: boolean;
   search_provider: SearchProvider;
   tavily_api_key?: string | null;
   tavily_api_key_set: boolean;
