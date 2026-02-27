@@ -3,11 +3,12 @@
  * Supports SUM, AVERAGE, MIN, MAX, COUNT and simple arithmetic on cell references.
  */
 import { useState, useEffect, useCallback } from 'react';
-import DataGrid from 'react-data-grid';
+import { DataGrid } from 'react-data-grid';
 import 'react-data-grid/lib/styles.css';
 import Papa from 'papaparse';
 // formulajs ships a UMD bundle; import the namespace for SUM, AVERAGE, etc.
-import * as formulas from 'formulajs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const formulas = require('formulajs') as Record<string, (...args: unknown[]) => number>;
 import { Save, Plus, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -125,29 +126,26 @@ function evalFormula(formula: string, rows: string[][]): string {
       let result: number;
       switch (fnName) {
         case 'SUM':
-          result = (formulas as unknown as Record<string, (a: number[]) => number>).SUM(numbers);
+          result = formulas.SUM(numbers) as number;
           break;
         case 'AVERAGE':
         case 'AVG':
-          result = (formulas as unknown as Record<string, (a: number[]) => number>).AVERAGE(numbers);
+          result = formulas.AVERAGE(numbers) as number;
           break;
         case 'MIN':
-          result = (formulas as unknown as Record<string, (a: number[]) => number>).MIN(numbers);
+          result = formulas.MIN(numbers) as number;
           break;
         case 'MAX':
-          result = (formulas as unknown as Record<string, (a: number[]) => number>).MAX(numbers);
+          result = formulas.MAX(numbers) as number;
           break;
         case 'COUNT':
-          result = (formulas as unknown as Record<string, (a: number[]) => number>).COUNT(numbers);
+          result = formulas.COUNT(numbers) as number;
           break;
         case 'ABS':
-          result = (formulas as unknown as Record<string, (a: number) => number>).ABS(numbers[0] ?? 0);
+          result = formulas.ABS(numbers[0] ?? 0) as number;
           break;
         case 'ROUND':
-          result = (formulas as unknown as Record<string, (a: number, b: number) => number>).ROUND(
-            numbers[0] ?? 0,
-            numbers[1] ?? 0
-          );
+          result = formulas.ROUND(numbers[0] ?? 0, numbers[1] ?? 0) as number;
           break;
         default:
           return formula; // Unknown function — return raw
@@ -504,12 +502,12 @@ export function SpreadsheetEditor({ assetPath, fileName }: SpreadsheetEditorProp
           onRowsChange={handleRowsChange}
           rowKeyGetter={(row: GridRow) => row.__rowNum__}
           defaultColumnOptions={{ resizable: true }}
-          onSelectedCellChange={(args) => {
+          onSelectedCellChange={(args: { row?: GridRow; column: { key: string } }) => {
             if (args.row === undefined) {
               setSelectedCell(null);
               return;
             }
-            const rowIdx = gridRows.indexOf(args.row as GridRow);
+            const rowIdx = gridRows.indexOf(args.row);
             const colKey = args.column.key;
             if (colKey === '__rowNum__') return;
             const colIdx = parseInt(colKey, 10);

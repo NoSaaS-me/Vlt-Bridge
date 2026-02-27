@@ -26,7 +26,7 @@ import { getModels, getModelSettings, saveModelSettings, testTavilyConnection } 
 import { getContextSettings, updateContextSettings } from '@/services/context';
 import type { User } from '@/types/user';
 import type { IndexHealth } from '@/types/search';
-import type { ModelInfo, ModelSettings } from '@/types/models';
+import type { ModelInfo, ModelSettings, ModelProvider } from '@/types/models';
 import type { ContextSettings } from '@/types/context';
 import type { CodeRAGStatusResponse } from '@/types/coderag';
 import type { GitHubStatus } from '@/types/github';
