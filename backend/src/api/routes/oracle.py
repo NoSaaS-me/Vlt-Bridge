@@ -30,7 +30,6 @@ from ...services.rlm_oracle import RLMOracleWrapper
 from ...services.oracle_bridge import OracleBridge, OracleBridgeError
 from ...services.user_settings import UserSettingsService, get_user_settings_service
 from ...services.openrouter_client import GLM_BASE_URL
-from ...models.settings import ModelProvider
 
 logger = logging.getLogger(__name__)
 
@@ -79,16 +78,13 @@ async def query_oracle(
     - `model_used`: Model that generated the response
     - `retrieval_traces`: Debug information (if explain=True)
     """
-    # Resolve API key and base URL based on provider / model
+    # Resolve API key and base URL based on model name.
+    # GLM models (glm-*) → Z.AI code plan API using glm_api_key.
+    # All other models → OpenRouter using openrouter_api_key.
+    # openrouter_api_key is kept separate for CodeRAG embeddings regardless.
     user_settings = settings_service.get_settings(auth.user_id)
     oracle_model = request.model or user_settings.oracle_model
-    oracle_provider = user_settings.oracle_provider
-
-    # GLM provider: direct access to Z.AI code plan API
-    is_glm = (
-        oracle_provider == ModelProvider.GLM
-        or oracle_model.startswith("glm-")
-    )
+    is_glm = oracle_model.startswith("glm-")
 
     if is_glm:
         api_key = settings_service.get_glm_api_key(auth.user_id)
@@ -100,7 +96,7 @@ async def query_oracle(
             )
     else:
         api_key = settings_service.get_openrouter_api_key(auth.user_id)
-        base_url = None  # OpenRouterClient default
+        base_url = None  # OpenRouterClient default (OpenRouter)
         if not api_key:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -109,7 +105,7 @@ async def query_oracle(
 
     try:
         logger.info(f"Oracle query from user {auth.user_id}: {request.question[:100]}")
-        logger.debug(f"Using oracle_model={oracle_model} provider={'glm' if is_glm else 'openrouter'}")
+        logger.debug(f"Using oracle_model={oracle_model} provider={'z.ai/glm' if is_glm else 'openrouter'}")
 
         # Create RLMOracleWrapper
         wrapper = RLMOracleWrapper(
@@ -196,15 +192,13 @@ async def query_oracle_stream(
     data: {"type": "content", "content": "Based on the code..."}
     ```
     """
-    # Resolve API key and base URL based on provider / model
+    # Resolve API key and base URL based on model name.
+    # GLM models (glm-*) → Z.AI code plan API using glm_api_key.
+    # All other models → OpenRouter using openrouter_api_key.
+    # openrouter_api_key is kept separate for CodeRAG embeddings regardless.
     user_settings = settings_service.get_settings(auth.user_id)
     oracle_model = request.model or user_settings.oracle_model
-    oracle_provider = user_settings.oracle_provider
-
-    is_glm = (
-        oracle_provider == ModelProvider.GLM
-        or oracle_model.startswith("glm-")
-    )
+    is_glm = oracle_model.startswith("glm-")
 
     if is_glm:
         api_key = settings_service.get_glm_api_key(auth.user_id)
@@ -219,7 +213,7 @@ async def query_oracle_stream(
             return EventSourceResponse(glm_error_generator())
     else:
         api_key = settings_service.get_openrouter_api_key(auth.user_id)
-        base_url = None  # OpenRouterClient default
+        base_url = None  # OpenRouterClient default (OpenRouter)
         if not api_key:
             async def or_error_generator():
                 error_chunk = OracleStreamChunk(
@@ -234,7 +228,7 @@ async def query_oracle_stream(
         logger.info(f"Cancelling existing session for user {auth.user_id}")
         _active_sessions[auth.user_id].cancel()
 
-    logger.debug(f"Stream using oracle_model={oracle_model} provider={'glm' if is_glm else 'openrouter'}")
+    logger.debug(f"Stream using oracle_model={oracle_model} provider={'z.ai/glm' if is_glm else 'openrouter'}")
 
     # Create RLMOracleWrapper
     wrapper = RLMOracleWrapper(

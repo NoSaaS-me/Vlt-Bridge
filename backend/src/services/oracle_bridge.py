@@ -798,6 +798,7 @@ class OracleBridge:
         target_path: str,
         force: bool = False,
         background: bool = True,
+        openrouter_api_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Initialize or re-index CodeRAG for a project.
@@ -810,6 +811,7 @@ class OracleBridge:
             target_path: Directory path to index
             force: Force re-index even if index exists
             background: Run indexing in background (via daemon)
+            openrouter_api_key: User's OpenRouter API key for embeddings during indexing
 
         Returns:
             Dict containing:
@@ -825,7 +827,11 @@ class OracleBridge:
         if background:
             args.append("--background")
 
-        return self._run_vlt_command(args, timeout=60)
+        env_vars = {}
+        if openrouter_api_key:
+            env_vars["VLT_OPENROUTER_API_KEY"] = openrouter_api_key
+
+        return self._run_vlt_command(args, timeout=60, env_vars=env_vars if env_vars else None)
 
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """

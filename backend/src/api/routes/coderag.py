@@ -26,6 +26,7 @@ from ...models.coderag import (
     JobSummary,
 )
 from ...services.oracle_bridge import OracleBridge
+from ...services.user_settings import UserSettingsService, get_user_settings_service
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ async def init_coderag(
     request: InitCodeRAGRequest,
     auth: AuthContext = Depends(get_auth_context),
     bridge: OracleBridge = Depends(get_oracle_bridge),
+    settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """
     Initialize or re-index CodeRAG for a project.
@@ -159,11 +161,15 @@ async def init_coderag(
             f"(path: {request.target_path}, force: {request.force}, user: {auth.user_id})"
         )
 
+        # Pass OpenRouter key for embedding generation during indexing
+        openrouter_key = settings_service.get_openrouter_api_key(auth.user_id)
+
         result = bridge.init_coderag(
             project_id=request.project_id,
             target_path=request.target_path,
             force=request.force,
             background=request.background,
+            openrouter_api_key=openrouter_key,
         )
 
         if result.get("error"):

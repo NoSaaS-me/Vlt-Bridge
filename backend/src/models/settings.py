@@ -67,7 +67,7 @@ class ModelSettings(BaseModel):
     )
     openrouter_api_key: Optional[str] = Field(
         default=None,
-        description="User's OpenRouter API key for accessing paid models"
+        description="OpenRouter API key — used for CodeRAG embeddings and non-GLM LLM models"
     )
     openrouter_api_key_set: bool = Field(
         default=False,
@@ -87,7 +87,7 @@ class ModelSettings(BaseModel):
     )
     glm_api_key: Optional[str] = Field(
         default=None,
-        description="User's Z.AI GLM API key for direct access to GLM coding models"
+        description="Z.AI GLM API key — used for all LLM inference when oracle_model starts with 'glm-'"
     )
     glm_api_key_set: bool = Field(
         default=False,
