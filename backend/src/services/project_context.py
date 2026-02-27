@@ -636,6 +636,65 @@ class TextHandle:
 
 
 # ---------------------------------------------------------------------------
+# AssetHandle — lazy access to vault asset files
+# ---------------------------------------------------------------------------
+
+_TEXT_ASSET_MIMES = {
+    "text/html", "text/csv", "text/plain",
+    "application/xhtml+xml",
+}
+
+_TEXT_ASSET_EXTENSIONS = {".html", ".htm", ".csv", ".txt"}
+
+
+class AssetHandle:
+    """Lazy asset access for Oracle REPL.
+
+    .text returns OCR text (PDF/images) or raw UTF-8 content (HTML/CSV/TXT).
+    Binary files (audio/video) return None from .text.
+    """
+
+    def __init__(
+        self,
+        asset_path: str,
+        mime_type: str,
+        ocr_text: Optional[str],
+        full_path: Path,
+    ) -> None:
+        self.path = asset_path
+        self.mime_type = mime_type
+        self._ocr_text = ocr_text
+        self._full_path = full_path
+
+    @property
+    def text(self) -> Optional[str]:
+        """Return textual content for the asset.
+
+        - PDF/image: returns pre-extracted OCR text (may be None if not yet done).
+        - HTML/CSV/TXT: reads and returns raw UTF-8 content.
+        - Audio/video: returns None (binary, no text).
+        """
+        # OCR-backed assets
+        if self.mime_type == "application/pdf" or self.mime_type.startswith("image/"):
+            return self._ocr_text
+
+        # Text-readable assets
+        suffix = self._full_path.suffix.lower()
+        if suffix in _TEXT_ASSET_EXTENSIONS or self.mime_type in _TEXT_ASSET_MIMES:
+            try:
+                return self._full_path.read_text(encoding="utf-8", errors="replace")
+            except Exception as exc:
+                logger.debug("AssetHandle.text read failed for %s: %s", self.path, exc)
+                return None
+
+        # Binary — audio, video, etc.
+        return None
+
+    def __repr__(self) -> str:
+        return f"AssetHandle(path={self.path!r}, mime={self.mime_type!r})"
+
+
+# ---------------------------------------------------------------------------
 # T013 — ProjectContext
 # ---------------------------------------------------------------------------
 
@@ -979,6 +1038,65 @@ class ProjectContext:
         except Exception as exc:
             logger.debug("ProjectContext.notes() failed: %s", exc)
             return []
+
+    # ------------------------------------------------------------------
+    # Asset access
+    # ------------------------------------------------------------------
+
+    def list_assets(self) -> list[dict]:
+        """List all project assets with path, mime_type, and ocr_status.
+
+        Returns a list of dicts suitable for LLM inspection. Returns [] if
+        the asset system is unavailable or the vault has no assets.
+        """
+        try:
+            from .asset_vault import AssetVaultService, ALLOWED_EXTENSIONS
+            from .asset_indexer import AssetIndexer
+            vault = AssetVaultService()
+            indexer = AssetIndexer()
+            summaries = vault.list_assets(self.user_id, self.project_id)
+            results: list[dict] = []
+            for s in summaries:
+                meta = indexer.get_asset_metadata(self.user_id, self.project_id, s.asset_path)
+                results.append({
+                    "path": s.asset_path,
+                    "mime_type": s.mime_type,
+                    "file_size": s.file_size,
+                    "ocr_status": meta["ocr_status"] if meta else s.ocr_status,
+                    "updated": s.updated,
+                })
+            return results
+        except Exception as exc:
+            logger.debug("ProjectContext.list_assets() failed: %s", exc)
+            return []
+
+    @property
+    def assets(self) -> "dict[str, AssetHandle]":
+        """All project assets as {path: AssetHandle} dict.
+
+        Loads OCR text from the index for each asset. Returns {} on error.
+        """
+        try:
+            from .asset_vault import AssetVaultService
+            from .asset_indexer import AssetIndexer
+            vault = AssetVaultService()
+            indexer = AssetIndexer()
+            summaries = vault.list_assets(self.user_id, self.project_id)
+            result: dict[str, AssetHandle] = {}
+            for s in summaries:
+                full_path = vault.get_full_path(self.user_id, self.project_id, s.asset_path)
+                meta = indexer.get_asset_metadata(self.user_id, self.project_id, s.asset_path)
+                ocr_text = meta.get("ocr_text") if meta else None
+                result[s.asset_path] = AssetHandle(
+                    asset_path=s.asset_path,
+                    mime_type=s.mime_type,
+                    ocr_text=ocr_text,
+                    full_path=full_path,
+                )
+            return result
+        except Exception as exc:
+            logger.debug("ProjectContext.assets failed: %s", exc)
+            return {}
 
     # ------------------------------------------------------------------
     # Repr
