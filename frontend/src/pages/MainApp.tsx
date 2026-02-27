@@ -813,16 +813,6 @@ export function MainApp() {
             >
               <Network className="h-4 w-4 transition-transform duration-250" />
             </Button>
-            {/* [U] Upload button */}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowUploadDialog(true)}
-              title="Upload file"
-              disabled={isDemoMode}
-            >
-              <Upload className="h-4 w-4" />
-            </Button>
             {/* [S] Settings button */}
             <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
               <SettingsIcon className="h-4 w-4" />
@@ -838,12 +828,13 @@ export function MainApp() {
           <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
             <div className="h-full flex flex-col">
               <div className="p-4 space-y-4">
+                <div className="flex gap-2">
                 <Dialog
                   open={isNewNoteDialogOpen}
                   onOpenChange={handleDialogOpenChange}
                 >
                   <DialogTrigger asChild>
-                    <Button variant="outline" size="sm" className="w-full" disabled={isDemoMode}>
+                    <Button variant="outline" size="sm" className="flex-1" disabled={isDemoMode}>
                       <Plus className="h-4 w-4 mr-1" />
                       New Note
                     </Button>
@@ -888,6 +879,17 @@ export function MainApp() {
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  disabled={isDemoMode}
+                  onClick={() => setShowUploadDialog(true)}
+                >
+                  <Upload className="h-4 w-4 mr-1" />
+                  Upload File
+                </Button>
+                </div>
                 <Dialog
                   open={isNewFolderDialogOpen}
                   onOpenChange={handleFolderDialogOpenChange}
