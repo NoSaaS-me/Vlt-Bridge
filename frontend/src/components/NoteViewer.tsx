@@ -43,6 +43,8 @@ interface NoteViewerProps {
   onTtsVolumeChange?: (volume: number) => void;
   fontSize?: FontSizePreset;
   onFontSizeChange?: (size: FontSizePreset) => void;
+  /** Used to resolve embed asset URLs. */
+  projectId?: string;
 }
 
 export function NoteViewer({
@@ -59,6 +61,7 @@ export function NoteViewer({
   onTtsVolumeChange,
   fontSize = 'medium',
   onFontSizeChange,
+  projectId,
 }: NoteViewerProps) {
   // T042-T047: Table of Contents hook
   const { headings, isOpen: isTocOpen, setIsOpen: setIsTocOpen, scrollToHeading } = useTableOfContents();
@@ -68,24 +71,41 @@ export function NoteViewer({
     resetSlugCache();
   }, [note.note_path]);
 
-  // Create custom markdown components with wikilink handler
+  // Create custom markdown components with wikilink handler and embed support
   const markdownComponents = useMemo(
-    () => createWikilinkComponent(onWikilinkClick),
-    [onWikilinkClick]
+    () => createWikilinkComponent(onWikilinkClick, projectId),
+    [onWikilinkClick, projectId]
   );
 
-  // Pre-process markdown to convert wikilinks to standard links
-  // [[Link]] -> [Link](wikilink:Link)
-  // [[Link|Alias]] -> [Alias](wikilink:Link)
+  // Pre-process markdown to convert wikilinks and embed syntax to standard markdown.
+  //
+  // [[embed:filename.ext]]  → ![embed:filename.ext](embed:encodeURIComponent(filename.ext))
+  //   The custom img renderer in createWikilinkComponent detects the embed: URL scheme
+  //   and renders the appropriate viewer inline.
+  //
+  // [[Link]]       → [Link](wikilink:Link)
+  // [[Link|Alias]] → [Alias](wikilink:Link)
   const processedBody = useMemo(() => {
     if (!note.body) return '';
-    const processed = note.body.replace(/\[\[([^\]]+)\]\]/g, (_match, content) => {
+
+    // Step 1: Convert [[embed:...]] before wikilink processing so they don't
+    // accidentally match the general wikilink pattern.
+    let processed = note.body.replace(
+      /\[\[embed:([^\]]+)\]\]/g,
+      (_match, filename: string) => {
+        const encoded = encodeURIComponent(filename);
+        return `![embed:${filename}](embed:${encoded})`;
+      }
+    );
+
+    // Step 2: Convert remaining [[...]] wikilinks (but not [[embed:...]] already replaced).
+    processed = processed.replace(/\[\[([^\]]+)\]\]/g, (_match, content) => {
       const [link, alias] = content.split('|');
       const displayText = alias || link;
       const href = `wikilink:${encodeURIComponent(link)}`;
       return `[${displayText}](${href})`;
     });
-    // console.log('Processed Body:', processed);
+
     return processed;
   }, [note.body]);
 
@@ -243,9 +263,10 @@ export function NoteViewer({
                 remarkPlugins={[remarkGfm]}
                 components={markdownComponents}
                 urlTransform={(url) => {
-                  // Allow wikilink: custom protocol used for internal note navigation.
+                  // Allow wikilink: and embed: custom protocols.
                   // Block javascript:, vbscript:, and data: to prevent XSS.
                   if (url.startsWith('wikilink:')) return url;
+                  if (url.startsWith('embed:')) return url;
                   const lower = url.toLowerCase().trimStart();
                   if (
                     lower.startsWith('javascript:') ||

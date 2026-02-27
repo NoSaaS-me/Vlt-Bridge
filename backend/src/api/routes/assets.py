@@ -5,16 +5,48 @@ from __future__ import annotations
 import logging
 import mimetypes
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from ...models.asset import AssetMetadata, AssetMoveRequest, AssetSearchResult, AssetSummary, AssetUploadResponse
 from ...models.project import DEFAULT_PROJECT_ID
 from ...services.asset_indexer import AssetIndexer
 from ...services.asset_vault import AssetVaultService, MAX_ASSET_BYTES, validate_asset_path
+from ...services.auth import AuthService
 from ..middleware import AuthContext, require_auth_context
+
+
+_auth_service = AuthService()
+
+
+def _require_asset_auth(
+    authorization: Annotated[Optional[str], Header(alias="Authorization")] = None,
+    token: Optional[str] = Query(None, description="JWT token (for <img>/<video> src URLs)"),
+) -> AuthContext:
+    """Auth dependency that accepts Bearer header OR ?token= query param.
+
+    <img src>, <video src>, and <audio src> elements cannot send Authorization
+    headers, so we also accept a ?token= query parameter for media serving.
+    """
+    raw = token or authorization
+    if not raw:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "unauthorized", "message": "Authorization required"},
+        )
+    # Strip "Bearer " prefix if present (header form)
+    if raw.lower().startswith("bearer "):
+        raw = raw[7:]
+    try:
+        payload = _auth_service.validate_jwt(raw)
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "unauthorized", "message": "Invalid or expired token"},
+        )
+    return AuthContext(user_id=payload.sub, token=raw, payload=payload)
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +226,7 @@ async def get_asset_metadata(
 async def get_asset(
     asset_path: str,
     project_id: str = Query(DEFAULT_PROJECT_ID),
-    auth: AuthContext = Depends(require_auth_context),
+    auth: AuthContext = Depends(_require_asset_auth),
 ):
     """Stream the raw asset file with appropriate content type."""
     user_id = auth.user_id

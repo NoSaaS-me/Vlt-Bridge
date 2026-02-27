@@ -7,9 +7,13 @@ import React, { useState } from 'react';
 import type { Components } from 'react-markdown';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import { Badge } from '@/components/ui/badge';
-import { resolveWikilink, getNotePreview } from '@/services/api';
+import { resolveWikilink, getNotePreview, getAssetUrl } from '@/services/api';
 import type { NotePreview } from '@/types/note';
 import { formatDistanceToNow } from '@/lib/utils';
+import { getFileCategory } from '@/lib/fileTypes';
+import { PdfViewer } from '@/components/viewers/PdfViewer';
+import { AudioPlayer } from '@/components/viewers/AudioPlayer';
+import { VideoPlayer } from '@/components/viewers/VideoPlayer';
 
 export interface WikilinkComponentProps {
   linkText: string;
@@ -459,11 +463,74 @@ function WikilinkPreview({
 }
 
 /**
+ * Inline embed renderer for [[embed:filename.ext]] syntax.
+ * Called from the img component override when src starts with "embed:".
+ */
+function EmbedViewer({
+  embedPath,
+  projectId,
+}: {
+  embedPath: string;
+  projectId?: string;
+}) {
+  const category = getFileCategory(embedPath);
+  const assetUrl = getAssetUrl(embedPath, projectId);
+
+  if (category === 'image') {
+    return (
+      <img
+        src={assetUrl}
+        alt={embedPath}
+        className="max-w-full rounded my-2"
+        loading="lazy"
+      />
+    );
+  }
+
+  if (category === 'pdf') {
+    return (
+      <div className="h-[500px] my-4 rounded overflow-hidden border border-border">
+        <PdfViewer assetPath={embedPath} projectId={projectId} />
+      </div>
+    );
+  }
+
+  if (category === 'audio') {
+    return (
+      <div className="my-4">
+        <AudioPlayer assetPath={embedPath} projectId={projectId} />
+      </div>
+    );
+  }
+
+  if (category === 'video') {
+    return (
+      <div className="my-4">
+        <VideoPlayer assetPath={embedPath} projectId={projectId} />
+      </div>
+    );
+  }
+
+  // Fallback: download link
+  return (
+    <a
+      href={assetUrl}
+      className="text-primary hover:underline"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      {embedPath}
+    </a>
+  );
+}
+
+/**
  * Custom renderer for wikilinks in markdown
  * T090: Enhanced with keyboard accessibility support
  */
 export function createWikilinkComponent(
-  onWikilinkClick?: (linkText: string) => void
+  onWikilinkClick?: (linkText: string) => void,
+  projectId?: string
 ): Components {
   return {
     // Style links
@@ -513,6 +580,23 @@ export function createWikilinkComponent(
         >
           {children}
         </a>
+      );
+    },
+
+    // [[embed:filename.ext]] support — rendered as img by preprocessor with embed: URL scheme
+    img: ({ src, alt }) => {
+      if (src?.startsWith('embed:')) {
+        const embedPath = decodeURIComponent(src.slice('embed:'.length));
+        return <EmbedViewer embedPath={embedPath} projectId={projectId} />;
+      }
+      // Regular image: render normally
+      return (
+        <img
+          src={src}
+          alt={alt ?? ''}
+          className="max-w-full rounded my-2"
+          loading="lazy"
+        />
       );
     },
 

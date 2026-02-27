@@ -2,9 +2,9 @@
  * T080, T083-T084: Main application layout with two-pane design
  * Loads directory tree on mount and note + backlinks when path changes
  */
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle, List, AlertCircle } from 'lucide-react';
+import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle, List, AlertCircle, Upload } from 'lucide-react';
 import { useFontSize } from '@/hooks/useFontSize';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
@@ -23,6 +23,7 @@ import { GraphView } from '@/components/GraphView';
 import { GlowParticleEffect } from '@/components/GlowParticleEffect';
 import {
   listNotes,
+  listAssets,
   getNote,
   getBacklinks,
   getIndexHealth,
@@ -32,6 +33,10 @@ import {
   type BacklinkResult,
   APIException,
 } from '@/services/api';
+import { getFileCategory } from '@/lib/fileTypes';
+import type { AssetSummary } from '@/types/asset';
+import { FileViewer } from '@/components/FileViewer';
+import { FileUpload } from '@/components/FileUpload';
 import {
   Dialog,
   DialogContent,
@@ -73,8 +78,10 @@ export function MainApp() {
   } = useProjectContext();
 
   const [notes, setNotes] = useState<NoteSummary[]>([]);
+  const [assetSummaries, setAssetSummaries] = useState<AssetSummary[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [currentNote, setCurrentNote] = useState<Note | null>(null);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
   const [backlinks, setBacklinks] = useState<BacklinkResult[]>([]);
   const [isLoadingNotes, setIsLoadingNotes] = useState(true);
   const [isLoadingNote, setIsLoadingNote] = useState(false);
@@ -160,6 +167,22 @@ export function MainApp() {
     }
   }, [ttsPlayerError, toast]);
 
+  // Load all files (notes + assets) in parallel
+  const loadAllFiles = useCallback(async () => {
+    try {
+      const [fetchedNotes, fetchedAssets] = await Promise.all([
+        listNotes(selectedProjectId || undefined),
+        listAssets(undefined, selectedProjectId || undefined),
+      ]);
+      setNotes(fetchedNotes);
+      setAssetSummaries(fetchedAssets);
+      return fetchedNotes;
+    } catch (err) {
+      console.error('[MainApp] Error loading files:', err);
+      return [];
+    }
+  }, [selectedProjectId]);
+
   // T083: Load directory tree on mount and when project changes
   // T119: Load index health
   useEffect(() => {
@@ -170,9 +193,10 @@ export function MainApp() {
       setIsLoadingNotes(true);
       setError(null);
       try {
-        // Load notes and index health in parallel
-        const [notesList, health] = await Promise.all([
+        // Load notes, assets, and index health in parallel
+        const [notesList, , health] = await Promise.all([
           listNotes(selectedProjectId),
+          listAssets(undefined, selectedProjectId).then(setAssetSummaries).catch(() => null),
           getIndexHealth(selectedProjectId).catch(() => null), // Don't fail if health unavailable
         ]);
 
@@ -209,11 +233,16 @@ export function MainApp() {
     };
   }, []);
 
-  // T084: Load note and backlinks when path changes
+  // T084: Load note and backlinks when path changes (only for markdown files)
   useEffect(() => {
     if (!selectedPath) {
       setCurrentNote(null);
       setBacklinks([]);
+      return;
+    }
+
+    // Don't try to load asset paths as notes
+    if (getFileCategory(selectedPath) !== 'markdown') {
       return;
     }
 
@@ -374,6 +403,14 @@ export function MainApp() {
     setError(null);
     setIsEditMode(false); // Exit edit mode when switching notes
     setIsChatCenterView(false); // Exit chat center view when switching notes
+
+    const category = getFileCategory(path);
+    if (category !== 'markdown') {
+      // Asset selected — clear note state (FileViewer handles display)
+      setCurrentNote(null);
+      setBacklinks([]);
+    }
+    // If markdown, note will load via useEffect
   };
 
   // Refresh all views when notes are changed
@@ -386,14 +423,16 @@ export function MainApp() {
       // Small delay to ensure backend indexing completes
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Fetch fresh data for current project
-      const [notesList, health] = await Promise.all([
+      // Fetch fresh data for current project (notes + assets + index health)
+      const [notesList, assetsList, health] = await Promise.all([
         listNotes(selectedProjectId || undefined),
+        listAssets(undefined, selectedProjectId || undefined).catch(() => [] as AssetSummary[]),
         getIndexHealth(selectedProjectId || undefined).catch(() => null)
       ]);
 
-      console.log('[MainApp] Fetched', notesList.length, 'notes');
+      console.log('[MainApp] Fetched', notesList.length, 'notes,', assetsList.length, 'assets');
       setNotes(notesList);
+      setAssetSummaries(assetsList);
       setIndexHealth(health);
       setGraphRefreshTrigger(prev => {
         const newValue = prev + 1;
@@ -421,7 +460,7 @@ export function MainApp() {
     setIsEditMode(false);
     setError(null);
     // Reload notes list to update modified timestamp
-    listNotes(selectedProjectId || undefined).then(setNotes).catch(console.error);
+    loadAllFiles().catch(console.error);
   };
 
   // Handle editor cancel
@@ -535,9 +574,8 @@ export function MainApp() {
             body: `# ${baseName}\n\nStart writing your note here...`,
           }, selectedProjectId || undefined);
 
-          // Refresh notes list
-          const notesList = await listNotes(selectedProjectId || undefined);
-          setNotes(notesList);
+          // Refresh notes + assets list
+          await loadAllFiles();
 
           // Select the new note
           setSelectedPath(note.note_path);
@@ -599,9 +637,8 @@ export function MainApp() {
         body: `# ${folderPath}\n\nThis folder was created.`,
       }, selectedProjectId || undefined);
 
-      // Refresh notes list
-      const notesList = await listNotes(selectedProjectId || undefined);
-      setNotes(notesList);
+      // Refresh notes + assets list
+      await loadAllFiles();
 
       toast.success(`Folder "${folderPath}" created successfully`);
     } catch (err) {
@@ -644,9 +681,8 @@ export function MainApp() {
 
       await moveNote(oldPath, newPath, selectedProjectId || undefined);
 
-      // Refresh notes list
-      const notesList = await listNotes(selectedProjectId || undefined);
-      setNotes(notesList);
+      // Refresh notes + assets list
+      await loadAllFiles();
 
       // If moving currently selected note, update selection
       if (selectedPath === oldPath) {
@@ -777,6 +813,16 @@ export function MainApp() {
             >
               <Network className="h-4 w-4 transition-transform duration-250" />
             </Button>
+            {/* [U] Upload button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowUploadDialog(true)}
+              title="Upload file"
+              disabled={isDemoMode}
+            >
+              <Upload className="h-4 w-4" />
+            </Button>
             {/* [S] Settings button */}
             <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
               <SettingsIcon className="h-4 w-4" />
@@ -901,6 +947,7 @@ export function MainApp() {
                 ) : (
                   <DirectoryTree
                     notes={notes}
+                    assetSummaries={assetSummaries}
                     selectedPath={selectedPath || undefined}
                     onSelectNote={handleSelectNote}
                     onMoveNote={handleMoveNoteToFolder}
@@ -949,6 +996,13 @@ export function MainApp() {
                   refreshTrigger={graphRefreshTrigger}
                   projectId={selectedProjectId}
                 />
+              ) : selectedPath && getFileCategory(selectedPath) !== 'markdown' ? (
+                // Asset file viewer
+                <FileViewer
+                  assetPath={selectedPath}
+                  projectId={selectedProjectId || undefined}
+                  fileName={selectedPath.split('/').pop()}
+                />
               ) : (
                 isLoadingNote || !isFontReady ? (
                   <NoteViewerSkeleton />
@@ -975,6 +1029,7 @@ export function MainApp() {
                       onTtsVolumeChange={setTtsVolume}
                       fontSize={fontSize}
                       onFontSizeChange={setFontSize}
+                      projectId={selectedProjectId || undefined}
                     />
                   )
                 ) : (
@@ -1047,6 +1102,24 @@ export function MainApp() {
         onOpenChange={setIsCreateProjectOpen}
         onCreateProject={handleCreateProject}
       />
+
+      {/* File Upload Dialog */}
+      {showUploadDialog && (
+        <FileUpload
+          open={showUploadDialog}
+          onClose={() => setShowUploadDialog(false)}
+          onUploadComplete={() => {
+            setShowUploadDialog(false);
+            loadAllFiles().catch(console.error);
+          }}
+          projectId={selectedProjectId || undefined}
+          defaultFolder={
+            selectedPath
+              ? selectedPath.substring(0, selectedPath.lastIndexOf('/')) || undefined
+              : undefined
+          }
+        />
+      )}
 
       {/* Footer with Index Health */}
       <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground animate-fade-in" style={{ animationDelay: '0.2s' }}>

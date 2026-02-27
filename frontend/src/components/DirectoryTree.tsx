@@ -1,43 +1,50 @@
 /**
  * T077: Directory tree component with collapsible folders
+ * Updated: multi-format file support — notes + assets, file-type icons
  */
 import React, { useState, useMemo, useEffect } from 'react';
-import { ChevronRight, ChevronDown, Folder, File } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { NoteSummary } from '@/types/note';
+import type { AssetSummary } from '@/types/asset';
+import { getFileCategory, getFileIcon, type FileCategory } from '@/lib/fileTypes';
 import { cn } from '@/lib/utils';
 
 interface TreeNode {
   name: string;
   path: string;
   type: 'file' | 'folder';
+  fileCategory?: FileCategory;
   children?: TreeNode[];
   note?: NoteSummary;
+  asset?: AssetSummary;
 }
 
 interface DirectoryTreeProps {
   notes: NoteSummary[];
+  assetSummaries?: AssetSummary[];
   selectedPath?: string;
   onSelectNote: (path: string) => void;
   onMoveNote?: (oldPath: string, newFolderPath: string) => void;
 }
 
 /**
- * Build a tree structure from flat list of note paths
+ * Build a tree structure from flat list of note paths and optional asset paths
  */
-function buildTree(notes: NoteSummary[]): TreeNode[] {
+function buildTree(notes: NoteSummary[], assets: AssetSummary[]): TreeNode[] {
   const root: TreeNode = { name: '', path: '', type: 'folder', children: [] };
 
-  for (const note of notes) {
-    const parts = note.note_path.split('/');
+  // Helper to navigate/create folders and insert a file node
+  const insertFile = (filePath: string, node: TreeNode) => {
+    const parts = filePath.split('/');
     let current = root;
 
     // Navigate/create folders
     for (let i = 0; i < parts.length - 1; i++) {
       const folderName = parts[i];
       const folderPath = parts.slice(0, i + 1).join('/');
-      
+
       let folder = current.children?.find(
         (child) => child.name === folderName && child.type === 'folder'
       );
@@ -56,14 +63,30 @@ function buildTree(notes: NoteSummary[]): TreeNode[] {
       current = folder;
     }
 
-    // Add file
-    const fileName = parts[parts.length - 1];
+    // Add file node
     current.children = current.children || [];
-    current.children.push({
-      name: fileName,
+    current.children.push(node);
+  };
+
+  // Insert notes
+  for (const note of notes) {
+    insertFile(note.note_path, {
+      name: note.note_path.split('/').pop() || note.note_path,
       path: note.note_path,
       type: 'file',
+      fileCategory: 'markdown',
       note,
+    });
+  }
+
+  // Insert assets
+  for (const asset of assets) {
+    insertFile(asset.asset_path, {
+      name: asset.asset_path.split('/').pop() || asset.asset_path,
+      path: asset.asset_path,
+      type: 'file',
+      fileCategory: getFileCategory(asset.asset_path),
+      asset,
     });
   }
 
@@ -188,8 +211,16 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote, for
 
   // File node
   const isSelected = node.path === selectedPath;
-  // Remove .md extension for display
-  const displayName = node.name.replace(/\.md$/, '');
+
+  // Remove .md extension for markdown files only; keep full filename for assets
+  const displayName =
+    node.fileCategory === 'markdown'
+      ? node.name.replace(/\.md$/, '')
+      : node.name;
+
+  // Resolve the icon component based on file category
+  const category = node.fileCategory ?? 'unknown';
+  const IconComp = getFileIcon(category);
 
   return (
     <Button
@@ -205,14 +236,14 @@ function TreeNodeItem({ node, depth, selectedPath, onSelectNote, onMoveNote, for
       draggable
       onDragStart={handleDragStart}
     >
-      <File className="h-4 w-4 mr-2 shrink-0 text-muted-foreground transition-colors duration-200" />
+      <IconComp className="h-4 w-4 mr-2 shrink-0 text-muted-foreground transition-colors duration-200" />
       <span className="truncate">{displayName}</span>
     </Button>
   );
 }
 
-export function DirectoryTree({ notes, selectedPath, onSelectNote, onMoveNote }: DirectoryTreeProps) {
-  const tree = useMemo(() => buildTree(notes), [notes]);
+export function DirectoryTree({ notes, assetSummaries = [], selectedPath, onSelectNote, onMoveNote }: DirectoryTreeProps) {
+  const tree = useMemo(() => buildTree(notes, assetSummaries), [notes, assetSummaries]);
 
   // T012: Add expandAll state to DirectoryTree component
   // T013: Add collapseAll state to DirectoryTree component
@@ -235,10 +266,10 @@ export function DirectoryTree({ notes, selectedPath, onSelectNote, onMoveNote }:
     }, 300);
   };
 
-  if (notes.length === 0) {
+  if (notes.length === 0 && assetSummaries.length === 0) {
     return (
       <div className="p-4 text-sm text-muted-foreground text-center">
-        No notes found. Create your first note to get started.
+        No files found. Create your first note to get started.
       </div>
     );
   }
@@ -283,4 +314,3 @@ export function DirectoryTree({ notes, selectedPath, onSelectNote, onMoveNote }:
     </ScrollArea>
   );
 }
-
