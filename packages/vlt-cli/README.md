@@ -21,12 +21,18 @@
 
 ## Installation
 
-See [QUICKSTART.md](QUICKSTART.md) for detailed instructions.
+**New users:** See [docs/FIRST_TIME_SETUP.md](docs/FIRST_TIME_SETUP.md) for complete setup instructions.
 
+**Quick start:**
 ```bash
-pip install -e .
+cd packages/vlt-cli
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[oracle]"
+vlt profile init
 vlt config set-key <YOUR_OPENROUTER_KEY>
 ```
+
+See [QUICKSTART.md](QUICKSTART.md) for daily workflow.
 
 ## Feedback
 

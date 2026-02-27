@@ -1,7 +1,7 @@
 """Pydantic models for user settings and model providers."""
 
 from enum import Enum
-from typing import Optional, List
+from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
 
 
@@ -9,6 +9,21 @@ class ModelProvider(str, Enum):
     """Available model providers."""
     OPENROUTER = "openrouter"
     GOOGLE = "google"
+
+
+class OracleSettings(BaseModel):
+    """Oracle MCP toggle settings."""
+    oracle_mcp_enabled: bool = Field(
+        default=True,
+        description="Whether oracle MCP tools are enabled for this user"
+    )
+
+
+class OracleSettingsUpdate(BaseModel):
+    """Request to update oracle MCP toggle."""
+    oracle_mcp_enabled: bool = Field(
+        description="Whether oracle MCP tools should be enabled"
+    )
 
 
 class ModelSettings(BaseModel):
@@ -56,6 +71,18 @@ class ModelSettings(BaseModel):
     openrouter_api_key_set: bool = Field(
         default=False,
         description="Whether an OpenRouter API key has been configured (key itself is not returned)"
+    )
+    search_provider: Literal["tavily", "openrouter", "none"] = Field(
+        default="none",
+        description="Search provider for deep research (tavily, openrouter, or none)"
+    )
+    tavily_api_key: Optional[str] = Field(
+        default=None,
+        description="User's Tavily API key for deep research (encrypted storage)"
+    )
+    tavily_api_key_set: bool = Field(
+        default=False,
+        description="Whether a Tavily API key has been configured (key itself is not returned)"
     )
 
 
@@ -107,4 +134,12 @@ class ModelSettingsUpdateRequest(BaseModel):
     openrouter_api_key: Optional[str] = Field(
         default=None,
         description="OpenRouter API key (set to empty string to clear)"
+    )
+    search_provider: Optional[Literal["tavily", "openrouter", "none"]] = Field(
+        default=None,
+        description="Search provider for deep research"
+    )
+    tavily_api_key: Optional[str] = Field(
+        default=None,
+        description="Tavily API key (set to empty string to clear)"
     )

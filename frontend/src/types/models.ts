@@ -15,6 +15,8 @@ export interface ModelInfo {
   description?: string;
 }
 
+export type SearchProvider = 'tavily' | 'openrouter' | 'none';
+
 export interface ModelSettings {
   oracle_model: string;
   oracle_provider: ModelProvider;
@@ -25,6 +27,9 @@ export interface ModelSettings {
   librarian_timeout: number;
   openrouter_api_key?: string | null;
   openrouter_api_key_set: boolean;
+  search_provider: SearchProvider;
+  tavily_api_key?: string | null;
+  tavily_api_key_set: boolean;
 }
 
 export interface ModelsResponse {

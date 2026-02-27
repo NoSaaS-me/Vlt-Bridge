@@ -542,10 +542,59 @@ System messages appear in ChatPanel with distinct styling:
 
 Users can toggle non-core subscribers via Settings > Notifications tab. Core subscribers (marked `core = true`) cannot be disabled. Settings stored in `user_settings.disabled_subscribers_json`.
 
+## RLM Oracle (022-rlm-oracle)
+
+The Oracle uses a REPL-centric inference harness. The LLM is given a Python environment where the entire project lives as variables (`project`, `sub_oracle`, `Final`). It writes code to explore and synthesize answers programmatically.
+
+**Before (BT Oracle)**: Query classifier → prompt composer → BT XML signals → multi-turn loop
+**After (RLM Oracle)**: REPL environment → LLM writes Python → `Final` variable terminates loop
+
+- **REPLExecutor**: RestrictedPython sandbox with 30s timeout; approved modules (`re`, `json`, `math`, `datetime`, `collections`, `itertools`); `Final` sentinel detection
+- **ProjectContext**: Exposes project files, threads, notes as Python objects in REPL namespace
+- **SubOracleCallable**: Recursive sub-oracle calls (max depth 2, max 3 calls per root session)
+- **Streaming**: `progress` chunks carry REPL stdout; `content` chunks carry the Final answer; `done` chunk carries `metadata["iteration_count"]`
+
+### Architecture
+
+The Oracle API routes (`/api/oracle` and `/api/oracle/stream`) use `RLMOracleWrapper`:
+
+```python
+from backend.src.services.rlm_oracle import RLMOracleWrapper
+
+wrapper = RLMOracleWrapper(
+    user_id="user-id",
+    api_key="openrouter-api-key",
+    project_id="project-id",
+    model="deepseek/deepseek-chat-v3-0324",
+    max_tokens=4096,
+)
+
+async for chunk in wrapper.process_query(query="Hello", context_id=None):
+    print(chunk.type, chunk.content)
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ORACLE_MAX_TURNS` | `25` | Max REPL iterations per root session |
+| `ORACLE_SUB_MAX_TURNS` | `8` | Max iterations per sub-oracle session |
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `backend/src/services/rlm_oracle.py` | RLMOracleWrapper, RLMSession, RLMPromptBuilder, SubOracleCallable |
+| `backend/src/services/project_context.py` | ProjectContext, TextHandle, FileManifest |
+| `backend/src/services/repl_executor.py` | REPLExecutor, REPLNamespace (RestrictedPython sandbox) |
+| `backend/src/services/openrouter_client.py` | OpenRouter HTTP client (moved from bt/services/) |
+| `backend/src/api/routes/oracle.py` | Oracle API routes (updated to use RLMOracleWrapper) |
+
 ## Recent Changes
-- 015-oracle-plugin-system: Added Python 3.11+ (backend), TypeScript 5.x (frontend)
-- 013-agent-notification-system: Added Python 3.11+ (backend), TypeScript 5.x (frontend) + FastAPI, Pydantic, python-toon, Jinja2 (backend); React 18+, shadcn/ui (frontend)
-- 011-coderag-project-init: Added Python 3.11+ (CLI, backend), TypeScript 5.x (frontend)
+- 022-rlm-oracle: Replaced BT Oracle with RLM Oracle harness; LLM writes Python in REPL with `project`/`sub_oracle`/`Final` namespace; deleted entire `backend/src/bt/` directory; added `REPLExecutor` (RestrictedPython), `ProjectContext` (file/thread/note handles), `RLMOracleWrapper`; Go symbol extraction + `end_line` field in CodeRAG repomap
+- 018-vlt-mcp-server: Added vlt-mcp unified MCP server (`packages/vlt-cli/src/vlt/mcp/`) with 17 tools across 5 modules (thread_tools, meta_tools, code_tools, oracle_tools, vault_tools); Oracle toggle backend route (`/api/settings/oracle`); Oracle tab in Settings.tsx; 164ms cold-start via STDIO; registered as user-scope MCP in Claude Code
 
 ## Active Technologies
-- SQLite (extend existing schema for plugin_state table) (015-oracle-plugin-system)
+- Python 3.11+ (backend only; no frontend changes) (022-rlm-oracle)
+- RestrictedPython>=8.0 for REPL sandbox (022-rlm-oracle)
+- No new persistence. Ephemeral `RLMSession` per query. `OracleBridge` (existing) handles conversation history via existing `context_nodes` table. (022-rlm-oracle)

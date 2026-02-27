@@ -1,0 +1,92 @@
+openapi: "3.1.0"
+info:
+  title: Oracle Settings API
+  version: "1.0.0"
+  description: |
+    Backend REST API endpoints for oracle toggle settings.
+    These are standard FastAPI/HTTP endpoints on the Document-MCP backend (port 8000).
+    Authentication follows the existing pattern: Bearer JWT token in Authorization header.
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+paths:
+  /api/settings/oracle:
+    get:
+      summary: Get oracle MCP settings
+      description: Returns the current oracle_mcp_enabled setting for the authenticated user.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current oracle settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OracleSettings'
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      summary: Update oracle MCP settings
+      description: |
+        Enable or disable oracle tools for MCP access.
+        Change takes effect on the next MCP server session (STDIO lifecycle).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OracleSettingsUpdate'
+      responses:
+        "200":
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OracleSettings'
+        "401":
+          description: Unauthorized
+        "422":
+          description: Validation error
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    OracleSettings:
+      type: object
+      required: [oracle_mcp_enabled]
+      properties:
+        oracle_mcp_enabled:
+          type: boolean
+          description: "Whether oracle tools are available to MCP clients"
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    OracleSettingsUpdate:
+      type: object
+      required: [oracle_mcp_enabled]
+      properties:
+        oracle_mcp_enabled:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string

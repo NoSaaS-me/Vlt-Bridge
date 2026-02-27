@@ -79,3 +79,6 @@ BACKEND_AUDIT_REPORT.md
 
 # Auto Claude data directory
 .auto-claude/
+
+# Reference implementations (not part of project)
+reference/

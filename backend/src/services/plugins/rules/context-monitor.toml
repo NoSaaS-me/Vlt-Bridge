@@ -1,0 +1,17 @@
+[rule]
+id = "context-monitor"
+name = "Context Monitor"
+description = "Warn when context window usage is high"
+trigger = "on_turn_end"
+priority = 90
+core = false
+
+[condition]
+expression = "context_above_threshold(0.85)"
+
+[action]
+type = "notify_self"
+message = "Context window at {{ (context.turn.context_usage * 100) | int }}%. Consider summarizing or wrapping up."
+category = "warning"
+priority = "high"
+deliver_at = "turn_start"

@@ -1,0 +1,396 @@
+# Behavior Tree Universal Runtime - Event Schema
+# Extends ANS events.yaml with tree-specific events
+
+version: "1.0.0"
+extends: "../../../013-agent-notification-system/contracts/events.yaml"
+
+# Tree Events (extend ANS event_types)
+event_types:
+  tree:
+    # Lifecycle Events
+    loaded:
+      description: "Tree loaded into registry"
+      severity: info
+      payload:
+        tree_id: { type: string, required: true }
+        tree_name: { type: string, required: true }
+        source_path: { type: string, required: true }
+        node_count: { type: integer, required: true }
+        max_depth: { type: integer, required: true }
+
+    unloaded:
+      description: "Tree removed from registry"
+      severity: info
+      payload:
+        tree_id: { type: string, required: true }
+        reason: { type: string, required: true }
+
+    reloaded:
+      description: "Tree hot-reloaded from updated source"
+      severity: info
+      payload:
+        tree_id: { type: string, required: true }
+        source_path: { type: string, required: true }
+        policy: { type: string, required: true, enum: [let_finish_then_swap, cancel_and_restart] }
+        changes_detected: { type: boolean, required: true }
+
+    # Execution Events
+    tick:
+      start:
+        description: "Tree tick cycle started"
+        severity: debug
+        payload:
+          tree_id: { type: string, required: true }
+          tick_number: { type: integer, required: true }
+          trigger_event: { type: string, required: false }
+
+      complete:
+        description: "Tree tick cycle completed"
+        severity: info
+        payload:
+          tree_id: { type: string, required: true }
+          tick_number: { type: integer, required: true }
+          status: { type: string, required: true, enum: [success, failure, running, yielded] }
+          duration_ms: { type: number, required: true }
+          nodes_ticked: { type: integer, required: true }
+
+    completed:
+      description: "Tree execution completed (SUCCESS or FAILURE)"
+      severity: info
+      payload:
+        tree_id: { type: string, required: true }
+        final_status: { type: string, required: true, enum: [success, failure] }
+        total_ticks: { type: integer, required: true }
+        total_duration_ms: { type: number, required: true }
+        failure_reason: { type: string, required: false }
+
+    failed:
+      description: "Tree execution ended with FAILURE"
+      severity: error
+      payload:
+        tree_id: { type: string, required: true }
+        failure_node: { type: string, required: true }
+        failure_path: { type: array, items: { type: string }, required: true }
+        error_code: { type: string, required: false }
+        error_message: { type: string, required: true }
+        failure_trace:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id: { type: string }
+              error_code: { type: string }
+              message: { type: string }
+              timestamp: { type: datetime }
+
+    cancelled:
+      description: "Tree execution cancelled"
+      severity: warning
+      payload:
+        tree_id: { type: string, required: true }
+        reason: { type: string, required: true, enum: [reload, timeout, user_request, budget] }
+        node_id: { type: string, required: true, description: "Node that was running when cancelled" }
+        async_operations_cancelled: { type: integer, required: true }
+
+    # Budget Events
+    budget:
+      yielded:
+        description: "Tree yielded due to tick budget"
+        severity: info
+        payload:
+          tree_id: { type: string, required: true }
+          tick_count: { type: integer, required: true }
+          tick_budget: { type: integer, required: true }
+          resume_token: { type: string, required: true }
+
+      exceeded:
+        description: "Tree tick budget exceeded (hard limit)"
+        severity: warning
+        payload:
+          tree_id: { type: string, required: true }
+          tick_count: { type: integer, required: true }
+          tick_budget: { type: integer, required: true }
+
+    # Watchdog Events
+    watchdog:
+      warning:
+        description: "Node RUNNING longer than expected"
+        severity: warning
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          node_path: { type: array, items: { type: string }, required: true }
+          running_duration_ms: { type: integer, required: true }
+          warning_threshold_ms: { type: integer, required: true }
+          timeout_ms: { type: integer, required: true }
+
+      timeout:
+        description: "Node stuck - RUNNING without progress, timeout reached"
+        severity: critical
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          node_path: { type: array, items: { type: string }, required: true }
+          running_duration_ms: { type: integer, required: true }
+          timeout_ms: { type: integer, required: true }
+          last_progress_at: { type: datetime, required: false }
+
+    # Parallel Events
+    parallel:
+      conflict:
+        description: "Parallel merge conflict (FAIL_ON_CONFLICT strategy)"
+        severity: warning
+        payload:
+          tree_id: { type: string, required: true }
+          parallel_node_id: { type: string, required: true }
+          key: { type: string, required: true }
+          writer_count: { type: integer, required: true }
+          children:
+            type: array
+            items:
+              type: object
+              properties:
+                child_id: { type: string }
+                value_preview: { type: string }
+
+      child_failed:
+        description: "Child in parallel failed"
+        severity: info
+        payload:
+          tree_id: { type: string, required: true }
+          parallel_node_id: { type: string, required: true }
+          child_id: { type: string, required: true }
+          child_index: { type: integer, required: true }
+          error_code: { type: string, required: false }
+          error_message: { type: string, required: true }
+
+    # Reload Events
+    reload:
+      queued:
+        description: "Tree reload queued (waiting for execution to complete)"
+        severity: info
+        payload:
+          tree_id: { type: string, required: true }
+          source_path: { type: string, required: true }
+          policy: { type: string, required: true }
+
+      failed:
+        description: "Tree reload failed"
+        severity: error
+        payload:
+          tree_id: { type: string, required: true }
+          source_path: { type: string, required: true }
+          error_code: { type: string, required: true }
+          error_message: { type: string, required: true }
+          line_number: { type: integer, required: false }
+
+  # Node Events
+  node:
+    tick:
+      description: "Node ticked (debug level, very verbose)"
+      severity: debug
+      payload:
+        tree_id: { type: string, required: true }
+        node_id: { type: string, required: true }
+        node_type: { type: string, required: true }
+        status: { type: string, required: true }
+        duration_ms: { type: number, required: true }
+
+    contract:
+      violation:
+        description: "Node contract violation detected"
+        severity: warning
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          violation_type: { type: string, required: true, enum: [undeclared_read, undeclared_write] }
+          key: { type: string, required: true }
+          declared_keys: { type: array, items: { type: string }, required: true }
+
+      missing_input:
+        description: "Node missing required input"
+        severity: error
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          missing_key: { type: string, required: true }
+          expected_type: { type: string, required: true }
+
+  # Blackboard Events
+  blackboard:
+    key:
+      unregistered:
+        description: "Attempted access to unregistered key"
+        severity: error
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          key: { type: string, required: true }
+          operation: { type: string, required: true, enum: [get, set] }
+          available_keys: { type: array, items: { type: string }, required: true }
+
+      reserved:
+        description: "Attempted write to reserved key"
+        severity: error
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          key: { type: string, required: true }
+
+    validation:
+      failed:
+        description: "Blackboard value validation failed"
+        severity: error
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          key: { type: string, required: true }
+          expected_schema: { type: string, required: true }
+          validation_error: { type: string, required: true }
+          value_preview: { type: string, required: true }
+
+    size:
+      warning:
+        description: "Blackboard approaching size limit"
+        severity: warning
+        payload:
+          tree_id: { type: string, required: true }
+          current_size_mb: { type: number, required: true }
+          limit_mb: { type: number, required: true }
+          percentage: { type: integer, required: true }
+
+      exceeded:
+        description: "Blackboard size limit exceeded"
+        severity: error
+        payload:
+          tree_id: { type: string, required: true }
+          current_size_mb: { type: number, required: true }
+          limit_mb: { type: number, required: true }
+          key_being_written: { type: string, required: true }
+
+  # Script Events
+  script:
+    syntax:
+      error:
+        description: "Lua syntax error in script"
+        severity: error
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          source: { type: string, required: true }
+          line: { type: integer, required: true }
+          column: { type: integer, required: false }
+          error_message: { type: string, required: true }
+          snippet: { type: string, required: true }
+
+    runtime:
+      error:
+        description: "Lua runtime error"
+        severity: error
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          error_message: { type: string, required: true }
+          lua_traceback: { type: string, required: true }
+
+    timeout:
+      description: "Lua script execution timeout"
+      severity: error
+      payload:
+        tree_id: { type: string, required: true }
+        node_id: { type: string, required: true }
+        timeout_ms: { type: integer, required: true }
+
+  # LLM Events
+  llm:
+    request:
+      start:
+        description: "LLM API request initiated"
+        severity: debug
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          model: { type: string, required: true }
+          request_id: { type: string, required: true }
+
+      complete:
+        description: "LLM API request completed"
+        severity: info
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          model: { type: string, required: true }
+          request_id: { type: string, required: true }
+          duration_ms: { type: number, required: true }
+          tokens_used: { type: integer, required: true }
+          prompt_tokens: { type: integer, required: true }
+          completion_tokens: { type: integer, required: true }
+
+    api:
+      error:
+        description: "LLM API error"
+        severity: error
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          model: { type: string, required: true }
+          request_id: { type: string, required: false }
+          error_type: { type: string, required: true, enum: [rate_limit, auth_error, context_length, api_error, network_error] }
+          error_message: { type: string, required: true }
+          retry_count: { type: integer, required: true }
+          will_retry: { type: boolean, required: true }
+
+    timeout:
+      description: "LLM request timeout"
+      severity: error
+      payload:
+        tree_id: { type: string, required: true }
+        node_id: { type: string, required: true }
+        model: { type: string, required: true }
+        request_id: { type: string, required: true }
+        timeout_ms: { type: integer, required: true }
+
+  # Security Events
+  security:
+    sandbox:
+      violation:
+        description: "Lua sandbox escape attempt"
+        severity: critical
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          blocked_item: { type: string, required: true }
+          lua_traceback: { type: string, required: true }
+
+    path:
+      traversal:
+        description: "Path traversal attempt detected"
+        severity: critical
+        payload:
+          tree_id: { type: string, required: true }
+          path: { type: string, required: true }
+          tree_dir: { type: string, required: true }
+
+    rate:
+      exceeded:
+        description: "Script rate limit exceeded"
+        severity: warning
+        payload:
+          tree_id: { type: string, required: true }
+          node_id: { type: string, required: true }
+          current_rate: { type: number, required: true }
+          limit: { type: number, required: true }
+
+# Event Emission Rules
+emission_rules:
+  - rule: "All errors (E1xxx-E8xxx) MUST emit corresponding event"
+    exception: "E5004 (intentional failure) does NOT emit event"
+
+  - rule: "Events are buffered during tree tick and dispatched after"
+    rationale: "Prevents re-entrant tree ticks"
+
+  - rule: "Critical events (severity=critical) are never deduplicated"
+    rationale: "Security events must always be visible"
+
+  - rule: "Debug events can be filtered based on trace_enabled"
+    rationale: "Avoid noise in production"

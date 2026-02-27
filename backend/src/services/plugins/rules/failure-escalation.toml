@@ -1,0 +1,15 @@
+[rule]
+id = "failure-escalation"
+name = "Failure Escalation"
+description = "Emit monitoring events on tool failures"
+trigger = "on_tool_failure"
+priority = 95
+core = false
+
+[condition]
+expression = "true"
+
+[action]
+type = "emit_event"
+event_type = "monitoring.tool.failure"
+payload = { tool_name = "{{ context.event.payload.tool_name }}", error = "{{ context.event.payload.error_message }}", failure_count = "{{ context.history.failures.get(context.event.payload.tool_name, 0) }}" }

@@ -52,6 +52,59 @@ The Oracle Plugin System is a rule engine that extends the Agent Notification Sy
    +----------+  +----------+  +----------+
 ```
 
+## Behavior Tree Integration
+
+The rule engine uses Honorbuddy-style behavior trees for efficient priority-based evaluation. For complete documentation, see [Decision Tree Architecture](./decision-tree.md).
+
+### Architecture Overview
+
+```
++------------------+          +------------------+          +------------------+
+|   Rule Loader    |          |  TreeBuilder     |          |  BehaviorTree    |
+|   (loader.py)    |--------->|  (builder.py)    |--------->|  Engine          |
++------------------+          +------------------+          +--------+---------+
+         |                                                           |
+         | TOML rules                                                | tick()
+         |                                                           v
+         |                                                  +------------------+
+         |                                                  | PrioritySelector |
+         |                                                  | (per hook point) |
+         +------------------------------------------------->+------------------+
+                                                                     |
+                                                            +--------+--------+
+                                                            |        |        |
+                                                            v        v        v
+                                                         Guard    Guard    Guard
+                                                           |        |        |
+                                                           v        v        v
+                                                        Action   Action   Action
+```
+
+### Key Components
+
+| Component | Purpose |
+|-----------|---------|
+| **PrioritySelector** | Evaluates children by priority, first success wins |
+| **Sequence** | Executes all children, fails on first failure |
+| **Guard** | Gates child execution on condition expression |
+| **ActionNode** | Executes rule action (notify, log, set_state) |
+
+### Frame Locking
+
+Optimization to avoid O(n) tree traversal when nodes return `Running`:
+
+```
+Without: Tick 1: A->B(Running), Tick 2: A->B(Success)  [Redundant A check]
+With:    Tick 1: A->B(Running), Tick 2: B(Success)     [O(1) resume]
+```
+
+### RunStatus
+
+Every node returns one of three statuses:
+- `Success`: Node completed, continue
+- `Failure`: Try next sibling in selector
+- `Running`: Cache and resume next tick
+
 ## Component Interactions
 
 ### 1. Event Flow
@@ -186,6 +239,8 @@ Hook points are emitted from specific locations in `oracle_agent.py`:
 
 ## See Also
 
+- [Decision Tree Architecture](./decision-tree.md)
 - [Performance Considerations](./performance.md)
 - [Roadmap](./roadmap.md)
 - [Rule Format](../rules/format.md)
+- [Advanced Patterns](../rules/advanced-patterns.md)

@@ -1,5 +1,15 @@
 """Oracle Agent - Main AI agent with tool calling (009-oracle-agent).
 
+DEPRECATED: This module is replaced by RLMOracleWrapper (022-rlm-oracle).
+The RLM Oracle uses a Python REPL harness for codebase exploration.
+See: backend/src/services/rlm_oracle.py
+
+This legacy implementation is kept for reference but is no longer used.
+
+---
+
+Original docstring:
+
 This replaces the subprocess-based OracleBridge with a proper agent implementation
 that uses OpenRouter function calling for tool execution.
 
@@ -104,6 +114,7 @@ def _get_prompt_loader():
 DEFAULT_MODEL_CONTEXT_SIZES = {
     # DeepSeek models
     "deepseek/deepseek-chat": 64000,
+    "deepseek/deepseek-chat-v3": 64000,
     "deepseek/deepseek-coder": 64000,
     "deepseek/deepseek-v3": 64000,
     "deepseek/deepseek-r1": 64000,
@@ -383,7 +394,7 @@ class OracleAgent:
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
     MAX_TURNS = 30  # Increased from 15 to allow complex multi-step queries
     DEFAULT_MODEL = "anthropic/claude-sonnet-4"
-    DEFAULT_SUBAGENT_MODEL = "deepseek/deepseek-chat"
+    DEFAULT_SUBAGENT_MODEL = "deepseek/deepseek-chat-v3"
 
     # Thresholds for auto-delegation to Librarian
     DELEGATION_THRESHOLDS = {

@@ -21,7 +21,7 @@ from starlette.responses import Response
 from fastmcp.server.http import StreamableHTTPSessionManager, set_http_request
 from fastapi.responses import FileResponse
 
-from .routes import auth, index, notes, search, graph, demo, system, rag, tts, models, oracle, oracle_context, threads, projects, coderag, notifications, rules
+from .routes import auth, index, notes, search, graph, demo, system, rag, tts, models, oracle, oracle_context, threads, projects, coderag, notifications, rules, settings
 from .middleware import SecurityHeadersMiddleware
 from ..mcp.server import mcp
 from ..services.seed import init_and_seed
@@ -79,7 +79,6 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:3000",
-        "https://huggingface.co",
         config.chatgpt_cors_origin,
     ],
     allow_credentials=True,
@@ -142,6 +141,7 @@ app.include_router(projects.router, tags=["projects"])
 app.include_router(coderag.router, tags=["coderag"])
 app.include_router(notifications.router, tags=["notifications"])
 app.include_router(rules.router, tags=["rules"])
+app.include_router(settings.router, tags=["settings"])
 
 
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"])

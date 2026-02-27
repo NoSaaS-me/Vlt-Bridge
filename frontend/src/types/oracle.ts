@@ -1,5 +1,5 @@
 export type SourceType = 'vault' | 'code' | 'threads';
-export type StreamEventType = 'status' | 'thinking' | 'content' | 'source' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'system' | 'context_update';
+export type StreamEventType = 'status' | 'thinking' | 'content' | 'source' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'system' | 'context_update' | 'progress';
 
 /**
  * Oracle API request payload
@@ -51,6 +51,8 @@ export interface OracleStreamChunk {
   // Context window tracking (for context_update and done events)
   context_tokens?: number;   // Current tokens used in context window
   max_context_tokens?: number; // Maximum context window size for the model
+  // RLM Oracle metadata (for done events)
+  metadata?: Record<string, unknown>; // e.g., { iteration_count: 3, incomplete: true }
 }
 
 /**

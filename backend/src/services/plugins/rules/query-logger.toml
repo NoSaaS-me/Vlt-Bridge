@@ -1,0 +1,15 @@
+[rule]
+id = "query-logger"
+name = "Query Logger"
+description = "Log every incoming query for debugging"
+trigger = "on_query_start"
+priority = 50
+core = false
+
+[condition]
+expression = "true"
+
+[action]
+type = "log"
+message = "Query #{{ context.turn.number }} received from user {{ context.user.id }}"
+level = "info"

@@ -4,8 +4,8 @@
  * T046-T054: Added CodeRAG index status panel with progress monitoring
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Copy, RefreshCw, Check, Save } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { ArrowLeft, Copy, RefreshCw, Check, Save, Github } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -21,20 +21,23 @@ import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
 import { NotificationSettings as NotificationSettingsComponent } from '@/components/NotificationSettings';
 import { RuleSettings } from '@/components/RuleSettings';
 import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
-import { getIndexHealth, rebuildIndex, type RebuildResponse } from '@/services/api';
-import { getModels, getModelSettings, saveModelSettings } from '@/services/models';
+import { getIndexHealth, rebuildIndex, type RebuildResponse, getOracleSettings, updateOracleSettings } from '@/services/api';
+import { getModels, getModelSettings, saveModelSettings, testTavilyConnection } from '@/services/models';
 import { getContextSettings, updateContextSettings } from '@/services/context';
 import type { User } from '@/types/user';
 import type { IndexHealth } from '@/types/search';
 import type { ModelInfo, ModelSettings } from '@/types/models';
 import type { ContextSettings } from '@/types/context';
 import type { CodeRAGStatusResponse } from '@/types/coderag';
+import type { GitHubStatus } from '@/types/github';
 import { getCodeRAGStatus, initCodeRAG } from '@/services/coderag';
+import { getGitHubStatus, getGitHubConnectUrl } from '@/services/github';
 import { SystemLogs } from '@/components/SystemLogs';
 import { useProjectContext } from '@/contexts/ProjectContext';
 
 export function Settings() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { selectedProjectId, selectedProject, isLoading: projectsLoading } = useProjectContext();
   const [user, setUser] = useState<User | null>(null);
   const [apiToken, setApiToken] = useState<string>('');
@@ -51,6 +54,10 @@ export function Settings() {
   const [isSavingModels, setIsSavingModels] = useState(false);
   const [modelsSaved, setModelsSaved] = useState(false);
 
+  // Tavily test state
+  const [isTestingTavily, setIsTestingTavily] = useState(false);
+  const [tavilyTestResult, setTavilyTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
   // Context settings state
   const [contextSettings, setContextSettings] = useState<ContextSettings | null>(null);
   const [isSavingContext, setIsSavingContext] = useState(false);
@@ -60,6 +67,15 @@ export function Settings() {
   const [coderagStatus, setCoderagStatus] = useState<CodeRAGStatusResponse | null>(null);
   const [isReindexing, setIsReindexing] = useState(false);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // GitHub connection state
+  const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
+  const [githubMessage, setGithubMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Oracle MCP toggle state
+  const [oracleMcpEnabled, setOracleMcpEnabled] = useState<boolean>(true);
+  const [isSavingOracle, setIsSavingOracle] = useState(false);
+  const [oracleSaved, setOracleSaved] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -164,6 +180,9 @@ export function Settings() {
           librarian_timeout: 1200,
           openrouter_api_key: null,
           openrouter_api_key_set: false,
+          search_provider: 'none',
+          tavily_api_key: null,
+          tavily_api_key_set: false,
         });
       }
 
@@ -181,16 +200,57 @@ export function Settings() {
 
       // T046: Load CodeRAG status
       await loadCodeRAGStatus();
+
+      // Load GitHub connection status
+      try {
+        const ghStatus = await getGitHubStatus();
+        setGithubStatus(ghStatus);
+      } catch (err) {
+        console.debug('GitHub status not available:', err);
+        setGithubStatus({ connected: false, username: null });
+      }
+
+      // Load oracle MCP toggle state
+      try {
+        const oracleSettings = await getOracleSettings();
+        setOracleMcpEnabled(oracleSettings.oracle_mcp_enabled);
+      } catch (err) {
+        console.debug('Oracle settings not available:', err);
+      }
     } catch (err) {
       console.error('Error loading settings:', err);
     }
   };
 
-  const handleGenerateToken = async () => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to generate new tokens.');
-      return;
+  // Check for GitHub OAuth callback result in URL hash
+  useEffect(() => {
+    const hash = location.hash;
+    if (hash.includes('github=')) {
+      const params = new URLSearchParams(hash.replace('#', ''));
+      const status = params.get('github');
+      const message = params.get('message');
+
+      if (status === 'connected') {
+        setGithubMessage({ type: 'success', text: 'GitHub connected successfully!' });
+        // Reload GitHub status
+        getGitHubStatus().then(setGithubStatus).catch(() => {});
+      } else if (status === 'error') {
+        setGithubMessage({ type: 'error', text: message || 'GitHub connection failed' });
+      }
+
+      // Clear the hash from URL
+      window.history.replaceState(null, '', location.pathname);
+
+      // Clear message after 5 seconds
+      setTimeout(() => setGithubMessage(null), 5000);
     }
+  }, [location.hash, location.pathname]);
+
+  const handleConnectGitHub = () => {
+    window.location.href = getGitHubConnectUrl();
+  };
+
+  const handleGenerateToken = async () => {
     try {
       setError(null);
       const tokenResponse = await getToken();
@@ -212,10 +272,6 @@ export function Settings() {
   };
 
   const handleRebuildIndex = async () => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to rebuild the index.');
-      return;
-    }
     setIsRebuilding(true);
     setError(null);
     setRebuildResult(null);
@@ -245,10 +301,6 @@ export function Settings() {
 
   const handleSaveModelSettings = async () => {
     if (!modelSettings) return;
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to save model settings.');
-      return;
-    }
 
     setIsSavingModels(true);
     setError(null);
@@ -266,12 +318,30 @@ export function Settings() {
     }
   };
 
+  const handleTestTavily = async () => {
+    setIsTestingTavily(true);
+    setTavilyTestResult(null);
+    setError(null);
+
+    try {
+      const result = await testTavilyConnection();
+      setTavilyTestResult({
+        success: result.success,
+        message: result.message
+      });
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to test Tavily connection';
+      setTavilyTestResult({
+        success: false,
+        message: errorMessage
+      });
+    } finally {
+      setIsTestingTavily(false);
+    }
+  };
+
   const handleSaveContextSettings = async () => {
     if (!contextSettings) return;
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to save context settings.');
-      return;
-    }
 
     setIsSavingContext(true);
     setError(null);
@@ -289,13 +359,24 @@ export function Settings() {
     }
   };
 
+  const handleOracleToggle = async (enabled: boolean) => {
+    setIsSavingOracle(true);
+    setOracleSaved(false);
+    try {
+      await updateOracleSettings(enabled);
+      setOracleMcpEnabled(enabled);
+      setOracleSaved(true);
+      setTimeout(() => setOracleSaved(false), 2000);
+    } catch (err) {
+      setError('Failed to update oracle settings');
+      console.error('Error saving oracle settings:', err);
+    } finally {
+      setIsSavingOracle(false);
+    }
+  };
+
   // T052: Handle CodeRAG re-indexing
   const handleReindex = async () => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to re-index code.');
-      return;
-    }
-
     if (!selectedProjectId) {
       setError('No project selected. Please select a project first.');
       return;
@@ -383,7 +464,7 @@ export function Settings() {
         {isDemoMode && (
           <Alert variant="destructive">
             <AlertDescription>
-              You are viewing the shared demo vault. Sign in with Hugging Face from the main app to enable token generation and index management.
+              You are viewing the shared demo vault. Sign in with GitHub from the main app to enable token generation and index management.
             </AlertDescription>
           </Alert>
         )}
@@ -394,12 +475,13 @@ export function Settings() {
         )}
 
         <Tabs defaultValue="account" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="models">Models</TabsTrigger>
             <TabsTrigger value="context">Context</TabsTrigger>
             <TabsTrigger value="rules">Rules</TabsTrigger>
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
+            <TabsTrigger value="oracle">Oracle</TabsTrigger>
           </TabsList>
 
           <TabsContent value="account" className="space-y-6 mt-6">
@@ -413,12 +495,12 @@ export function Settings() {
             <CardContent>
               <div className="flex items-center gap-4">
                 <Avatar className="h-16 w-16">
-                  <AvatarImage src={user.hf_profile?.avatar_url} />
+                  <AvatarImage src={user.gh_profile?.avatar_url} />
                   <AvatarFallback>{getUserInitials(user.user_id)}</AvatarFallback>
                 </Avatar>
                 <div className="flex-1">
                   <div className="font-semibold text-lg">
-                    {user.hf_profile?.name || user.hf_profile?.username || user.user_id}
+                    {user.gh_profile?.name || user.gh_profile?.username || user.user_id}
                   </div>
                   <div className="text-sm text-muted-foreground">
                     User ID: {user.user_id}
@@ -475,7 +557,7 @@ export function Settings() {
               </div>
             </div>
 
-            <Button onClick={handleGenerateToken} disabled={isDemoMode}>
+            <Button onClick={handleGenerateToken}>
               <RefreshCw className="h-4 w-4 mr-2" />
               Generate New Token
             </Button>
@@ -557,7 +639,7 @@ export function Settings() {
 
               <Button
                 onClick={handleRebuildIndex}
-                disabled={isDemoMode || isRebuilding}
+                disabled={isRebuilding}
                 variant="outline"
               >
                 <RefreshCw className={`h-4 w-4 mr-2 ${isRebuilding ? 'animate-spin' : ''}`} />
@@ -644,7 +726,7 @@ export function Settings() {
               {/* T051: Re-index Code button */}
               <Button
                 variant="outline"
-                disabled={isDemoMode || coderagStatus.status === 'indexing' || isReindexing}
+                disabled={coderagStatus.status === 'indexing' || isReindexing}
                 onClick={handleReindex}
               >
                 <RefreshCw className={`h-4 w-4 mr-2 ${coderagStatus.status === 'indexing' || isReindexing ? 'animate-spin' : ''}`} />
@@ -680,7 +762,7 @@ export function Settings() {
 
               <Button
                 variant="outline"
-                disabled={isDemoMode || isReindexing}
+                disabled={isReindexing}
                 onClick={handleReindex}
               >
                 <RefreshCw className={`h-4 w-4 mr-2 ${isReindexing ? 'animate-spin' : ''}`} />
@@ -699,6 +781,92 @@ export function Settings() {
             description="CodeRAG indexing status for code search"
           />
         )}
+
+        {/* GitHub Integration */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Github className="h-5 w-5" />
+              GitHub Integration
+            </CardTitle>
+            <CardDescription>
+              Your GitHub account for authentication and repository access
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {githubMessage && (
+              <Alert variant={githubMessage.type === 'error' ? 'destructive' : 'default'}>
+                <AlertDescription>{githubMessage.text}</AlertDescription>
+              </Alert>
+            )}
+
+            {githubStatus?.connected ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-10 w-10">
+                      <AvatarImage src={`https://github.com/${githubStatus.username}.png`} />
+                      <AvatarFallback>{githubStatus.username?.slice(0, 2).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <div className="font-medium">{githubStatus.username}</div>
+                      <div className="text-sm text-muted-foreground">GitHub connected</div>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={handleConnectGitHub}
+                    title="Refresh GitHub token if you have permission issues"
+                  >
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Refresh Token
+                  </Button>
+                </div>
+
+                {githubStatus.rate_limit && (
+                  <>
+                    <Separator />
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <div className="text-muted-foreground">API Requests Remaining</div>
+                        <div className="font-medium">
+                          {githubStatus.rate_limit.remaining} / {githubStatus.rate_limit.limit}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Resets At</div>
+                        <div className="font-medium">
+                          {new Date(githubStatus.rate_limit.reset * 1000).toLocaleTimeString()}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  GitHub access enables you to:
+                </p>
+                <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                  <li>Read files from private repositories</li>
+                  <li>Search code across your repositories</li>
+                  <li>Access organization repositories you have permission to</li>
+                </ul>
+
+                <Button onClick={handleConnectGitHub}>
+                  <Github className="h-4 w-4 mr-2" />
+                  Reconnect GitHub
+                </Button>
+              </>
+            )}
+
+            <div className="text-xs text-muted-foreground mt-4">
+              Your GitHub token is stored securely and only used for repository access.
+              If you experience permission issues, try refreshing your token.
+            </div>
+          </CardContent>
+        </Card>
           </TabsContent>
 
           <TabsContent value="models" className="space-y-6 mt-6">
@@ -935,10 +1103,104 @@ export function Settings() {
                 </div>
                 {modelSettings.openrouter_api_key_set && (
                   <p className="text-xs text-green-600 dark:text-green-400">
-                    ✓ API key is configured
+                    API key is configured
                   </p>
                 )}
               </div>
+
+              <Separator />
+
+              {/* Search Provider */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Web Search Provider</label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Select a search provider for deep research and web search capabilities
+                </p>
+                <Select
+                  value={modelSettings.search_provider}
+                  onValueChange={(value: 'tavily' | 'openrouter' | 'none') =>
+                    setModelSettings({ ...modelSettings, search_provider: value })
+                  }
+                >
+                  <SelectTrigger className="w-[280px]">
+                    <SelectValue placeholder="Select a search provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None (Disabled)</SelectItem>
+                    <SelectItem value="tavily">Tavily</SelectItem>
+                    <SelectItem value="openrouter">OpenRouter (via API)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Tavily API Key - only shown when Tavily is selected */}
+              {modelSettings.search_provider === 'tavily' && (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Tavily API Key</label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Required for Tavily search. Get your key at{' '}
+                      <a
+                        href="https://tavily.com/#api"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        tavily.com
+                      </a>
+                    </p>
+                    <div className="flex gap-2">
+                      <Input
+                        type="password"
+                        placeholder={modelSettings.tavily_api_key_set ? '••••••••••••••••' : 'tvly-...'}
+                        value={modelSettings.tavily_api_key || ''}
+                        onChange={(e) =>
+                          setModelSettings({ ...modelSettings, tavily_api_key: e.target.value })
+                        }
+                        className="font-mono text-xs"
+                      />
+                      {modelSettings.tavily_api_key_set && !modelSettings.tavily_api_key && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setModelSettings({ ...modelSettings, tavily_api_key: '' })}
+                          title="Clear saved API key"
+                        >
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {modelSettings.tavily_api_key_set && (
+                        <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                          <Check className="h-3 w-3" />
+                          API key is configured
+                        </span>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleTestTavily}
+                        disabled={isTestingTavily || !modelSettings.tavily_api_key_set}
+                      >
+                        {isTestingTavily ? (
+                          <>
+                            <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                            Testing...
+                          </>
+                        ) : (
+                          'Test Connection'
+                        )}
+                      </Button>
+                    </div>
+                    {tavilyTestResult && (
+                      <p className={`text-xs ${tavilyTestResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                        {tavilyTestResult.message}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
 
               {modelsSaved && (
                 <Alert>
@@ -950,7 +1212,7 @@ export function Settings() {
 
               <Button
                 onClick={handleSaveModelSettings}
-                disabled={isDemoMode || isSavingModels}
+                disabled={isSavingModels}
               >
                 <Save className="h-4 w-4 mr-2" />
                 {isSavingModels ? 'Saving...' : 'Save Model Settings'}
@@ -1018,7 +1280,7 @@ export function Settings() {
 
               <Button
                 onClick={handleSaveContextSettings}
-                disabled={isDemoMode || isSavingContext}
+                disabled={isSavingContext}
               >
                 <Save className="h-4 w-4 mr-2" />
                 {isSavingContext ? 'Saving...' : 'Save Context Settings'}
@@ -1050,6 +1312,46 @@ export function Settings() {
 
             {/* System Logs */}
             <SystemLogs />
+          </TabsContent>
+
+          <TabsContent value="oracle" className="space-y-6 mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Oracle MCP Tools</CardTitle>
+                <CardDescription>
+                  Control whether oracle tools are available to AI agents via the vlt-mcp server.
+                  When disabled, calls to <code>vlt_oracle_query</code> return a structured error
+                  with guidance instead of querying the oracle.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Enable oracle MCP tools</p>
+                    <p className="text-xs text-muted-foreground">
+                      Allows AI agents to call <code>vlt_oracle_status</code> and <code>vlt_oracle_query</code> via MCP.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={oracleMcpEnabled}
+                    onCheckedChange={handleOracleToggle}
+                    disabled={isSavingOracle}
+                  />
+                </div>
+
+                {oracleSaved && (
+                  <Alert>
+                    <AlertDescription>Oracle settings saved.</AlertDescription>
+                  </Alert>
+                )}
+
+                <Separator />
+                <p className="text-xs text-muted-foreground">
+                  Changes take effect on the next MCP session start. The vlt-mcp server reads this
+                  setting fresh at session launch.
+                </p>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>

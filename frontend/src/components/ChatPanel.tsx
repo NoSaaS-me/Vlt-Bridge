@@ -74,6 +74,19 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
   const toast = useToast();
 
   /**
+   * Aggregate all tool calls from all assistant messages for conversation-wide history display.
+   */
+  const allToolCalls = useMemo(() => {
+    const toolCalls: ToolCallInfo[] = [];
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        toolCalls.push(...msg.tool_calls);
+      }
+    }
+    return toolCalls;
+  }, [messages]);
+
+  /**
    * Convert context nodes to OracleMessage format.
    * Builds the path from root to the target node and converts each node
    * to a pair of user/assistant messages.
@@ -671,6 +684,16 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
                 );
                 return prev; // No state change
               }
+            } else if (chunk.type === 'progress') {
+              // RLM Oracle REPL stdout — show as thinking/exploration progress
+              updatedMsg = {
+                ...lastMsg,
+                thinking: (lastMsg.thinking || '') + (chunk.content || ''),
+              };
+              const iterLabel = chunk.metadata?.iteration
+                ? `Exploring (iteration ${chunk.metadata.iteration})...`
+                : 'Exploring...';
+              setStatusMessage(iterLabel);
             } else if (chunk.type === 'context_update') {
               // Update context window tracking (outside of message state)
               if (chunk.context_tokens !== undefined) {
@@ -685,9 +708,17 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
               const newToolCalls = lastMsg.tool_calls?.map(tc =>
                 tc.status === 'running' ? { ...tc, status: 'completed' as const } : tc
               );
+              // Extract RLM metadata (iteration_count, incomplete)
+              const iterCount = chunk.metadata?.iteration_count as number | undefined;
+              const incomplete = chunk.metadata?.incomplete as boolean | undefined;
+              if (incomplete) {
+                console.warn(`[ChatPanel] Oracle answer incomplete after ${iterCount} iterations`);
+              }
               updatedMsg = {
                 ...lastMsg,
-                model: chunk.model_used,
+                model: chunk.model_used
+                  ? `${chunk.model_used}${iterCount ? ` (${iterCount} iter)` : ''}`
+                  : lastMsg.model,
                 tool_calls: newToolCalls,
               };
               setStatusMessage('');
@@ -919,6 +950,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
                 showThinking={showThinking}
                 showSources={showSources}
                 isStreaming={isLoading && i === messages.length - 1 && msg.role === 'assistant'}
+                allToolCalls={i === messages.length - 1 && msg.role === 'assistant' ? allToolCalls : undefined}
               />
             ))}
             {isLoading && statusMessage && (

@@ -50,9 +50,11 @@ curl -X POST http://localhost:8000/api/rules/my-first-rule/test \
 | Section | Description |
 |---------|-------------|
 | [Architecture](./architecture/overview.md) | System design and component interactions |
+| [Decision Tree](./architecture/decision-tree.md) | Behavior tree architecture and node types |
 | [Rules](./rules/format.md) | TOML rule format and schema |
 | [Conditions](./rules/conditions.md) | Expression language guide |
 | [Actions](./rules/actions.md) | Available action types |
+| [Advanced Patterns](./rules/advanced-patterns.md) | Priority selection, stateful rules, context detection |
 | [Context API](./context-api/reference.md) | RuleContext API reference |
 | [Hooks](./hooks/lifecycle.md) | Hook points and when they fire |
 | [Scripting](./scripting/lua-guide.md) | Lua scripting guide |

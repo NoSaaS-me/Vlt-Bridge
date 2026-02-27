@@ -1,7 +1,7 @@
 /**
- * Hugging Face profile metadata attached to a user.
+ * GitHub profile metadata attached to a user.
  */
-export interface HFProfile {
+export interface GHProfile {
   username: string;
   name?: string;
   avatar_url?: string;
@@ -12,7 +12,7 @@ export interface HFProfile {
  */
 export interface User {
   user_id: string;
-  hf_profile?: HFProfile;
+  gh_profile?: GHProfile;
   vault_path: string;
   created: string; // ISO 8601 timestamp
 }

@@ -28,3 +28,18 @@ export async function saveModelSettings(settings: ModelSettings): Promise<ModelS
     body: JSON.stringify(settings),
   });
 }
+
+export interface TavilyTestResponse {
+  success: boolean;
+  message: string;
+  results_count?: number;
+}
+
+/**
+ * Test Tavily API key connection
+ */
+export async function testTavilyConnection(): Promise<TavilyTestResponse> {
+  return apiFetch<TavilyTestResponse>('/api/settings/test-tavily', {
+    method: 'POST',
+  });
+}

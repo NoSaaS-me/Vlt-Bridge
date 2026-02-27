@@ -1,0 +1,766 @@
+openapi: "3.1.0"
+info:
+  title: Vlt Unified MCP Server — Tool Schemas
+  version: "1.0.0"
+  description: |
+    Schema definitions for all 19 MCP tools exposed by vlt-mcp.
+    Tools are organized into 5 groups: thread, code, vault, oracle, meta.
+    All tools return a JSON object with a "status" field ("ok" | "error" | "not_found").
+
+# Note: MCP tools are not HTTP endpoints — this file documents tool input/output schemas
+# using OpenAPI component schemas for clarity. Actual transport is STDIO JSON-RPC.
+
+components:
+  schemas:
+
+    # =========================================================================
+    # Shared
+    # =========================================================================
+
+    ErrorResponse:
+      type: object
+      required: [status, code, message]
+      properties:
+        status:
+          type: string
+          enum: [error, not_found]
+        code:
+          type: string
+          enum:
+            - PROJECT_NOT_FOUND
+            - THREAD_NOT_FOUND
+            - INDEX_NOT_FOUND
+            - INDEX_RUNNING
+            - ORACLE_DISABLED
+            - ORACLE_NOT_CONFIGURED
+            - VAULT_UNAVAILABLE
+            - INVALID_PATH
+            - DAEMON_NOT_RUNNING
+        message:
+          type: string
+          description: Human-readable description with actionable guidance
+
+    NodeView:
+      type: object
+      required: [id, content, author, timestamp, sequence_id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        author:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        sequence_id:
+          type: integer
+
+    # =========================================================================
+    # Group 1: Thread Tools
+    # =========================================================================
+
+    VltThreadCreate_Input:
+      type: object
+      required: [project, thread_name, initial_thought]
+      properties:
+        project:
+          type: string
+          description: "Project slug (e.g. 'vlt-bridge'). Created if it doesn't exist."
+        thread_name:
+          type: string
+          description: "Thread slug (e.g. 'auth-design')"
+        initial_thought:
+          type: string
+          description: "First node content. Logged immediately."
+        author:
+          type: string
+          default: "agent"
+          description: "Attribution for the initial thought"
+
+    VltThreadCreate_Output:
+      type: object
+      required: [status, thread_id, project_id, node_id, sequence_id]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        thread_id:
+          type: string
+        project_id:
+          type: string
+        node_id:
+          type: string
+          format: uuid
+        sequence_id:
+          type: integer
+
+    VltThreadPush_Input:
+      type: object
+      required: [thread_id, thought]
+      properties:
+        thread_id:
+          type: string
+          description: "Thread slug"
+        thought:
+          type: string
+          description: "Content to log. No length limit enforced, but keep concise."
+        author:
+          type: string
+          default: "agent"
+
+    VltThreadPush_Output:
+      type: object
+      required: [status, thread_id, node_id, sequence_id]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        thread_id:
+          type: string
+        node_id:
+          type: string
+          format: uuid
+        sequence_id:
+          type: integer
+        duration_ms:
+          type: integer
+          description: "Wall time for the push operation in milliseconds"
+
+    VltThreadRead_Input:
+      type: object
+      required: [thread_id]
+      properties:
+        thread_id:
+          type: string
+        limit:
+          type: integer
+          default: 10
+          description: "Max recent nodes to return. 0 = all nodes."
+
+    VltThreadRead_Output:
+      type: object
+      required: [status, thread_id, project_id, summary, recent_nodes]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        thread_id:
+          type: string
+        project_id:
+          type: string
+        summary:
+          type: string
+          description: "Librarian-compressed state. Empty string if not yet summarized."
+        recent_nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeView'
+        node_count:
+          type: integer
+
+    VltThreadSeek_Input:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          description: "Natural language search query"
+        project:
+          type: string
+          nullable: true
+          description: "Scope search to this project. Null = search all projects."
+        limit:
+          type: integer
+          default: 10
+
+    VltThreadSeek_Output:
+      type: object
+      required: [status, results, search_mode]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              thread_id:
+                type: string
+              node_id:
+                type: string
+              content:
+                type: string
+              author:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+              score:
+                type: number
+        search_mode:
+          type: string
+          enum: [semantic, keyword]
+          description: "Whether vector similarity or keyword fallback was used"
+
+    VltThreadList_Input:
+      type: object
+      properties:
+        project:
+          type: string
+          nullable: true
+
+    VltThreadList_Output:
+      type: object
+      required: [status, threads]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        project_id:
+          type: string
+          nullable: true
+        threads:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              project_id:
+                type: string
+              status:
+                type: string
+              created_at:
+                type: string
+                format: date-time
+              node_count:
+                type: integer
+
+    # =========================================================================
+    # Group 2: Code Intelligence Tools
+    # =========================================================================
+
+    VltCodeInit_Input:
+      type: object
+      required: [project_path]
+      properties:
+        project_path:
+          type: string
+          description: "Absolute path to project root"
+        project_id:
+          type: string
+          nullable: true
+          description: "Override project ID. Auto-detected from vlt.toml if null."
+        force:
+          type: boolean
+          default: false
+          description: "Re-index from scratch. Required to overwrite existing index."
+
+    VltCodeInit_Output:
+      type: object
+      required: [status, project_id]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        project_id:
+          type: string
+        job_status:
+          type: string
+          enum: [started, already_running, completed]
+        job_id:
+          type: string
+          nullable: true
+        files_total:
+          type: integer
+          nullable: true
+          description: "Null when running in background (not yet known)"
+        message:
+          type: string
+
+    VltCodeSearch_Input:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        project_id:
+          type: string
+          nullable: true
+          description: "Auto-detected from vlt.toml if null"
+        limit:
+          type: integer
+          default: 10
+        language:
+          type: string
+          nullable: true
+          description: "Filter by language (e.g. 'python', 'typescript')"
+        file_pattern:
+          type: string
+          nullable: true
+          description: "Glob pattern to filter files (e.g. 'src/**/*.py')"
+
+    VltCodeSearch_Output:
+      type: object
+      required: [status, results]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        results:
+          type: array
+          items:
+            type: object
+            required: [file_path, name, chunk_type, lineno, end_lineno, score]
+            properties:
+              file_path:
+                type: string
+              name:
+                type: string
+              qualified_name:
+                type: string
+              chunk_type:
+                type: string
+              language:
+                type: string
+              lineno:
+                type: integer
+              end_lineno:
+                type: integer
+              signature:
+                type: string
+              body:
+                type: string
+              score:
+                type: number
+
+    VltCodeMap_Input:
+      type: object
+      properties:
+        project_id:
+          type: string
+          nullable: true
+        scope:
+          type: string
+          nullable: true
+          description: "Subdirectory focus (e.g. 'src/api/')"
+        max_tokens:
+          type: integer
+          default: 4000
+        include_signatures:
+          type: boolean
+          default: true
+        include_docstrings:
+          type: boolean
+          default: false
+
+    VltCodeMap_Output:
+      type: object
+      required: [status, map_text, token_count]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        map_text:
+          type: string
+        token_count:
+          type: integer
+        files_included:
+          type: integer
+        symbols_included:
+          type: integer
+        symbols_total:
+          type: integer
+
+    VltCodeStatus_Input:
+      type: object
+      properties:
+        project_id:
+          type: string
+          nullable: true
+
+    VltCodeStatus_Output:
+      type: object
+      required: [status, project_id, indexed]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        project_id:
+          type: string
+        indexed:
+          type: boolean
+        job_status:
+          type: string
+          nullable: true
+          enum: [pending, running, completed, failed, cancelled, null]
+        files_count:
+          type: integer
+        chunks_count:
+          type: integer
+        symbols_count:
+          type: integer
+        graph_nodes:
+          type: integer
+        graph_edges:
+          type: integer
+        last_indexed:
+          type: string
+          format: date-time
+          nullable: true
+
+    VltCodeLookup_Input:
+      type: object
+      required: [symbol]
+      properties:
+        symbol:
+          type: string
+          description: "Symbol name to look up (e.g. 'UserService', 'authenticate')"
+        project_id:
+          type: string
+          nullable: true
+        kind:
+          type: string
+          nullable: true
+          enum: [function, class, method, variable]
+
+    VltCodeLookup_Output:
+      type: object
+      required: [status, found, definitions]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        found:
+          type: boolean
+        definitions:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              file_path:
+                type: string
+              lineno:
+                type: integer
+              kind:
+                type: string
+              scope:
+                type: string
+              signature:
+                type: string
+              language:
+                type: string
+
+    # =========================================================================
+    # Group 3: Vault/Notes Tools
+    # =========================================================================
+
+    VltNoteWrite_Input:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+          description: "Relative .md path (e.g. 'architecture/auth.md')"
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+          nullable: true
+
+    VltNoteWrite_Output:
+      type: object
+      required: [status, path]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        path:
+          type: string
+        title:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        updated:
+          type: string
+          format: date-time
+
+    VltNoteRead_Input:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+
+    VltNoteRead_Output:
+      type: object
+      required: [status, path, content]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        path:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        updated:
+          type: string
+          format: date-time
+        version:
+          type: integer
+
+    VltNoteSearch_Input:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        limit:
+          type: integer
+          default: 20
+        tags:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: "Filter by tags (AND logic)"
+
+    VltNoteSearch_Output:
+      type: object
+      required: [status, results]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              title:
+                type: string
+              snippet:
+                type: string
+              score:
+                type: number
+              updated:
+                type: string
+                format: date-time
+
+    VltNoteList_Input:
+      type: object
+      properties:
+        folder:
+          type: string
+          nullable: true
+
+    VltNoteList_Output:
+      type: object
+      required: [status, notes]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        notes:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              title:
+                type: string
+              last_modified:
+                type: string
+                format: date-time
+
+    VltNoteBacklinks_Input:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+
+    VltNoteBacklinks_Output:
+      type: object
+      required: [status, backlinks]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        backlinks:
+          type: array
+          items:
+            type: object
+            properties:
+              source_path:
+                type: string
+              source_title:
+                type: string
+
+    # =========================================================================
+    # Group 4: Oracle Tools
+    # =========================================================================
+
+    VltOracleQuery_Input:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+        project_id:
+          type: string
+          nullable: true
+        sources:
+          type: array
+          items:
+            type: string
+            enum: [code, vault, threads]
+          nullable: true
+          description: "Filter retrieval sources. Null = all sources."
+        explain:
+          type: boolean
+          default: false
+          description: "Include retrieval traces in response"
+        model:
+          type: string
+          nullable: true
+          description: "Override LLM model"
+        context_id:
+          type: string
+          nullable: true
+          description: "Conversation continuation ID"
+
+    VltOracleQuery_Output:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        answer:
+          type: string
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              source_type:
+                type: string
+                enum: [code, vault, threads]
+              snippet:
+                type: string
+              score:
+                type: number
+        model_used:
+          type: string
+        tokens_used:
+          type: integer
+        context_id:
+          type: string
+
+    VltOracleStatus_Input:
+      type: object
+      properties: {}
+
+    VltOracleStatus_Output:
+      type: object
+      required: [status, enabled, configured, backend_available]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        enabled:
+          type: boolean
+        configured:
+          type: boolean
+          description: "True if API credentials are present"
+        backend_available:
+          type: boolean
+          description: "True if Document-MCP backend is reachable"
+        model:
+          type: string
+          nullable: true
+
+    # =========================================================================
+    # Group 5: Meta Tools
+    # =========================================================================
+
+    VltStatus_Output:
+      type: object
+      required: [status, profile, projects]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        profile:
+          type: string
+        db_path:
+          type: string
+        projects:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              has_coderag_index:
+                type: boolean
+              thread_count:
+                type: integer
+        daemon_running:
+          type: boolean
+        backend_configured:
+          type: boolean
+        oracle_enabled:
+          type: boolean
+
+    VltProjectDetect_Input:
+      type: object
+      properties:
+        path:
+          type: string
+          nullable: true
+          description: "Directory to check. Defaults to process cwd."
+
+    VltProjectDetect_Output:
+      type: object
+      required: [status, found]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        found:
+          type: boolean
+        project_id:
+          type: string
+          nullable: true
+        project_name:
+          type: string
+          nullable: true
+        project_path:
+          type: string
+          nullable: true
+        has_coderag_index:
+          type: boolean
+          nullable: true

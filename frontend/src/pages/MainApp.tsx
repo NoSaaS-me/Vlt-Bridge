@@ -56,6 +56,7 @@ import { ProjectDropdown } from '@/components/ProjectDropdown';
 import { CreateProjectDialog } from '@/components/CreateProjectDialog';
 import { ThreadsFlyout } from '@/components/ThreadsFlyout';
 import { IssuesFlyout } from '@/components/IssuesFlyout';
+import { ThreadDetail } from '@/components/ThreadDetail';
 
 export function MainApp() {
   const navigate = useNavigate();
@@ -98,6 +99,7 @@ export function MainApp() {
   const [isThreadsOpen, setIsThreadsOpen] = useState(false);
   const [isIssuesOpen, setIsIssuesOpen] = useState(false);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
   // T007: Initialize font size state management
@@ -407,7 +409,7 @@ export function MainApp() {
   // T093: Handle edit button click
   const handleEdit = () => {
     if (isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in with Hugging Face to edit notes.');
+      toast.error('Demo mode is read-only. Sign in with GitHub to edit notes.');
       return;
     }
     setIsEditMode(true);
@@ -437,6 +439,7 @@ export function MainApp() {
     setIsEditMode(false);
     setIsChatCenterView(false);
     setIsGraphView(false);
+    setSelectedThreadId(null); // Clear selected thread when switching projects
   };
 
   // Handle project creation
@@ -456,6 +459,7 @@ export function MainApp() {
     setIsThreadsOpen(true);
     setIsIssuesOpen(false);
     setIsChatOpen(false);
+    setSelectedThreadId(null); // Clear selected thread when opening flyout
   };
 
   const openIssuesFlyout = () => {
@@ -482,7 +486,7 @@ export function MainApp() {
   // Handle note dialog open change
   const handleDialogOpenChange = (open: boolean) => {
     if (open && isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in with Hugging Face to create notes.');
+      toast.error('Demo mode is read-only. Sign in with GitHub to create notes.');
       return;
     }
     setIsNewNoteDialogOpen(open);
@@ -495,7 +499,7 @@ export function MainApp() {
   // Handle folder dialog open change
   const handleFolderDialogOpenChange = (open: boolean) => {
     if (open && isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in with Hugging Face to create folders.');
+      toast.error('Demo mode is read-only. Sign in with GitHub to create folders.');
       return;
     }
     setIsNewFolderDialogOpen(open);
@@ -720,7 +724,7 @@ export function MainApp() {
                 variant="default"
                 size="sm"
                 onClick={() => login()}
-                title="Sign in with Hugging Face"
+                title="Sign in with GitHub"
               >
                 Sign in
               </Button>
@@ -919,7 +923,13 @@ export function MainApp() {
                 </div>
               )}
 
-              {isChatCenterView ? (
+              {selectedThreadId ? (
+                <ThreadDetail
+                  threadId={selectedThreadId}
+                  projectId={selectedProjectId}
+                  onClose={() => setSelectedThreadId(null)}
+                />
+              ) : isChatCenterView ? (
                 <ErrorBoundary>
                   <ChatPanel
                     onNavigateToNote={(path) => {
@@ -990,8 +1000,8 @@ export function MainApp() {
                 <ThreadsFlyout
                   projectId={selectedProjectId}
                   onSelectThread={(threadId) => {
-                    console.log('Selected thread:', threadId);
-                    // TODO: Navigate to thread view or show thread details
+                    setSelectedThreadId(threadId);
+                    setIsThreadsOpen(false); // Close flyout when thread is selected
                   }}
                   onClose={() => setIsThreadsOpen(false)}
                 />

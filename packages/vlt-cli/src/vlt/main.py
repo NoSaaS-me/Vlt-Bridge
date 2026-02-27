@@ -79,10 +79,12 @@ thread_app = typer.Typer(name="thread", help=THREAD_HELP)
 config_app = typer.Typer(name="config", help="Manage configuration and keys.")
 sync_app = typer.Typer(name="sync", help="Sync commands for remote backend.")
 daemon_app = typer.Typer(name="daemon", help="Background sync daemon management.")
+profile_app = typer.Typer(name="profile", help="Manage named profiles for isolated storage.")
 app.add_typer(thread_app, name="thread")
 app.add_typer(config_app, name="config")
 app.add_typer(sync_app, name="sync")
 app.add_typer(daemon_app, name="daemon")
+app.add_typer(profile_app, name="profile")
 
 service = SqliteVaultService()
 
@@ -94,21 +96,29 @@ def set_key(
     """
     Set the server sync token for backend authentication.
 
-    This saves the token to ~/.vlt/.env as VLT_SYNC_TOKEN so you don't have to
-    export it every time. The token authenticates vlt-cli with the backend server
-    for syncing threads and using server-side features like summarization.
+    This saves the token to the active profile's .env file as VLT_SYNC_TOKEN so you
+    don't have to export it every time. The token authenticates vlt-cli with the
+    backend server for syncing threads and using server-side features like summarization.
 
     Get your token from the backend server's settings page or via the /api/tokens endpoint.
 
     Examples:
         vlt config set-key sk-abc123xyz
         vlt config set-key sk-abc123xyz --server https://my-vault.example.com
+        vlt --profile work config set-key sk-work-token  # Set for specific profile
     """
-    env_path = os.path.expanduser("~/.vlt/.env")
+    from vlt.profile import get_profile_manager
+
+    manager = get_profile_manager()
+    profile_name = manager.get_active_profile()
+    env_path = manager.get_env_file(profile_name)
+
+    # Ensure profile directory exists
+    env_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Read existing lines to preserve other configs if any
     lines = []
-    if os.path.exists(env_path):
+    if env_path.exists():
         with open(env_path, "r") as f:
             lines = f.readlines()
 
@@ -130,6 +140,7 @@ def set_key(
         f.writelines(lines)
 
     print(f"[green]Sync token saved to {env_path}[/green]")
+    print(f"[dim]Profile: {profile_name}[/dim]")
     if server_url:
         print(f"[green]Server URL set to {server_url}[/green]")
     print("[dim]The CLI will now authenticate with the backend server for sync operations.[/dim]")
@@ -218,22 +229,359 @@ def sync_retry():
     print(f"[yellow]Skipped (max retries): {result['skipped']}[/yellow]")
 
 
+@sync_app.command("all")
+def sync_all(
+    project: str = typer.Option(None, "--project", "-p", help="Sync threads for specific project only"),
+):
+    """
+    Sync all local threads to the backend server.
+
+    This command syncs ALL threads from your local database to the server,
+    ensuring they appear on the website. Useful when:
+    - You've created threads locally that haven't been synced
+    - You want to ensure all threads are visible on the website
+    - You're setting up a new client and want to sync existing threads
+
+    If --project is specified, only syncs threads for that project.
+    Otherwise, syncs threads from all projects.
+
+    Examples:
+        vlt sync all                    # Sync all threads from all projects
+        vlt sync all --project myproj   # Sync threads for 'myproj' only
+    """
+    from vlt.db import SessionLocal
+    from vlt.core.sync import sync_all_threads
+    from vlt.core.identity import load_project_identity
+    import asyncio
+
+    console = Console()
+
+    # Resolve project if not specified
+    if not project:
+        identity = load_project_identity()
+        if identity:
+            project = identity.id
+            console.print(f"[dim]Using project from vlt.toml: {project}[/dim]")
+        else:
+            console.print("[dim]Syncing threads from all projects...[/dim]")
+
+    with SessionLocal() as db:
+        console.print(f"[bold blue]Syncing threads to server...[/bold blue]")
+        if project:
+            console.print(f"  Project: {project}")
+        console.print()
+
+        try:
+            stats = asyncio.run(sync_all_threads(db, project_id=project))
+
+            console.print(f"[green]✓ Threads synced: {stats['threads_synced']}[/green]")
+            console.print(f"[red]✗ Threads failed: {stats['threads_failed']}[/red]")
+            console.print(f"[dim]  Total entries synced: {stats['total_entries']}[/dim]")
+
+            if stats.get("errors"):
+                console.print()
+                console.print("[yellow]Errors:[/yellow]")
+                for error in stats["errors"][:10]:  # Show first 10 errors
+                    console.print(f"  - {error}")
+                if len(stats["errors"]) > 10:
+                    console.print(f"  ... and {len(stats['errors']) - 10} more errors")
+
+        except Exception as e:
+            console.print(f"[red]Error syncing threads: {e}[/red]")
+            raise typer.Exit(code=1)
+
+
+# ============================================================================
+# Profile Commands
+# ============================================================================
+
+@profile_app.command("list")
+def profile_list(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON")
+):
+    """
+    List all available profiles.
+
+    Shows all named profiles with their storage locations.
+    The active profile is marked with an asterisk (*).
+
+    Examples:
+        vlt profile list
+        vlt profile list --json
+    """
+    from vlt.profile import get_profile_manager
+
+    manager = get_profile_manager()
+    profiles = manager.list_profiles()
+    active = manager.get_active_profile()
+
+    if json_output:
+        data = {
+            "profiles": profiles,
+            "active": active,
+            "details": {}
+        }
+        for p in profiles:
+            profile_dir = manager.get_profile_dir(p)
+            data["details"][p] = {
+                "path": str(profile_dir),
+                "exists": profile_dir.exists(),
+                "port": manager.get_daemon_port(p),
+            }
+        print(json.dumps(data, indent=2))
+        return
+
+    print("[bold]Available profiles:[/bold]")
+    for p in profiles:
+        profile_dir = manager.get_profile_dir(p)
+        port = manager.get_daemon_port(p)
+        marker = "[green]*[/green]" if p == active else " "
+        exists = "[green](exists)[/green]" if profile_dir.exists() else "[dim](not initialized)[/dim]"
+
+        print(f"  {marker} {p}")
+        print(f"      Path: {profile_dir} {exists}")
+        print(f"      Port: {port}")
+
+
+@profile_app.command("show")
+def profile_show():
+    """
+    Show the current active profile and its configuration.
+
+    Displays detailed information about the active profile including:
+    - Profile name
+    - Storage directory
+    - Database path
+    - Daemon port
+    - Sync configuration status
+    """
+    from vlt.profile import get_profile_manager
+    from vlt.config import settings
+
+    manager = get_profile_manager()
+    profile_name = manager.get_active_profile()
+    profile_dir = manager.get_profile_dir(profile_name)
+    env_file = manager.get_env_file(profile_name)
+    db_path = profile_dir / "vault.db"
+    pid_file = manager.get_pid_file(profile_name)
+    port = manager.get_daemon_port(profile_name)
+
+    print(f"[bold]Active Profile: {profile_name}[/bold]")
+    print()
+    print(f"  Directory:   {profile_dir}")
+    print(f"  Database:    {db_path} {'[green](exists)[/green]' if db_path.exists() else '[dim](not created)[/dim]'}")
+    print(f"  Environment: {env_file} {'[green](exists)[/green]' if env_file.exists() else '[dim](not configured)[/dim]'}")
+    print(f"  Daemon Port: {port}")
+    print()
+
+    # Check daemon status
+    daemon_running = pid_file.exists()
+    if daemon_running:
+        try:
+            with open(pid_file) as f:
+                pid = f.read().strip()
+            print(f"  Daemon:      [green]Running[/green] (PID: {pid})")
+        except Exception:
+            print(f"  Daemon:      [yellow]Unknown[/yellow]")
+    else:
+        print(f"  Daemon:      [dim]Not running[/dim]")
+
+    # Check sync configuration
+    if settings.sync_token:
+        print(f"  Sync:        [green]Configured[/green] (server: {settings.vault_url})")
+    else:
+        print(f"  Sync:        [dim]Not configured[/dim] (run 'vlt config set-key <token>')")
+
+
+@profile_app.command("add")
+def profile_add(
+    name: str = typer.Argument(..., help="Name for the new profile"),
+    token: str = typer.Option(None, "--token", "-t", help="Sync token for the profile"),
+    server: str = typer.Option(None, "--server", "-s", help="Server URL for the profile"),
+):
+    """
+    Create a new named profile.
+
+    Creates an isolated profile with its own database and configuration.
+    Profile names must be lowercase alphanumeric with hyphens/underscores.
+
+    Examples:
+        vlt profile add work
+        vlt profile add personal --token sk-abc123
+        vlt profile add gh-myorg --token sk-xyz --server https://vault.example.com
+    """
+    from vlt.profile import get_profile_manager, ProfileError
+
+    manager = get_profile_manager()
+
+    try:
+        profile_dir = manager.create_profile(name, token=token, server_url=server)
+        print(f"[green]Created profile: {name}[/green]")
+        print(f"  Directory: {profile_dir}")
+        if token:
+            print(f"  Sync token: [green]configured[/green]")
+        if server:
+            print(f"  Server URL: {server}")
+        print()
+        print(f"[dim]Switch to this profile with: vlt profile use {name}[/dim]")
+    except ProfileError as e:
+        print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+
+@profile_app.command("use")
+def profile_use(
+    name: str = typer.Argument(..., help="Profile name to switch to"),
+):
+    """
+    Switch to a different profile.
+
+    Sets the active profile in the global config. All subsequent vlt commands
+    will use this profile's database and configuration.
+
+    Examples:
+        vlt profile use work
+        vlt profile use default
+    """
+    from vlt.profile import get_profile_manager, ProfileError
+
+    manager = get_profile_manager()
+
+    try:
+        manager.set_active_profile(name)
+        print(f"[green]Switched to profile: {name}[/green]")
+
+        profile_dir = manager.get_profile_dir(name)
+        print(f"  Directory: {profile_dir}")
+
+        # Check if daemon is running for the new profile
+        pid_file = manager.get_pid_file(name)
+        if not pid_file.exists():
+            print()
+            print(f"[dim]Tip: Start the daemon for this profile: vlt daemon start[/dim]")
+    except ProfileError as e:
+        print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+
+@profile_app.command("delete")
+def profile_delete(
+    name: str = typer.Argument(..., help="Profile name to delete"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
+):
+    """
+    Delete a profile and all its data.
+
+    This permanently removes the profile's database, configuration, and logs.
+    The default profile cannot be deleted. Cannot delete the active profile.
+
+    Examples:
+        vlt profile delete old-profile
+        vlt profile delete temp --force
+    """
+    from vlt.profile import get_profile_manager, ProfileError
+
+    manager = get_profile_manager()
+
+    # Get info before deletion
+    try:
+        profile_dir = manager.get_profile_dir(name)
+    except ProfileError as e:
+        print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if not force:
+        print(f"[yellow]This will permanently delete profile '{name}'[/yellow]")
+        print(f"  Directory: {profile_dir}")
+        print()
+        confirm = Confirm.ask(f"Are you sure you want to delete profile '{name}'?")
+        if not confirm:
+            print("[dim]Cancelled[/dim]")
+            return
+
+    try:
+        manager.delete_profile(name, force=True)
+        print(f"[green]Deleted profile: {name}[/green]")
+    except ProfileError as e:
+        print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+
+@profile_app.command("init")
+def profile_init(
+    name: str = typer.Argument(None, help="Profile name to initialize (default: active profile)"),
+):
+    """
+    Initialize a profile's database.
+
+    Creates the database schema for the profile if it doesn't exist.
+    This is normally done automatically, but can be run manually.
+
+    Examples:
+        vlt profile init            # Initialize active profile
+        vlt profile init work       # Initialize specific profile
+    """
+    from vlt.profile import get_profile_manager
+    from vlt.core.migrations import init_db
+    from vlt.db import get_engine_for_profile
+    from sqlalchemy import text
+
+    manager = get_profile_manager()
+    profile_name = name or manager.get_active_profile()
+    profile_dir = manager.get_profile_dir(profile_name)
+
+    # Ensure profile directory exists
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[bold]Initializing profile: {profile_name}[/bold]")
+    print(f"  Directory: {profile_dir}")
+
+    # Initialize database for this profile
+    try:
+        # Use profile-specific engine
+        profile_engine = get_engine_for_profile(profile_name)
+
+        # Create tables
+        from vlt.db import Base
+        from vlt.core import models  # Import models to register them
+        Base.metadata.create_all(bind=profile_engine)
+
+        # Apply migrations
+        from vlt.core.migrations import apply_oracle_migrations
+        # Note: apply_oracle_migrations uses the global engine, need to temporarily switch
+        # For now, just create the basic tables
+        print("  [green]Database schema created[/green]")
+
+        # Check table count
+        with profile_engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            tables = [row[0] for row in result]
+            print(f"  Tables: {len(tables)}")
+
+    except Exception as e:
+        print(f"[red]Error initializing database: {e}[/red]")
+        raise typer.Exit(code=1)
+
+
 # ============================================================================
 # Daemon Commands
 # ============================================================================
 
 @daemon_app.command("start")
 def daemon_start(
-    port: int = typer.Option(8765, "--port", "-p", help="Port for daemon to listen on"),
+    port: int = typer.Option(None, "--port", help="Port for daemon to listen on (default: profile-specific)"),
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground (blocking)")
 ):
     """
-    Start the background sync daemon.
+    Start the background sync daemon for the current profile.
 
     The daemon provides:
     - Persistent HTTP connection to backend (no connection overhead per CLI call)
     - Fast CLI responses (queue and return immediately)
     - Background sync with automatic retry
+
+    Each profile has its own daemon on a unique port, allowing multiple profiles
+    to run daemons simultaneously.
 
     By default, runs as a background process. Use --foreground for debugging.
 
@@ -241,10 +589,13 @@ def daemon_start(
         vlt daemon start                    # Start in background
         vlt daemon start --foreground       # Run in foreground (for debugging)
         vlt daemon start --port 9000        # Use custom port
+        vlt --profile work daemon start     # Start daemon for 'work' profile
     """
     from vlt.daemon.manager import DaemonManager
+    from vlt.profile import get_profile_manager
 
-    manager = DaemonManager(port=port)
+    profile_name = state.get("profile") or get_profile_manager().get_active_profile()
+    manager = DaemonManager(port=port, profile_name=profile_name)
     result = manager.start(foreground=foreground)
 
     if result["success"]:
@@ -253,8 +604,9 @@ def daemon_start(
             print(f"[green]{result['message']}[/green]")
         else:
             print(f"[green]{result['message']}[/green]")
-            print(f"PID: {result.get('pid')}")
-            print(f"[dim]Log file: ~/.vlt/daemon.log[/dim]")
+            print(f"  PID: {result.get('pid')}")
+            print(f"  Profile: {result.get('profile')}")
+            print(f"[dim]Log file: {manager.log_file}[/dim]")
     else:
         print(f"[red]{result['message']}[/red]")
         raise typer.Exit(code=1)
@@ -263,19 +615,21 @@ def daemon_start(
 @daemon_app.command("stop")
 def daemon_stop():
     """
-    Stop the background sync daemon.
+    Stop the background sync daemon for the current profile.
 
     Sends SIGTERM for graceful shutdown. If the daemon doesn't stop within
     3 seconds, it will be force killed with SIGKILL.
     """
     from vlt.daemon.manager import DaemonManager
-    from vlt.config import settings
+    from vlt.profile import get_profile_manager
 
-    manager = DaemonManager(port=settings.daemon_port)
+    profile_name = state.get("profile") or get_profile_manager().get_active_profile()
+    manager = DaemonManager(profile_name=profile_name)
     result = manager.stop()
 
     if result["success"]:
         print(f"[green]{result['message']}[/green]")
+        print(f"[dim]Profile: {result.get('profile')}[/dim]")
     else:
         print(f"[yellow]{result['message']}[/yellow]")
 
@@ -285,18 +639,20 @@ def daemon_status(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON")
 ):
     """
-    Show daemon status and statistics.
+    Show daemon status and statistics for the current profile.
 
     Displays:
     - Running state and PID
+    - Profile name
     - Uptime
     - Backend connection status
     - Sync queue size
     """
     from vlt.daemon.manager import DaemonManager
-    from vlt.config import settings
+    from vlt.profile import get_profile_manager
 
-    manager = DaemonManager(port=settings.daemon_port)
+    profile_name = state.get("profile") or get_profile_manager().get_active_profile()
+    manager = DaemonManager(profile_name=profile_name)
     status = manager.status()
 
     if json_output:
@@ -305,6 +661,7 @@ def daemon_status(
 
     if status["running"]:
         print(f"[bold green]Daemon is running[/bold green]")
+        print(f"  Profile: {status.get('profile')}")
         print(f"  PID: {status.get('pid')}")
         print(f"  Port: {status.get('port')}")
 
@@ -322,6 +679,7 @@ def daemon_status(
         print(f"  Queue size: {status.get('queue_size', 0)}")
     else:
         print(f"[dim]Daemon is not running[/dim]")
+        print(f"  Profile: {status.get('profile')}")
         if status.get("message"):
             print(f"  {status['message']}")
         if status.get("error"):
@@ -331,20 +689,22 @@ def daemon_status(
 @daemon_app.command("restart")
 def daemon_restart():
     """
-    Restart the daemon.
+    Restart the daemon for the current profile.
 
     Stops the daemon if running, then starts it again.
     """
     from vlt.daemon.manager import DaemonManager
-    from vlt.config import settings
+    from vlt.profile import get_profile_manager
 
-    manager = DaemonManager(port=settings.daemon_port)
+    profile_name = state.get("profile") or get_profile_manager().get_active_profile()
+    manager = DaemonManager(profile_name=profile_name)
     result = manager.restart()
 
     if result["success"]:
         print(f"[green]{result['message']}[/green]")
         if result.get("pid"):
-            print(f"PID: {result['pid']}")
+            print(f"  PID: {result['pid']}")
+            print(f"  Profile: {result.get('profile')}")
     else:
         print(f"[red]{result['message']}[/red]")
         raise typer.Exit(code=1)
@@ -356,14 +716,18 @@ def daemon_logs(
     lines: int = typer.Option(20, "--lines", "-n", help="Number of lines to show")
 ):
     """
-    Show daemon logs.
+    Show daemon logs for the current profile.
 
     Displays the daemon log file contents. Use --follow to watch for new entries.
     """
     import subprocess
-    from pathlib import Path
+    from vlt.profile import get_profile_manager
 
-    log_file = Path.home() / ".vlt" / "daemon.log"
+    profile_name = state.get("profile") or get_profile_manager().get_active_profile()
+    manager = get_profile_manager()
+    log_file = manager.get_log_file(profile_name)
+
+    print(f"[dim]Profile: {profile_name}[/dim]")
 
     if not log_file.exists():
         print("[yellow]No daemon log file found[/yellow]")
@@ -391,15 +755,36 @@ def daemon_logs(
 
 # ...
 
-state = {"author": "user", "show_hint": False}
+state = {"author": "user", "show_hint": False, "profile": None}
 
 @app.callback()
 def main(
     author: str = typer.Option("user", "--author", help="Identify the speaker (e.g. 'Architect')."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Use a specific profile instead of the active one."),
 ):
     """
     Vault CLI: Cognitive Hard Drive.
     """
+    # Handle profile selection
+    if profile:
+        from vlt.profile import get_profile_manager
+        from vlt.config import reload_settings
+
+        manager = get_profile_manager()
+        manager.clear_cache()
+
+        # Validate and set profile
+        try:
+            # This will validate the name
+            os.environ["VLT_PROFILE"] = profile
+            state["profile"] = profile
+
+            # Reload settings with the new profile
+            reload_settings(profile_name=profile)
+        except Exception as e:
+            print(f"[red]Invalid profile: {e}[/red]")
+            raise typer.Exit(code=1)
+
     if author == "user" and not os.environ.get("VLT_AUTHOR"):
         state["show_hint"] = True
     else:
@@ -694,6 +1079,12 @@ def init(
         console.print("[bold blue]VLT Health Check[/bold blue]")
         console.print()
 
+        # Ensure project exists locally and on server before health check
+        vlt_config = load_vlt_config(target_path)
+        if vlt_config and vlt_config.project:
+            project_id = vlt_config.project.id
+            _ensure_project_exists_everywhere(console, service, project_id)
+
         health = _perform_health_check(console, target_path)
 
         # Display health status
@@ -741,6 +1132,11 @@ def init(
                 vlt_config = load_vlt_config(target_path)
                 if vlt_config and vlt_config.project:
                     project_id = vlt_config.project.id
+                    
+                    # Ensure project exists locally and on server (fixes FK constraint errors)
+                    if not _ensure_project_exists_everywhere(console, service, project_id):
+                        raise typer.Exit(code=1)
+                    
                     console.print(f"[dim]Starting CodeRAG indexing for project '{project_id}'...[/dim]")
                     console.print()
 
@@ -906,9 +1302,38 @@ def new_thread(
         # Project might already exist, which is fine for now
         pass
         
+    # Ensure project exists locally and on server
+    console = Console()
+    _ensure_project_exists_everywhere(console, service, project)
+    
     thread = service.create_thread(project_id=project, name=name, initial_thought=initial_thought, author=effective_author)
     print(f"[bold green]CREATED:[/bold green] {thread.project_id}/{thread.id}")
     print(f"STATUS: {thread.status}")
+    
+    # Sync thread to server immediately so it appears on the website
+    from vlt.core.sync import ThreadSyncClient
+    import asyncio
+    from vlt.db import SessionLocal
+    
+    # Sync the entire thread (includes thread metadata and all entries)
+    with SessionLocal() as db:
+        try:
+            client = ThreadSyncClient()
+            if client.sync_token:
+                result = asyncio.run(client.sync_thread_full(
+                    thread_id=thread.id,
+                    project_id=thread.project_id,
+                    name=thread.id,
+                    db=db,
+                ))
+                if result.success:
+                    print(f"[dim]✓ Thread synced to server ({result.synced_count} entries)[/dim]")
+                else:
+                    print(f"[yellow]⚠ Sync failed: {result.error}[/yellow]")
+            else:
+                print("[dim]ℹ No sync token configured - thread created locally only[/dim]")
+        except Exception as e:
+            print(f"[yellow]⚠ Sync failed (will retry): {e}[/yellow]")
     
     if effective_author == "user" and not os.environ.get("VLT_AUTHOR"):
         print("[dim](Tip: Use --author to sign your thoughts)[/dim]")
@@ -1337,6 +1762,87 @@ def _create_server_project(console: Console, name: str, description: str = "") -
         return None
 
 
+def _ensure_project_exists_everywhere(
+    console: Console,
+    svc: SqliteVaultService,
+    project_id: str,
+    name: str = None,
+    description: str = None,
+) -> bool:
+    """Ensure project exists both locally and on the backend server.
+
+    This function should be called before any operation that requires the project
+    to exist (e.g., CodeRAG indexing, thread creation) to prevent FK constraint
+    errors.
+
+    Args:
+        console: Rich Console for output
+        svc: SqliteVaultService for local operations
+        project_id: Project ID (slug)
+        name: Display name (defaults to project_id)
+        description: Project description
+
+    Returns:
+        True if project exists/was created successfully, False on error.
+    """
+    import httpx
+    from vlt.config import settings
+
+    effective_name = name or project_id
+    effective_description = description or "Auto-created project"
+
+    # 1. Ensure project exists locally
+    try:
+        svc.ensure_project_exists(project_id, effective_name, effective_description)
+    except Exception as e:
+        console.print(f"[red]Error ensuring local project: {e}[/red]")
+        return False
+
+    # 2. Ensure project exists on server (if configured)
+    vault_url = settings.vault_url
+    sync_token = settings.sync_token
+
+    if not vault_url or not sync_token:
+        # No server configured, local-only is fine
+        return True
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            headers = {
+                "Authorization": f"Bearer {sync_token}",
+                "Content-Type": "application/json",
+            }
+            
+            # Check if project exists on server
+            response = client.get(f"{vault_url}/api/projects/{project_id}", headers=headers)
+            
+            if response.status_code == 200:
+                # Project exists on server
+                return True
+            elif response.status_code == 404:
+                # Project doesn't exist - create it
+                console.print(f"[dim]Creating project '{project_id}' on server...[/dim]")
+                create_response = client.post(
+                    f"{vault_url}/api/projects",
+                    headers=headers,
+                    json={"name": effective_name, "description": effective_description},
+                )
+                create_response.raise_for_status()
+                console.print(f"[green]✓ Project '{project_id}' created on server[/green]")
+                return True
+            else:
+                # Some other error
+                console.print(f"[yellow]Warning: Could not verify project on server (status {response.status_code})[/yellow]")
+                return True  # Continue anyway, local project exists
+
+    except httpx.ConnectError:
+        console.print(f"[yellow]Warning: Cannot connect to server at {vault_url}. Using local project only.[/yellow]")
+        return True  # Local project exists, continue without server
+    except Exception as e:
+        console.print(f"[yellow]Warning: Server project check failed: {e}[/yellow]")
+        return True  # Local project exists, continue anyway
+
+
 def _interactive_project_selection(console: Console, svc: SqliteVaultService) -> str | None:
     """Interactive project selection with create option (T011-T014).
 
@@ -1720,6 +2226,17 @@ def coderag_init(
     # Resolve path
     if not path:
         path = Path(".")
+
+    # Ensure project exists locally and on server (fixes FK constraint errors)
+    if not _ensure_project_exists_everywhere(console, service, project):
+        raise typer.Exit(code=1)
+
+    # Ensure all database tables/indexes exist (including FTS5 virtual tables)
+    from vlt.core.migrations import init_db
+    try:
+        init_db()
+    except Exception as e:
+        console.print(f"[yellow]Warning: Migration check failed: {e}[/yellow]")
 
     console.print(f"[bold blue]Initializing CodeRAG index for project '{project}'[/bold blue]")
     console.print(f"Path: {path.resolve()}")
@@ -3533,6 +4050,502 @@ def context_cancel():
         console.print("[green]Active query cancelled.[/green]")
     else:
         console.print("[dim]No active query to cancel.[/dim]")
+
+
+# ============================================================================
+# Behavior Tree Commands (BT Universal Runtime - Spec 019)
+# ============================================================================
+
+BT_HELP = """
+Behavior Tree debugging and visualization commands.
+
+These commands interact with the BT Universal Runtime to inspect, validate,
+and debug behavior trees used by the Oracle agent and Research subsystem.
+
+Requires a running backend with BT debug endpoints enabled.
+"""
+
+bt_app = typer.Typer(name="bt", help=BT_HELP)
+app.add_typer(bt_app, name="bt")
+
+
+def _get_bt_client():
+    """Get HTTP client configured for BT debug API."""
+    import httpx
+    from vlt.config import Settings
+
+    settings = Settings()
+    sync_token = os.environ.get("VLT_SYNC_TOKEN") or settings.sync_token
+    vault_url = os.environ.get("VLT_VAULT_URL", "http://localhost:8000")
+
+    headers = {}
+    if sync_token:
+        headers["Authorization"] = f"Bearer {sync_token}"
+
+    return httpx.Client(base_url=vault_url, headers=headers, timeout=30.0)
+
+
+@bt_app.command("list")
+def bt_list(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """
+    List all registered behavior trees.
+
+    Shows all trees currently loaded in the BT runtime with their status
+    and basic statistics.
+
+    Example:
+        vlt bt list
+        vlt bt list --json
+    """
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            response = client.get("/api/bt/debug/trees")
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        console.print(f"[red]Error connecting to BT debug API: {e}[/red]")
+        console.print("[dim]Make sure the backend is running with BT debug enabled.[/dim]")
+        raise typer.Exit(code=1)
+
+    trees = data.get("trees", [])
+
+    if json_output:
+        console.print(json_lib.dumps(data, indent=2))
+        return
+
+    if not trees:
+        console.print("[dim]No behavior trees registered.[/dim]")
+        return
+
+    table = Table(title="Registered Behavior Trees")
+    table.add_column("ID", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Status", style="yellow")
+    table.add_column("Tick Count", justify="right")
+    table.add_column("Last Tick", style="dim")
+
+    for tree in trees:
+        status_color = {
+            "IDLE": "dim",
+            "RUNNING": "green",
+            "COMPLETED": "blue",
+            "FAILED": "red",
+        }.get(tree.get("status", "IDLE"), "white")
+
+        table.add_row(
+            tree.get("id", "?"),
+            tree.get("name", "?"),
+            f"[{status_color}]{tree.get('status', 'IDLE')}[/{status_color}]",
+            str(tree.get("tick_count", 0)),
+            tree.get("last_tick_at", "-"),
+        )
+
+    console.print(table)
+
+
+@bt_app.command("show")
+def bt_show(
+    tree_id: str = typer.Argument(..., help="Tree ID or name to display"),
+    format: str = typer.Option("ascii", "--format", "-f", help="Output format: ascii, json, dot"),
+    highlight: bool = typer.Option(True, "--highlight/--no-highlight", help="Highlight active nodes"),
+):
+    """
+    Display behavior tree structure with status.
+
+    Shows the tree structure in various formats:
+    - ascii: Human-readable tree diagram (default)
+    - json: Machine-readable JSON structure
+    - dot: Graphviz DOT format for visualization
+
+    Examples:
+        vlt bt show oracle-agent
+        vlt bt show oracle-agent --format dot > tree.dot
+        vlt bt show oracle-agent --format json
+    """
+    from rich.console import Console
+    from rich.syntax import Syntax
+    from rich.panel import Panel
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            response = client.get(
+                f"/api/bt/debug/tree/{tree_id}/visualization",
+                params={"format": format, "highlight_active": highlight}
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    visualization = data.get("visualization", "")
+
+    if format == "json":
+        console.print(Syntax(json_lib.dumps(json_lib.loads(visualization), indent=2), "json"))
+    elif format == "dot":
+        console.print(visualization)
+    else:
+        # ASCII format
+        console.print(Panel(visualization, title=f"[bold]Tree: {tree_id}[/bold]", border_style="blue"))
+
+        # Show stats if available
+        stats = data.get("stats", {})
+        if stats:
+            console.print()
+            console.print(f"[dim]Status: {stats.get('status', 'IDLE')} | "
+                         f"Ticks: {stats.get('tick_count', 0)} | "
+                         f"Active Nodes: {stats.get('active_node_count', 0)}[/dim]")
+
+
+@bt_app.command("blackboard")
+def bt_blackboard(
+    tree_id: str = typer.Argument(..., help="Tree ID to inspect"),
+    key: str = typer.Option(None, "--key", "-k", help="Filter by key pattern"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """
+    Display blackboard state for a tree.
+
+    Shows all key-value pairs in the tree's blackboard, including
+    read/write tracking information.
+
+    Examples:
+        vlt bt blackboard oracle-agent
+        vlt bt blackboard oracle-agent --key user
+        vlt bt blackboard oracle-agent --json
+    """
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            response = client.get(f"/api/bt/debug/tree/{tree_id}/blackboard")
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        console.print(json_lib.dumps(data, indent=2))
+        return
+
+    entries = data.get("entries", [])
+
+    if key:
+        entries = [e for e in entries if key.lower() in e.get("key", "").lower()]
+
+    if not entries:
+        console.print("[dim]No blackboard entries found.[/dim]")
+        return
+
+    table = Table(title=f"Blackboard: {tree_id}")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value", style="white", max_width=60)
+    table.add_column("Schema", style="dim")
+    table.add_column("R/W", style="yellow")
+
+    for entry in entries:
+        value_str = str(entry.get("value", ""))
+        if len(value_str) > 60:
+            value_str = value_str[:57] + "..."
+
+        rw = ""
+        if entry.get("was_read"):
+            rw += "R"
+        if entry.get("was_written"):
+            rw += "W"
+
+        table.add_row(
+            entry.get("key", "?"),
+            value_str,
+            entry.get("schema", "-"),
+            rw or "-",
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Size: {data.get('size_bytes', 0)} bytes | "
+                 f"Reads: {len(data.get('reads', []))} | "
+                 f"Writes: {len(data.get('writes', []))}[/dim]")
+
+
+@bt_app.command("history")
+def bt_history(
+    tree_id: str = typer.Argument(..., help="Tree ID to inspect"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of entries to show"),
+    node: str = typer.Option(None, "--node", help="Filter by node ID"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """
+    Display tick history for a tree.
+
+    Shows recent tick events with timing information and status transitions.
+
+    Examples:
+        vlt bt history oracle-agent
+        vlt bt history oracle-agent --limit 50
+        vlt bt history oracle-agent --node llm-call
+    """
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            params = {"limit": limit}
+            if node:
+                params["node_id"] = node
+            response = client.get(f"/api/bt/debug/tree/{tree_id}/history", params=params)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        console.print(json_lib.dumps(data, indent=2))
+        return
+
+    entries = data.get("entries", [])
+
+    if not entries:
+        console.print("[dim]No tick history found.[/dim]")
+        return
+
+    table = Table(title=f"Tick History: {tree_id}")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Node", style="cyan")
+    table.add_column("Status", style="yellow")
+    table.add_column("Duration", justify="right")
+    table.add_column("Timestamp", style="dim")
+
+    for i, entry in enumerate(entries):
+        status = entry.get("status", "?")
+        status_color = {
+            "SUCCESS": "green",
+            "FAILURE": "red",
+            "RUNNING": "yellow",
+            "FRESH": "dim",
+        }.get(status, "white")
+
+        duration = entry.get("duration_ms")
+        duration_str = f"{duration:.1f}ms" if duration else "-"
+
+        table.add_row(
+            str(entry.get("tick_number", i)),
+            entry.get("node_id", "?"),
+            f"[{status_color}]{status}[/{status_color}]",
+            duration_str,
+            entry.get("timestamp", "-"),
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Showing {len(entries)} of {data.get('total', len(entries))} entries[/dim]")
+
+
+@bt_app.command("validate")
+def bt_validate(
+    file_path: Path = typer.Argument(..., help="Path to Lua tree file"),
+    strict: bool = typer.Option(False, "--strict", help="Enable strict validation mode"),
+):
+    """
+    Validate a Lua behavior tree file.
+
+    Checks the tree definition for:
+    - Lua syntax errors
+    - Invalid node references
+    - Missing required properties
+    - Circular subtree references
+
+    Examples:
+        vlt bt validate trees/oracle-agent.lua
+        vlt bt validate trees/research.lua --strict
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    import json as json_lib
+
+    console = Console()
+
+    if not file_path.exists():
+        console.print(f"[red]File not found: {file_path}[/red]")
+        raise typer.Exit(code=1)
+
+    # Read the Lua file
+    lua_content = file_path.read_text()
+
+    try:
+        with _get_bt_client() as client:
+            response = client.post(
+                "/api/bt/debug/validate",
+                json={"content": lua_content, "strict": strict}
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        # If validation endpoint doesn't exist, try local validation
+        console.print(f"[yellow]Backend validation unavailable, using local validation...[/yellow]")
+
+        try:
+            # Import local validator
+            import sys
+            sys.path.insert(0, str(Path(__file__).parents[4] / "backend"))
+            from backend.src.bt.lua.validator import TreeValidator
+            from backend.src.bt.lua.loader import TreeLoader
+
+            loader = TreeLoader()
+            tree_def = loader.load_string(lua_content, str(file_path))
+
+            validator = TreeValidator(resolve_functions=not strict)
+            errors = validator.validate(tree_def)
+
+            if errors:
+                console.print(Panel(
+                    "\n".join([f"[red]• {e.code}: {e.message}[/red]" for e in errors]),
+                    title="[red]Validation Failed[/red]",
+                    border_style="red"
+                ))
+                raise typer.Exit(code=1)
+            else:
+                console.print(Panel(
+                    f"[green]✓ Tree '{tree_def.name}' is valid[/green]\n"
+                    f"  Nodes: {len(tree_def.nodes)}\n"
+                    f"  Root: {tree_def.root.id if tree_def.root else 'None'}",
+                    title="[green]Validation Passed[/green]",
+                    border_style="green"
+                ))
+                return
+
+        except ImportError:
+            console.print(f"[red]Cannot validate locally - backend modules not available[/red]")
+            raise typer.Exit(code=1)
+        except Exception as ve:
+            console.print(f"[red]Validation error: {ve}[/red]")
+            raise typer.Exit(code=1)
+
+    # Process backend validation response
+    if data.get("valid"):
+        console.print(Panel(
+            f"[green]✓ Tree is valid[/green]\n"
+            f"  Nodes: {data.get('node_count', '?')}\n"
+            f"  Warnings: {len(data.get('warnings', []))}",
+            title="[green]Validation Passed[/green]",
+            border_style="green"
+        ))
+
+        for warning in data.get("warnings", []):
+            console.print(f"  [yellow]⚠ {warning}[/yellow]")
+    else:
+        errors = data.get("errors", [])
+        console.print(Panel(
+            "\n".join([f"[red]• {e}[/red]" for e in errors]),
+            title="[red]Validation Failed[/red]",
+            border_style="red"
+        ))
+        raise typer.Exit(code=1)
+
+
+@bt_app.command("breakpoint")
+def bt_breakpoint(
+    tree_id: str = typer.Argument(..., help="Tree ID"),
+    node_id: str = typer.Argument(None, help="Node ID to set/remove breakpoint"),
+    remove: bool = typer.Option(False, "--remove", "-r", help="Remove breakpoint"),
+    condition: str = typer.Option(None, "--condition", "-c", help="Conditional expression"),
+    list_all: bool = typer.Option(False, "--list", "-l", help="List all breakpoints"),
+    clear: bool = typer.Option(False, "--clear", help="Clear all breakpoints"),
+):
+    """
+    Manage breakpoints for debugging.
+
+    Set, remove, or list breakpoints on tree nodes. When a breakpoint is hit,
+    execution pauses and waits for resume.
+
+    Examples:
+        vlt bt breakpoint oracle-agent --list
+        vlt bt breakpoint oracle-agent llm-call
+        vlt bt breakpoint oracle-agent llm-call --condition "tokens > 1000"
+        vlt bt breakpoint oracle-agent llm-call --remove
+        vlt bt breakpoint oracle-agent --clear
+    """
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    try:
+        with _get_bt_client() as client:
+            if list_all:
+                response = client.get(f"/api/bt/debug/tree/{tree_id}/breakpoint")
+                response.raise_for_status()
+                data = response.json()
+
+                breakpoints = data.get("breakpoints", [])
+                if not breakpoints:
+                    console.print("[dim]No breakpoints set.[/dim]")
+                    return
+
+                table = Table(title=f"Breakpoints: {tree_id}")
+                table.add_column("Node", style="cyan")
+                table.add_column("Condition", style="yellow")
+                table.add_column("Enabled", style="green")
+                table.add_column("Hit Count", justify="right")
+
+                for bp in breakpoints:
+                    table.add_row(
+                        bp.get("node_id", "?"),
+                        bp.get("condition", "-") or "-",
+                        "✓" if bp.get("enabled", True) else "✗",
+                        str(bp.get("hit_count", 0)),
+                    )
+
+                console.print(table)
+
+            elif clear:
+                response = client.delete(f"/api/bt/debug/tree/{tree_id}/breakpoint/all")
+                response.raise_for_status()
+                console.print("[green]All breakpoints cleared.[/green]")
+
+            elif remove and node_id:
+                response = client.delete(
+                    f"/api/bt/debug/tree/{tree_id}/breakpoint",
+                    params={"node_id": node_id}
+                )
+                response.raise_for_status()
+                console.print(f"[green]Breakpoint removed from '{node_id}'.[/green]")
+
+            elif node_id:
+                response = client.post(
+                    f"/api/bt/debug/tree/{tree_id}/breakpoint",
+                    json={"node_id": node_id, "condition": condition, "enabled": True}
+                )
+                response.raise_for_status()
+                if condition:
+                    console.print(f"[green]Conditional breakpoint set on '{node_id}'.[/green]")
+                else:
+                    console.print(f"[green]Breakpoint set on '{node_id}'.[/green]")
+            else:
+                console.print("[yellow]Specify --list, --clear, or a node ID.[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,15 @@
+[rule]
+id = "vault-cleanup-hint"
+name = "Vault Cleanup Hint"
+description = "Suggest organizing vault when many notes accessed"
+trigger = "on_session_end"
+priority = 30
+core = false
+
+[condition]
+expression = "context.state.get('vault_op_count', 0) > 15"
+
+[action]
+type = "log"
+message = "Session accessed {{ context.state.get('vault_op_count', 0) }} vault items. Consider organizing or tagging notes for better discoverability."
+level = "info"

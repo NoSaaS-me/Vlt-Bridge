@@ -29,7 +29,8 @@ class UserSettingsService:
 
         Returns:
             ModelSettings object (returns defaults if not found)
-            Note: openrouter_api_key is NOT returned for security, only openrouter_api_key_set flag
+            Note: openrouter_api_key and tavily_api_key are NOT returned for security,
+                  only openrouter_api_key_set and tavily_api_key_set flags
         """
         conn = self.db.connect()
         try:
@@ -37,7 +38,8 @@ class UserSettingsService:
                 """
                 SELECT oracle_model, oracle_provider, subagent_model,
                        subagent_provider, thinking_enabled, chat_center_mode,
-                       librarian_timeout, max_context_nodes, openrouter_api_key
+                       librarian_timeout, max_context_nodes, openrouter_api_key,
+                       search_provider, tavily_api_key
                 FROM user_settings
                 WHERE user_id = ?
                 """,
@@ -46,9 +48,15 @@ class UserSettingsService:
             row = cursor.fetchone()
 
             if row:
-                # Check if API key is set (but don't return the actual key)
+                # Check if API keys are set (but don't return the actual keys)
                 api_key = row["openrouter_api_key"]
                 has_api_key = api_key is not None and len(api_key) > 0
+
+                tavily_key = row["tavily_api_key"] if "tavily_api_key" in row.keys() else None
+                has_tavily_key = tavily_key is not None and len(tavily_key) > 0
+
+                # Handle search_provider - may be None for legacy rows
+                search_provider = row["search_provider"] if "search_provider" in row.keys() and row["search_provider"] else "none"
 
                 # Handle librarian_timeout - may be None for legacy rows
                 librarian_timeout = row["librarian_timeout"] if row["librarian_timeout"] is not None else 1200
@@ -66,7 +74,10 @@ class UserSettingsService:
                     librarian_timeout=librarian_timeout,
                     max_context_nodes=max_context_nodes,
                     openrouter_api_key=None,  # Never return the actual key
-                    openrouter_api_key_set=has_api_key
+                    openrouter_api_key_set=has_api_key,
+                    search_provider=search_provider,
+                    tavily_api_key=None,  # Never return the actual key
+                    tavily_api_key_set=has_tavily_key
                 )
             else:
                 # Return defaults for new users
@@ -105,6 +116,45 @@ class UserSettingsService:
         finally:
             conn.close()
 
+    def get_tavily_api_key(self, user_id: str) -> Optional[str]:
+        """
+        Get user's Tavily API key (for internal use only).
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            The API key or None if not set
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT tavily_api_key FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row and "tavily_api_key" in row.keys() and row["tavily_api_key"]:
+                return row["tavily_api_key"]
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get Tavily API key for user {user_id}: {e}")
+            return None
+        finally:
+            conn.close()
+
+    def get_search_provider(self, user_id: str) -> str:
+        """
+        Get user's preferred search provider.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Search provider string ('tavily', 'openrouter', or 'none')
+        """
+        settings = self.get_settings(user_id)
+        return settings.search_provider
+
     def get_oracle_model(self, user_id: str) -> str:
         """
         Get user's preferred Oracle model.
@@ -135,7 +185,7 @@ class UserSettingsService:
             Model identifier string (e.g., "deepseek/deepseek-chat")
         """
         settings = self.get_settings(user_id)
-        return settings.subagent_model or "deepseek/deepseek-chat"
+        return settings.subagent_model or "deepseek/deepseek-chat-v3"
 
     def get_subagent_provider(self, user_id: str) -> "ModelProvider":
         """
@@ -326,7 +376,9 @@ class UserSettingsService:
         chat_center_mode: Optional[bool] = None,
         librarian_timeout: Optional[int] = None,
         max_context_nodes: Optional[int] = None,
-        openrouter_api_key: Optional[str] = None
+        openrouter_api_key: Optional[str] = None,
+        search_provider: Optional[str] = None,
+        tavily_api_key: Optional[str] = None
     ) -> ModelSettings:
         """
         Update user's model settings.
@@ -342,6 +394,8 @@ class UserSettingsService:
             librarian_timeout: Timeout in seconds for Librarian operations (optional, 60-3600)
             max_context_nodes: Max nodes per context tree (optional, 5-100)
             openrouter_api_key: OpenRouter API key (optional, empty string to clear)
+            search_provider: Search provider ('tavily', 'openrouter', 'none') (optional)
+            tavily_api_key: Tavily API key (optional, empty string to clear)
 
         Returns:
             Updated ModelSettings object
@@ -351,10 +405,11 @@ class UserSettingsService:
             # Get current settings
             current = self.get_settings(user_id)
 
-            # Get current API key (not returned by get_settings for security)
+            # Get current API keys (not returned by get_settings for security)
             current_api_key = self.get_openrouter_api_key(user_id)
+            current_tavily_key = self.get_tavily_api_key(user_id)
 
-            # Determine new API key value
+            # Determine new OpenRouter API key value
             # None = don't change, "" = clear, otherwise = set new key
             if openrouter_api_key is None:
                 new_api_key = current_api_key
@@ -362,6 +417,17 @@ class UserSettingsService:
                 new_api_key = None  # Clear the key
             else:
                 new_api_key = openrouter_api_key
+
+            # Determine new Tavily API key value
+            if tavily_api_key is None:
+                new_tavily_key = current_tavily_key
+            elif tavily_api_key == "":
+                new_tavily_key = None  # Clear the key
+            else:
+                new_tavily_key = tavily_api_key
+
+            # Determine new search provider value
+            new_search_provider = search_provider if search_provider is not None else current.search_provider
 
             # Clamp librarian_timeout to valid range if provided
             new_librarian_timeout = current.librarian_timeout
@@ -384,7 +450,10 @@ class UserSettingsService:
                 librarian_timeout=new_librarian_timeout,
                 max_context_nodes=new_max_context_nodes,
                 openrouter_api_key=None,  # Never return the key
-                openrouter_api_key_set=new_api_key is not None and len(new_api_key) > 0
+                openrouter_api_key_set=new_api_key is not None and len(new_api_key) > 0,
+                search_provider=new_search_provider,
+                tavily_api_key=None,  # Never return the key
+                tavily_api_key_set=new_tavily_key is not None and len(new_tavily_key) > 0
             )
 
             now = datetime.now(timezone.utc).isoformat()
@@ -397,8 +466,9 @@ class UserSettingsService:
                         user_id, oracle_model, oracle_provider,
                         subagent_model, subagent_provider, thinking_enabled,
                         chat_center_mode, librarian_timeout, max_context_nodes,
-                        openrouter_api_key, created, updated
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        openrouter_api_key, search_provider, tavily_api_key,
+                        created, updated
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(user_id) DO UPDATE SET
                         oracle_model = excluded.oracle_model,
                         oracle_provider = excluded.oracle_provider,
@@ -409,6 +479,8 @@ class UserSettingsService:
                         librarian_timeout = excluded.librarian_timeout,
                         max_context_nodes = excluded.max_context_nodes,
                         openrouter_api_key = excluded.openrouter_api_key,
+                        search_provider = excluded.search_provider,
+                        tavily_api_key = excluded.tavily_api_key,
                         updated = excluded.updated
                     """,
                     (
@@ -422,6 +494,8 @@ class UserSettingsService:
                         updated.librarian_timeout,
                         updated.max_context_nodes,
                         new_api_key,
+                        new_search_provider,
+                        new_tavily_key,
                         now,
                         now
                     )
@@ -710,6 +784,88 @@ class UserSettingsService:
                         pass
         except Exception as e:
             logger.error(f"Failed to clear plugin settings for user {user_id}, plugin {plugin_id}: {e}")
+            raise
+        finally:
+            conn.close()
+
+
+    def get_oracle_mcp_enabled(self, user_id: str) -> bool:
+        """
+        Get whether oracle MCP tools are enabled for this user.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            True if oracle MCP is enabled (default), False if disabled
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT oracle_mcp_enabled FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row and "oracle_mcp_enabled" in row.keys():
+                return bool(row["oracle_mcp_enabled"])
+            return True  # default: enabled
+        except Exception as e:
+            logger.error(f"Failed to get oracle_mcp_enabled for user {user_id}: {e}")
+            return True  # default on error
+        finally:
+            conn.close()
+
+    def set_oracle_mcp_enabled(self, user_id: str, enabled: bool) -> None:
+        """
+        Set whether oracle MCP tools are enabled for this user.
+
+        Args:
+            user_id: User identifier
+            enabled: True to enable, False to disable
+        """
+        conn = self.db.connect()
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            with conn:
+                cursor = conn.execute(
+                    "SELECT user_id FROM user_settings WHERE user_id = ?",
+                    (user_id,)
+                )
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    conn.execute(
+                        "UPDATE user_settings SET oracle_mcp_enabled = ?, updated = ? WHERE user_id = ?",
+                        (int(enabled), now, user_id)
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO user_settings (
+                            user_id, oracle_model, oracle_provider,
+                            subagent_model, subagent_provider, thinking_enabled,
+                            chat_center_mode, librarian_timeout, max_context_nodes,
+                            oracle_mcp_enabled, created, updated
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            "gemini-2.0-flash-exp",
+                            "google",
+                            "gemini-2.0-flash-exp",
+                            "google",
+                            0,
+                            0,
+                            1200,
+                            30,
+                            int(enabled),
+                            now,
+                            now,
+                        )
+                    )
+            logger.info(f"Set oracle_mcp_enabled={enabled} for user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to set oracle_mcp_enabled for user {user_id}: {e}")
             raise
         finally:
             conn.close()

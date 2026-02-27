@@ -1,4 +1,4 @@
-"""Authentication helpers (JWT + HF OAuth placeholder)."""
+"""Authentication helpers for JWT token management."""
 
 from __future__ import annotations
 
@@ -214,10 +214,5 @@ class AuthService:
         )
         expires_at = datetime.fromtimestamp(payload.exp, tz=timezone.utc)
         return token, expires_at
-
-    def exchange_hf_oauth_code(self, code: str) -> Dict[str, Any]:
-        """Placeholder for Hugging Face OAuth code exchange."""
-        raise NotImplementedError("HF OAuth integration not implemented yet")
-
 
 __all__ = ["AuthService", "AuthError", "TokenValidator", "StaticTokenValidator", "JWTValidator"]

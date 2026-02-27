@@ -1,0 +1,199 @@
+openapi: "3.1.0"
+info:
+  title: Oracle API
+  version: "2.0.0"
+  description: |
+    RLM Oracle API. The REST endpoints and SSE contract are UNCHANGED from the
+    BT Oracle implementation (FR-019). This document records the existing
+    interface as a stability contract — callers see no difference.
+
+paths:
+  /api/oracle:
+    post:
+      summary: Query oracle (non-streaming)
+      description: Runs a complete RLM session and returns when Final is set.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OracleRequest"
+      responses:
+        "200":
+          description: Oracle response with answer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OracleResponse"
+        "401":
+          description: Missing or invalid authentication
+        "503":
+          description: Oracle not enabled (oracle toggle off)
+      security:
+        - bearerAuth: []
+
+  /api/oracle/stream:
+    post:
+      summary: Query oracle (SSE streaming)
+      description: |
+        Runs RLM session with streaming output. Progress events emitted as REPL
+        stdout is produced. Final answer streams token-by-token after Final is set.
+        SSE event types: "progress" (REPL stdout), "content" (Final tokens), "done".
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OracleRequest"
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                description: |
+                  Each event is JSON-encoded OracleStreamChunk.
+                  Types: "progress" | "content" | "error" | "done" | "system"
+        "401":
+          description: Missing or invalid authentication
+      security:
+        - bearerAuth: []
+
+  /api/oracle/history:
+    get:
+      summary: Get conversation history for a context_id
+      parameters:
+        - name: context_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationHistoryResponse"
+      security:
+        - bearerAuth: []
+
+  /api/oracle/clear_history:
+    post:
+      summary: Clear conversation history
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                context_id:
+                  type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+      security:
+        - bearerAuth: []
+
+  /api/oracle/cancel:
+    post:
+      summary: Cancel an active oracle session
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cancelled:
+                    type: boolean
+      security:
+        - bearerAuth: []
+
+components:
+  schemas:
+    OracleRequest:
+      type: object
+      required:
+        - question
+      properties:
+        question:
+          type: string
+          description: The user's question
+        context_id:
+          type: string
+          nullable: true
+          description: Conversation thread ID for multi-turn context
+        project_id:
+          type: string
+          nullable: true
+          description: Vlt project to scope the oracle to
+        model:
+          type: string
+          nullable: true
+          description: Override the default LLM model
+
+    OracleResponse:
+      type: object
+      properties:
+        answer:
+          type: string
+        context_id:
+          type: string
+        sources_used:
+          type: array
+          items:
+            type: string
+
+    OracleStreamChunk:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [progress, content, error, done, system]
+          description: |
+            progress — REPL stdout (streaming as produced)
+            content  — Final value tokens (streaming token-by-token)
+            error    — Error message
+            done     — Session complete, includes metadata
+            system   — ANS notification
+        content:
+          type: string
+          nullable: true
+        context_id:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          nullable: true
+          description: Present on "done" events; includes iteration_count, duration_ms
+
+    ConversationHistoryResponse:
+      type: object
+      properties:
+        context_id:
+          type: string
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              content:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

@@ -27,8 +27,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..models.project import DEFAULT_PROJECT_ID
+from ..models.research import ResearchDepth, ResearchRequest
 from ..models.thread import ThreadEntry
 from .database import DatabaseService
+from .github_service import GitHubService, get_github_service, GitHubError, GitHubNotFoundError
+from .research import ResearchOrchestrator, create_research_orchestrator
 from .indexer import IndexerService
 from .librarian_service import LibrarianService, get_librarian_service
 from .oracle_bridge import OracleBridge
@@ -90,6 +93,11 @@ class ToolExecutor:
         "delegate_librarian": 1200.0,  # 20 minutes for large summarizations and web research
         # Self-notification - fast local operation
         "notify_self": 5.0,
+        # GitHub operations - network latency dependent
+        "github_read": 30.0,
+        "github_search": 45.0,  # Search can be slower
+        # Deep research - can take significant time for thorough research
+        "deep_research": 1800.0,  # 30 minutes for thorough research
     }
 
     def __init__(
@@ -101,6 +109,7 @@ class ToolExecutor:
         db_service: Optional[DatabaseService] = None,
         user_settings_service: Optional[UserSettingsService] = None,
         librarian_service: Optional[LibrarianService] = None,
+        github_service: Optional[GitHubService] = None,
         default_timeout: Optional[float] = None,
     ) -> None:
         """
@@ -114,6 +123,7 @@ class ToolExecutor:
             db_service: DatabaseService instance for indexer (created if None)
             user_settings_service: UserSettingsService for accessing user model preferences
             librarian_service: LibrarianService for subagent summarization
+            github_service: GitHubService for GitHub repository access
             default_timeout: Override the default timeout for all tools (seconds).
                 Individual tool timeouts from TOOL_TIMEOUTS still apply unless
                 overridden at call time. If None, uses DEFAULT_TIMEOUT (30s).
@@ -125,6 +135,7 @@ class ToolExecutor:
         self.oracle_bridge = oracle_bridge or OracleBridge()
         self.user_settings = user_settings_service or get_user_settings_service()
         self.librarian = librarian_service or get_librarian_service()
+        self.github = github_service or get_github_service()
 
         # Instance-level default timeout (can override class default)
         self._default_timeout = default_timeout if default_timeout is not None else self.DEFAULT_TIMEOUT
@@ -154,6 +165,11 @@ class ToolExecutor:
             # Meta tools
             "delegate_librarian": self._delegate_librarian,
             "notify_self": self._notify_self,
+            # GitHub tools
+            "github_read": self._github_read,
+            "github_search": self._github_search,
+            # Research tools
+            "deep_research": self._deep_research,
         }
 
         # Cache for tool schemas
@@ -1334,26 +1350,27 @@ class ToolExecutor:
         Returns:
             List of search results or dict with error
         """
+        # Try new ddgs package first, fall back to legacy duckduckgo_search
+        DDGS = None
         try:
-            from duckduckgo_search import DDGS
-            from duckduckgo_search.exceptions import DuckDuckGoSearchException
+            from ddgs import DDGS
         except ImportError:
-            return {"error": "duckduckgo-search package not installed"}
+            try:
+                from duckduckgo_search import DDGS
+            except ImportError:
+                return {"error": "ddgs package not installed. Run: uv add ddgs"}
 
         try:
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=limit))
             return results
-        except DuckDuckGoSearchException as e:
+        except Exception as e:
             error_msg = str(e)
             if "ratelimit" in error_msg.lower():
                 logger.warning(f"DuckDuckGo rate limit hit: {e}")
                 return {"error": "Search rate limited. Please try again in a few seconds."}
             logger.error(f"DuckDuckGo search error: {e}")
             return {"error": f"Search failed: {error_msg}"}
-        except Exception as e:
-            logger.error(f"DuckDuckGo search error: {e}")
-            return {"error": f"Search failed: {str(e)}"}
 
     async def _web_fetch(
         self,
@@ -2099,6 +2116,413 @@ class ToolExecutor:
             "persistence_id": persistence_id,
             "message": f"Notification scheduled for delivery at {deliver_at}",
         }
+
+    # =========================================================================
+    # GitHub Tool Implementations
+    # =========================================================================
+
+    async def _github_read(
+        self,
+        user_id: str,
+        repo: str,
+        path: str,
+        branch: str = "main",
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Read a file from a GitHub repository.
+
+        Attempts to use the GitHub API with authentication if available.
+        Falls back to raw URL fetching for public repositories when:
+        - No GitHub token is configured
+        - Token is invalid or expired
+        - API rate limit is exceeded
+
+        Args:
+            user_id: User ID for token lookup
+            repo: Repository in "owner/repo" format (e.g., "facebook/react")
+            path: Path to file within repository (e.g., "src/index.js")
+            branch: Branch, tag, or commit SHA (default: "main")
+            **kwargs: Additional arguments (ignored)
+
+        Returns:
+            Dict with:
+                - content: File content as string
+                - path: Full path within repo
+                - repo: Repository name
+                - branch: Branch/ref used
+                - size: File size in bytes (if available)
+                - sha: Git SHA (if available from API)
+                - from_cache: Whether content came from cache
+                - source: "api", "raw", or "cache"
+
+        Raises:
+            GitHubNotFoundError: File does not exist
+            GitHubError: Other GitHub API errors
+        """
+        logger.info(
+            f"GitHub read: repo={repo}, path={path}, branch={branch}",
+            extra={"user_id": user_id},
+        )
+
+        try:
+            result = await self.github.read_file(
+                user_id=user_id,
+                repo=repo,
+                path=path,
+                branch=branch,
+            )
+
+            # Add helpful metadata for the agent
+            result["success"] = True
+
+            logger.info(
+                f"GitHub read success: {repo}/{path}@{branch}, "
+                f"size={result.get('size', 'unknown')}, source={result.get('source')}",
+                extra={"user_id": user_id},
+            )
+
+            return result
+
+        except GitHubNotFoundError as e:
+            logger.warning(f"GitHub file not found: {repo}/{path}@{branch}")
+            return {
+                "error": str(e),
+                "error_type": "not_found",
+                "repo": repo,
+                "path": path,
+                "branch": branch,
+                "suggestion": (
+                    "The file was not found. Check: (1) the repository name is correct, "
+                    "(2) the file path exists, (3) the branch/ref is valid. "
+                    "For private repos, ensure GitHub is connected in settings."
+                ),
+            }
+        except GitHubError as e:
+            logger.warning(f"GitHub read error: {e}")
+            return {
+                "error": str(e),
+                "error_type": "github_error",
+                "repo": repo,
+                "path": path,
+                "branch": branch,
+                "suggestion": (
+                    "GitHub API error. This could be due to: "
+                    "(1) rate limiting - try again later, "
+                    "(2) authentication issues - reconnect GitHub in settings, "
+                    "(3) repository access - ensure you have permission."
+                ),
+            }
+        except Exception as e:
+            logger.exception(f"Unexpected error in github_read: {e}")
+            return {
+                "error": f"Failed to read file: {str(e)}",
+                "error_type": "unknown",
+                "repo": repo,
+                "path": path,
+                "branch": branch,
+            }
+
+    async def _github_search(
+        self,
+        user_id: str,
+        query: str,
+        repo: Optional[str] = None,
+        language: Optional[str] = None,
+        limit: int = 10,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Search code across GitHub repositories.
+
+        Uses GitHub's code search API. Requires authentication for best results.
+        Without auth, search is limited and may fail for private repos.
+
+        Args:
+            user_id: User ID for token lookup
+            query: Search query (supports GitHub search syntax)
+            repo: Limit search to specific repository (owner/repo format)
+            language: Filter by programming language (e.g., "python", "typescript")
+            limit: Maximum results to return (default: 10, max: 100)
+            **kwargs: Additional arguments (ignored)
+
+        Returns:
+            Dict with:
+                - query: Full query string used
+                - total_count: Total matches found (may be estimated)
+                - results: List of matching code locations
+                - incomplete: Whether results may be incomplete
+
+        Note:
+            Results include file paths and URLs but NOT file content.
+            Use github_read to fetch the actual content of interesting files.
+        """
+        logger.info(
+            f"GitHub search: query='{query[:50]}...', repo={repo}, language={language}",
+            extra={"user_id": user_id},
+        )
+
+        try:
+            result = await self.github.search_code(
+                user_id=user_id,
+                query=query,
+                repo=repo,
+                language=language,
+                limit=limit,
+            )
+
+            logger.info(
+                f"GitHub search success: found {result.get('total_count', 0)} results",
+                extra={"user_id": user_id},
+            )
+
+            return result
+
+        except GitHubError as e:
+            logger.warning(f"GitHub search error: {e}")
+
+            # Check if this is an auth issue
+            github_connected = self.github.get_github_username(user_id) is not None
+
+            if not github_connected:
+                return {
+                    "error": str(e),
+                    "error_type": "auth_required",
+                    "query": query,
+                    "suggestion": (
+                        "GitHub code search works best with authentication. "
+                        "Connect your GitHub account in Settings to enable full search capabilities."
+                    ),
+                }
+
+            return {
+                "error": str(e),
+                "error_type": "github_error",
+                "query": query,
+                "suggestion": (
+                    "GitHub search failed. This could be due to: "
+                    "(1) rate limiting - try again later, "
+                    "(2) invalid search syntax - simplify the query."
+                ),
+            }
+        except Exception as e:
+            logger.exception(f"Unexpected error in github_search: {e}")
+            return {
+                "error": f"Search failed: {str(e)}",
+                "error_type": "unknown",
+                "query": query,
+            }
+
+    # =========================================================================
+    # Research Tool Implementations
+    # =========================================================================
+
+    async def _deep_research(
+        self,
+        user_id: str,
+        query: str,
+        depth: str = "standard",
+        save_to_vault: bool = True,
+        output_folder: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Trigger deep research on a topic using the research orchestrator.
+
+        This tool initiates comprehensive web research that:
+        1. Generates a research brief from the query
+        2. Plans subtopics and spawns parallel researchers
+        3. Aggregates and synthesizes findings from multiple sources
+        4. Generates a final report with citations
+        5. Optionally saves the report to the vault
+
+        Args:
+            user_id: User ID for vault access and settings
+            query: Research topic or question to investigate
+            depth: Research depth - "quick" (2-3 sources), "standard" (5-8 sources),
+                   or "thorough" (10+ sources)
+            save_to_vault: Whether to save the final report to the vault
+            output_folder: Custom folder name within vault/research/ for output
+            **kwargs: Additional arguments (project_id, etc.)
+
+        Returns:
+            Dict with:
+                - research_id: Unique identifier for the research
+                - status: Final status ("completed" or "failed")
+                - report_path: Path to saved report (if save_to_vault=True)
+                - executive_summary: Brief summary of findings
+                - sources_count: Number of sources consulted
+                - error: Error message if failed
+        """
+        import os
+
+        logger.info(
+            f"Starting deep research: query='{query[:100]}...', depth={depth}, "
+            f"save_to_vault={save_to_vault}, output_folder={output_folder}",
+            extra={"user_id": user_id},
+        )
+
+        # Validate and convert depth
+        try:
+            research_depth = ResearchDepth(depth.lower())
+        except ValueError:
+            valid_depths = [d.value for d in ResearchDepth]
+            return {
+                "error": f"Invalid depth '{depth}'. Must be one of: {valid_depths}",
+                "error_type": "validation_error",
+                "query": query,
+            }
+
+        # Get vault path for the user
+        vault_base = os.environ.get("VAULT_BASE_DIR", "./data/vaults")
+        project_id = kwargs.get("project_id", DEFAULT_PROJECT_ID)
+        vault_path = os.path.join(vault_base, user_id, project_id) if save_to_vault else None
+
+        # Get user's search settings
+        from .user_settings import UserSettingsService
+        user_settings = UserSettingsService()
+        search_provider = user_settings.get_search_provider(user_id)
+        tavily_api_key = user_settings.get_tavily_api_key(user_id)
+        openrouter_api_key = user_settings.get_openrouter_api_key(user_id)
+
+        # Validate search provider is configured
+        if search_provider == "none":
+            return {
+                "error": "No search provider configured",
+                "error_type": "configuration_error",
+                "query": query,
+                "suggestion": (
+                    "Deep research requires a search provider. "
+                    "Go to Settings > Models and configure either Tavily or OpenRouter as your search provider."
+                ),
+            }
+        elif search_provider == "tavily" and not tavily_api_key:
+            return {
+                "error": "Tavily API key not configured",
+                "error_type": "configuration_error",
+                "query": query,
+                "suggestion": (
+                    "You've selected Tavily as your search provider but haven't set an API key. "
+                    "Go to Settings > Models and enter your Tavily API key, or switch to OpenRouter."
+                ),
+            }
+        elif search_provider == "openrouter" and not openrouter_api_key:
+            return {
+                "error": "OpenRouter API key not configured",
+                "error_type": "configuration_error",
+                "query": query,
+                "suggestion": (
+                    "You've selected OpenRouter as your search provider but haven't set an API key. "
+                    "Go to Settings > Models and enter your OpenRouter API key."
+                ),
+            }
+
+        # Create the research request
+        request = ResearchRequest(
+            query=query,
+            depth=research_depth,
+            save_to_vault=save_to_vault,
+            output_folder=output_folder,
+        )
+
+        # Create the orchestrator with search configuration
+        orchestrator = create_research_orchestrator(
+            user_id=user_id,
+            vault_path=vault_path,
+            search_provider=search_provider,
+            tavily_api_key=tavily_api_key,
+            openrouter_api_key=openrouter_api_key,
+        )
+
+        try:
+            # Run research and get full state with report
+            state = await orchestrator.run_research(request)
+
+            research_id = state.research_id
+            final_status = state.status.value
+            sources_count = len(state.all_sources)
+
+            # Build the result with FULL REPORT CONTENT
+            result: Dict[str, Any] = {
+                "research_id": research_id,
+                "status": final_status,
+                "query": query,
+                "depth": depth,
+                "sources_count": sources_count,
+                "success": final_status == "completed",
+            }
+
+            # Include the full report content so agent doesn't need vault reads
+            if state.report:
+                result["report"] = {
+                    "title": state.report.title,
+                    "executive_summary": state.report.executive_summary,
+                    "sections": state.report.sections,
+                    "recommendations": state.report.recommendations,
+                    "limitations": state.report.limitations,
+                    "quality_metrics": {
+                        "comprehensiveness": state.report.comprehensiveness,
+                        "analytical_depth": state.report.analytical_depth,
+                        "source_diversity": state.report.source_diversity,
+                        "citation_density": state.report.citation_density,
+                    },
+                }
+
+                # Include sources with their content
+                result["sources"] = [
+                    {
+                        "id": s.id,
+                        "url": s.url,
+                        "title": s.title,
+                        "content_summary": s.content_summary,
+                        "relevance_score": s.relevance_score,
+                        "key_quotes": s.key_quotes,
+                    }
+                    for s in state.all_sources[:20]  # Limit to top 20 sources
+                ]
+
+                # Include key findings
+                result["key_findings"] = [
+                    {
+                        "claim": f.claim,
+                        "source_ids": f.source_ids,
+                        "confidence": f.confidence,
+                    }
+                    for f in state.compressed_findings[:15]  # Limit to top 15 findings
+                ]
+
+            # Add vault path if saved (for reference, not primary delivery)
+            if save_to_vault and state.vault_folder:
+                result["vault_path"] = state.vault_folder
+                result["message"] = "Research completed. Full report included below. Also saved to vault for future reference."
+            elif final_status == "completed":
+                result["message"] = "Research completed. Full report included below."
+            else:
+                result["message"] = f"Research ended with status: {final_status}"
+
+            logger.info(
+                f"Deep research completed: research_id={research_id}, status={final_status}, "
+                f"sources={sources_count}",
+                extra={"user_id": user_id},
+            )
+
+            return result
+
+        except Exception as e:
+            logger.exception(f"Deep research failed: {e}")
+            return {
+                "error": f"Research failed: {str(e)}",
+                "error_type": "research_error",
+                "query": query,
+                "depth": depth,
+                "success": False,
+                "suggestion": (
+                    "The research operation encountered an error. This could be due to: "
+                    "(1) network issues with search services, "
+                    "(2) LLM API errors, "
+                    "(3) rate limiting. Consider retrying with a simpler query or lower depth."
+                ),
+            }
 
 
 # Singleton instance for dependency injection

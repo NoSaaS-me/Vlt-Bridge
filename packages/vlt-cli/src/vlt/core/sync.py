@@ -52,7 +52,6 @@ class SummarizeResult(BaseModel):
 class ThreadSyncClient:
     """Client for syncing threads to Document-MCP backend."""
 
-    QUEUE_FILE = Path.home() / ".vlt" / "sync_queue.json"
     MAX_RETRIES = 3
 
     def __init__(self, vault_url: Optional[str] = None, sync_token: Optional[str] = None):
@@ -66,6 +65,12 @@ class ThreadSyncClient:
         if not self.sync_token:
             from ..config import settings
             self.sync_token = settings.sync_token
+
+    @property
+    def queue_file(self) -> Path:
+        """Get the profile-aware sync queue file path."""
+        from ..profile import get_active_profile_dir
+        return get_active_profile_dir() / "sync_queue.json"
 
     async def sync_entries(
         self,
@@ -283,11 +288,11 @@ class ThreadSyncClient:
 
     def _load_queue(self) -> List[SyncQueueItem]:
         """Load sync queue from file."""
-        if not self.QUEUE_FILE.exists():
+        if not self.queue_file.exists():
             return []
 
         try:
-            with open(self.QUEUE_FILE, "r") as f:
+            with open(self.queue_file, "r") as f:
                 data = json.load(f)
                 return [SyncQueueItem(**item) for item in data]
         except Exception as e:
@@ -296,9 +301,9 @@ class ThreadSyncClient:
 
     def _save_queue(self, queue: List[SyncQueueItem]) -> None:
         """Save sync queue to file."""
-        self.QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self.queue_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(self.QUEUE_FILE, "w") as f:
+        with open(self.queue_file, "w") as f:
             json.dump([item.model_dump() for item in queue], f, indent=2)
 
     def queue_entry(

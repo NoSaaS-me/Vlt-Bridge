@@ -1,0 +1,15 @@
+[rule]
+id = "session-stats-logger"
+name = "Session Stats Logger"
+description = "Log session statistics when session closes"
+trigger = "on_session_end"
+priority = 10
+core = false
+
+[condition]
+expression = "true"
+
+[action]
+type = "log"
+message = "Session ended: {{ context.turn.number }} turns, {{ context.history.tool_count }} tool calls"
+level = "info"

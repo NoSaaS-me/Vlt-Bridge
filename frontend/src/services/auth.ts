@@ -1,5 +1,5 @@
 /**
- * T105-T107: Authentication service for HF OAuth and token management
+ * Authentication service for GitHub OAuth and token management
  */
 import type { User } from '@/types/user';
 import type { TokenResponse } from '@/types/auth';
@@ -40,7 +40,7 @@ function clearStoredAuthToken(): void {
 }
 
 /**
- * T105: Redirect to HF OAuth login
+ * Redirect to GitHub OAuth login
  */
 export function login(): void {
   window.location.href = '/auth/login';
@@ -55,7 +55,7 @@ export function logout(): void {
 }
 
 /**
- * T106: Get current authenticated user
+ * Get current authenticated user
  */
 export async function getCurrentUser(): Promise<User> {
   const token = localStorage.getItem(AUTH_TOKEN_KEY);
@@ -75,7 +75,7 @@ export async function getCurrentUser(): Promise<User> {
 }
 
 /**
- * T107: Generate new API token for MCP access
+ * Generate new API token for MCP access
  */
 export async function getToken(): Promise<TokenResponse> {
   const token = localStorage.getItem(AUTH_TOKEN_KEY);

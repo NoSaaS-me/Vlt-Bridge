@@ -51,16 +51,6 @@ class AppConfig(BaseModel):
         description="Directory for persisting vector index"
     )
     vault_base_path: Path = Field(..., description="Base directory for per-user vaults")
-    hf_oauth_client_id: Optional[str] = Field(
-        None, description="Hugging Face OAuth client ID (optional)"
-    )
-    hf_oauth_client_secret: Optional[str] = Field(
-        None, description="Hugging Face OAuth client secret (optional)"
-    )
-    hf_space_url: str = Field(
-        default="http://localhost:5173",
-        description="Base URL of the HF Space or local dev server"
-    )
     csp_policy: Optional[str] = Field(
         default=None,
         description=(
@@ -85,6 +75,23 @@ class AppConfig(BaseModel):
     admin_user_ids: set[str] = Field(
         default_factory=set,
         description="Set of user IDs with admin privileges (from ADMIN_USER_IDS env var)"
+    )
+    base_url: str = Field(
+        default="http://localhost:8000",
+        description="Base URL for the application (used for widget asset URLs, OAuth redirects in production)"
+    )
+
+    # BT Oracle Configuration (020-bt-oracle-agent)
+    # Note: oracle_use_bt removed - BT is now the only implementation
+    oracle_prompt_budget: int = Field(
+        default=8000,
+        ge=1000,
+        le=100000,
+        description=(
+            "Token budget for composed Oracle system prompt (ORACLE_PROMPT_BUDGET).\n"
+            "This excludes tool schemas. The prompt composer will truncate or\n"
+            "omit segments to stay within this budget. Default: 8000 tokens."
+        )
     )
 
     @field_validator("vault_base_path", mode="before")
@@ -122,9 +129,6 @@ def get_config() -> AppConfig:
     """Load and cache application configuration."""
     jwt_secret = _read_env("JWT_SECRET_KEY")
     vault_base = _read_env("VAULT_BASE_PATH", str(DEFAULT_VAULT_BASE))
-    hf_client_id = _read_env("HF_OAUTH_CLIENT_ID")
-    hf_client_secret = _read_env("HF_OAUTH_CLIENT_SECRET")
-    hf_space_url = _read_env("HF_SPACE_URL", "http://localhost:5173")
     enable_local_mode = _read_env("ENABLE_LOCAL_MODE", "true").lower() not in {
         "0",
         "false",
@@ -144,6 +148,16 @@ def get_config() -> AppConfig:
     admin_user_ids_str = _read_env("ADMIN_USER_IDS", "")
     admin_user_ids = {uid.strip() for uid in admin_user_ids_str.split(",") if uid.strip()} if admin_user_ids_str else set()
 
+    # Base URL for application (for widget URLs, etc.)
+    base_url = _read_env("BASE_URL", "http://localhost:8000")
+
+    # BT Oracle configuration (020-bt-oracle-agent)
+    oracle_prompt_budget_str = _read_env("ORACLE_PROMPT_BUDGET", "8000")
+    try:
+        oracle_prompt_budget = int(oracle_prompt_budget_str)
+    except ValueError:
+        oracle_prompt_budget = 8000
+
     config = AppConfig(
         jwt_secret_key=jwt_secret,
         enable_local_mode=enable_local_mode,
@@ -154,13 +168,13 @@ def get_config() -> AppConfig:
         google_api_key=google_api_key,
         llamaindex_persist_dir=llamaindex_persist_dir,
         vault_base_path=vault_base,
-        hf_oauth_client_id=hf_client_id,
-        hf_oauth_client_secret=hf_client_secret,
-        hf_space_url=hf_space_url,
         csp_policy=csp_policy,
         enable_hsts=enable_hsts,
         frame_options=frame_options,
         admin_user_ids=admin_user_ids,
+        base_url=base_url,
+        # BT Oracle (020-bt-oracle-agent)
+        oracle_prompt_budget=oracle_prompt_budget,
     )
     # Ensure vault base directory and index persist directory exist for downstream services.
     config.vault_base_path.mkdir(parents=True, exist_ok=True)
@@ -174,4 +188,124 @@ def reload_config() -> AppConfig:
     return get_config()
 
 
-__all__ = ["AppConfig", "get_config", "reload_config", "PROJECT_ROOT", "DEFAULT_VAULT_BASE"]
+# =============================================================================
+# Oracle Agent Configuration (T031 - US3: Budget and Loop Enforcement)
+# =============================================================================
+
+
+class OracleConfig(BaseModel):
+    """Oracle agent configuration loaded from environment.
+
+    Provides configurable budget limits and warning thresholds for the
+    BT-controlled Oracle agent. Per spec FR-007: Configurable max turn limits.
+
+    Environment Variables:
+        ORACLE_MAX_TURNS: Maximum agent turns per query (default: 30)
+        ORACLE_ITERATION_WARNING_THRESHOLD: Warn at this % of max turns (default: 0.70)
+        ORACLE_TOKEN_WARNING_THRESHOLD: Warn at this % of token budget (default: 0.80)
+        ORACLE_CONTEXT_WARNING_THRESHOLD: Warn at this % of context window (default: 0.70)
+        ORACLE_LOOP_THRESHOLD: Consecutive same-reason count for stuck detection (default: 3)
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    max_turns: int = Field(
+        default=30,
+        ge=1,
+        le=100,
+        description="Maximum agent turns per query (ORACLE_MAX_TURNS)"
+    )
+    iteration_warning_threshold: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description="Warn at this percentage of max turns (0.70 = 70%)"
+    )
+    token_warning_threshold: float = Field(
+        default=0.80,
+        ge=0.0,
+        le=1.0,
+        description="Warn at this percentage of token budget"
+    )
+    context_warning_threshold: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description="Warn at this percentage of context window"
+    )
+    loop_threshold: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Consecutive same-reason signals before stuck detection"
+    )
+
+
+@lru_cache(maxsize=1)
+def get_oracle_config() -> OracleConfig:
+    """Load and cache Oracle agent configuration from environment.
+
+    Returns:
+        OracleConfig instance with values from environment or defaults.
+    """
+    # Parse max_turns
+    max_turns_str = _read_env("ORACLE_MAX_TURNS", "30")
+    try:
+        max_turns = int(max_turns_str)
+    except ValueError:
+        max_turns = 30
+
+    # Parse iteration warning threshold
+    iteration_warning_str = _read_env("ORACLE_ITERATION_WARNING_THRESHOLD", "0.70")
+    try:
+        iteration_warning = float(iteration_warning_str)
+    except ValueError:
+        iteration_warning = 0.70
+
+    # Parse token warning threshold
+    token_warning_str = _read_env("ORACLE_TOKEN_WARNING_THRESHOLD", "0.80")
+    try:
+        token_warning = float(token_warning_str)
+    except ValueError:
+        token_warning = 0.80
+
+    # Parse context warning threshold
+    context_warning_str = _read_env("ORACLE_CONTEXT_WARNING_THRESHOLD", "0.70")
+    try:
+        context_warning = float(context_warning_str)
+    except ValueError:
+        context_warning = 0.70
+
+    # Parse loop threshold
+    loop_threshold_str = _read_env("ORACLE_LOOP_THRESHOLD", "3")
+    try:
+        loop_threshold = int(loop_threshold_str)
+    except ValueError:
+        loop_threshold = 3
+
+    return OracleConfig(
+        max_turns=max_turns,
+        iteration_warning_threshold=iteration_warning,
+        token_warning_threshold=token_warning,
+        context_warning_threshold=context_warning,
+        loop_threshold=loop_threshold,
+    )
+
+
+def reload_oracle_config() -> OracleConfig:
+    """Clear cached Oracle config and reload from environment.
+
+    Useful for tests that need to change configuration.
+
+    Returns:
+        Fresh OracleConfig instance.
+    """
+    get_oracle_config.cache_clear()
+    return get_oracle_config()
+
+
+__all__ = [
+    "AppConfig", "get_config", "reload_config",
+    "OracleConfig", "get_oracle_config", "reload_oracle_config",
+    "PROJECT_ROOT", "DEFAULT_VAULT_BASE"
+]

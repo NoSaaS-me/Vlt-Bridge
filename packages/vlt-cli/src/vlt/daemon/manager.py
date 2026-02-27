@@ -3,6 +3,14 @@ VLT Daemon Manager - Process lifecycle management for the daemon.
 
 Provides start/stop/status operations for the daemon process.
 The daemon runs as a background process and writes its PID to a file for management.
+
+Profile Support:
+Each profile has its own daemon with:
+- Unique port (hash-based from profile name)
+- Separate PID file (~/.vlt/profiles/{profile}/daemon.pid)
+- Separate log file (~/.vlt/profiles/{profile}/daemon.log)
+
+This allows multiple profiles to run daemons simultaneously without conflicts.
 """
 
 import logging
@@ -27,24 +35,44 @@ class DaemonManager:
     - Starting the daemon (with or without foreground mode)
     - Stopping the daemon gracefully
     - Checking daemon status
+
+    Each profile has its own daemon instance with isolated PID/log files and port.
     """
 
-    def __init__(self, port: int = 8765):
+    def __init__(
+        self,
+        port: Optional[int] = None,
+        profile_name: Optional[str] = None,
+    ):
         """
         Initialize daemon manager.
 
         Args:
-            port: Port for daemon to listen on (default: 8765)
+            port: Port for daemon to listen on. If None, uses profile-specific port.
+            profile_name: Profile to manage. If None, uses active profile.
         """
-        self.port = port
-        self.vlt_dir = Path.home() / ".vlt"
-        self.pid_file = self.vlt_dir / "daemon.pid"
-        self.log_file = self.vlt_dir / "daemon.log"
-        self.client = DaemonClient(f"http://127.0.0.1:{port}")
+        from vlt.profile import get_profile_manager
 
-    def _ensure_vlt_dir(self) -> None:
-        """Ensure ~/.vlt directory exists."""
-        self.vlt_dir.mkdir(parents=True, exist_ok=True)
+        self.profile_manager = get_profile_manager()
+        self.profile_name = profile_name or self.profile_manager.get_active_profile()
+
+        # Get profile-specific paths
+        profile_dir = self.profile_manager.get_profile_dir(self.profile_name)
+        self.pid_file = profile_dir / "daemon.pid"
+        self.log_file = profile_dir / "daemon.log"
+
+        # Get port - use provided or profile-specific
+        if port is not None:
+            self.port = port
+        else:
+            self.port = self.profile_manager.get_daemon_port(self.profile_name)
+
+        self.client = DaemonClient(f"http://127.0.0.1:{self.port}")
+
+    def _ensure_profile_dir(self) -> None:
+        """Ensure profile directory exists."""
+        profile_dir = self.profile_manager.get_profile_dir(self.profile_name)
+        profile_dir.mkdir(parents=True, exist_ok=True)
 
     def _read_pid(self) -> Optional[int]:
         """Read PID from file, returns None if not found or invalid."""
@@ -63,7 +91,7 @@ class DaemonManager:
 
     def _write_pid(self, pid: int) -> None:
         """Write PID to file."""
-        self._ensure_vlt_dir()
+        self._ensure_profile_dir()
         with open(self.pid_file, "w") as f:
             f.write(str(pid))
 
@@ -101,6 +129,7 @@ class DaemonManager:
                 "success": False,
                 "message": f"Daemon is already running on port {self.port}",
                 "pid": self._read_pid(),
+                "profile": self.profile_name,
             }
 
         # Check for stale PID file
@@ -109,7 +138,7 @@ class DaemonManager:
             logger.info(f"Removing stale PID file (process {old_pid} not running)")
             self._remove_pid()
 
-        self._ensure_vlt_dir()
+        self._ensure_profile_dir()
 
         if foreground:
             # Run in foreground (blocking)
@@ -127,24 +156,31 @@ class DaemonManager:
             self._write_pid(os.getpid())
 
             # This blocks until the server is stopped
-            run_server(host="127.0.0.1", port=self.port)
+            run_server(
+                host="127.0.0.1",
+                port=self.port,
+                profile_name=self.profile_name,
+            )
 
             return {
                 "success": True,
                 "message": "Daemon stopped",
                 "pid": None,
+                "profile": self.profile_name,
             }
         except KeyboardInterrupt:
             return {
                 "success": True,
                 "message": "Daemon stopped by user",
                 "pid": None,
+                "profile": self.profile_name,
             }
         except Exception as e:
             return {
                 "success": False,
                 "message": f"Daemon error: {e}",
                 "pid": None,
+                "profile": self.profile_name,
             }
         finally:
             self._remove_pid()
@@ -154,16 +190,20 @@ class DaemonManager:
         # Find the Python interpreter
         python_exe = sys.executable
 
-        # Build the command to run the daemon server module
+        # Build the command to run the daemon server module with profile
         cmd = [
             python_exe,
             "-m", "vlt.daemon.server",
+            "--port", str(self.port),
+            "--profile", self.profile_name,
         ]
 
         # Open log file for output
         with open(self.log_file, "a") as log:
             log.write(f"\n{'=' * 60}\n")
             log.write(f"Starting daemon at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            log.write(f"Profile: {self.profile_name}\n")
+            log.write(f"Port: {self.port}\n")
             log.write(f"Command: {' '.join(cmd)}\n")
             log.write(f"{'=' * 60}\n")
             log.flush()
@@ -183,6 +223,7 @@ class DaemonManager:
                     "success": False,
                     "message": f"Failed to start daemon: {e}",
                     "pid": None,
+                    "profile": self.profile_name,
                 }
 
         # Write PID
@@ -196,8 +237,9 @@ class DaemonManager:
         if asyncio.run(self.client.is_running()):
             return {
                 "success": True,
-                "message": f"Daemon started on port {self.port}",
+                "message": f"Daemon started on port {self.port} (profile: {self.profile_name})",
                 "pid": process.pid,
+                "profile": self.profile_name,
             }
         else:
             # Check if process is still alive
@@ -207,8 +249,9 @@ class DaemonManager:
                 if asyncio.run(self.client.is_running()):
                     return {
                         "success": True,
-                        "message": f"Daemon started on port {self.port}",
+                        "message": f"Daemon started on port {self.port} (profile: {self.profile_name})",
                         "pid": process.pid,
+                        "profile": self.profile_name,
                     }
 
             # Process failed to start properly
@@ -217,6 +260,7 @@ class DaemonManager:
                 "success": False,
                 "message": f"Daemon started but not responding. Check {self.log_file}",
                 "pid": process.pid,
+                "profile": self.profile_name,
             }
 
     def stop(self) -> Dict[str, any]:
@@ -232,6 +276,7 @@ class DaemonManager:
             return {
                 "success": False,
                 "message": "No PID file found - daemon may not be running",
+                "profile": self.profile_name,
             }
 
         if not self._is_process_running(pid):
@@ -239,6 +284,7 @@ class DaemonManager:
             return {
                 "success": True,
                 "message": "Daemon was not running (cleaned up stale PID file)",
+                "profile": self.profile_name,
             }
 
         # Try graceful shutdown with SIGTERM
@@ -249,6 +295,7 @@ class DaemonManager:
             return {
                 "success": False,
                 "message": f"Failed to send SIGTERM: {e}",
+                "profile": self.profile_name,
             }
 
         # Wait for process to exit
@@ -258,6 +305,7 @@ class DaemonManager:
                 return {
                     "success": True,
                     "message": "Daemon stopped gracefully",
+                    "profile": self.profile_name,
                 }
             time.sleep(0.1)
 
@@ -269,11 +317,13 @@ class DaemonManager:
             return {
                 "success": True,
                 "message": "Daemon force killed (SIGKILL)",
+                "profile": self.profile_name,
             }
         except OSError as e:
             return {
                 "success": False,
                 "message": f"Failed to kill daemon: {e}",
+                "profile": self.profile_name,
             }
 
     def status(self) -> Dict[str, any]:
@@ -293,6 +343,7 @@ class DaemonManager:
                 "running": True,
                 "pid": pid,
                 "port": self.port,
+                "profile": self.profile_name,
                 "uptime_seconds": daemon_status.uptime_seconds,
                 "backend_url": daemon_status.backend_url,
                 "backend_connected": daemon_status.backend_connected,
@@ -305,6 +356,7 @@ class DaemonManager:
                     "running": False,
                     "pid": pid,
                     "port": self.port,
+                    "profile": self.profile_name,
                     "message": "Process exists but not responding",
                     "error": daemon_status.error,
                 }
@@ -315,6 +367,7 @@ class DaemonManager:
                     "running": False,
                     "pid": None,
                     "port": self.port,
+                    "profile": self.profile_name,
                     "message": "Daemon not running",
                 }
 

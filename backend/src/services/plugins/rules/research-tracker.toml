@@ -1,0 +1,16 @@
+[rule]
+id = "research-tracker"
+name = "Research Tracker"
+description = "Remind agent to synthesize after multiple searches"
+trigger = "on_tool_complete"
+priority = 75
+core = false
+
+[condition]
+script = "scripts/research_tracker.lua"
+
+[action]
+type = "notify_self"
+message = "{{ state.search_count }} searches completed. Consider synthesizing findings before continuing."
+category = "reminder"
+priority = "normal"

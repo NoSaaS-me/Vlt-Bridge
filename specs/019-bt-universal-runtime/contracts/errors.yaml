@@ -1,0 +1,756 @@
+# Behavior Tree Universal Runtime - Error Contract
+# Defines ALL error types, codes, messages, and recovery actions
+# PRINCIPLE: No silent failures. Every error is explicit, logged, and actionable.
+
+version: "1.0.0"
+
+# Error Code Ranges
+# E1xxx - Blackboard errors
+# E2xxx - Node errors
+# E3xxx - Tree errors
+# E4xxx - Loader errors
+# E5xxx - Lua/Script errors
+# E6xxx - Async/Timeout errors
+# E7xxx - Security errors
+# E8xxx - Merge/Parallel errors
+
+error_categories:
+  blackboard:
+    code_range: "E1000-E1999"
+    description: Errors related to blackboard state management
+
+  node:
+    code_range: "E2000-E2999"
+    description: Errors in node execution and contracts
+
+  tree:
+    code_range: "E3000-E3999"
+    description: Tree-level execution errors
+
+  loader:
+    code_range: "E4000-E4999"
+    description: Tree definition loading and parsing
+
+  script:
+    code_range: "E5000-E5999"
+    description: Lua script execution errors
+
+  async:
+    code_range: "E6000-E6999"
+    description: Async operations and timeouts
+
+  security:
+    code_range: "E7000-E7999"
+    description: Security violations and sandbox escapes
+
+  merge:
+    code_range: "E8000-E8999"
+    description: Parallel merge conflicts
+
+# Base Error Schema
+base_error:
+  code:
+    type: string
+    pattern: "^E[1-8][0-9]{3}$"
+    required: true
+    description: Unique error code for programmatic handling
+
+  category:
+    type: string
+    enum: [blackboard, node, tree, loader, script, async, security, merge]
+    required: true
+
+  severity:
+    type: string
+    enum: [warning, error, critical]
+    required: true
+    description: |
+      warning: Operation can continue with degraded behavior
+      error: Operation failed, may retry or recover
+      critical: System-level failure, cannot continue
+
+  message:
+    type: string
+    required: true
+    description: Human-readable error message (no placeholders in spec, template at runtime)
+
+  context:
+    type: object
+    required: true
+    description: Structured context for debugging
+    properties:
+      node_id: { type: string, nullable: true }
+      node_path: { type: array, items: { type: string }, nullable: true }
+      tree_id: { type: string, nullable: true }
+      tick_count: { type: integer, nullable: true }
+      source_location: { type: string, nullable: true }
+      timestamp: { type: datetime, required: true }
+
+  recovery:
+    type: object
+    required: true
+    description: How to handle or recover from this error
+    properties:
+      action:
+        type: string
+        enum: [retry, abort, skip, escalate, manual]
+        required: true
+      max_retries:
+        type: integer
+        default: 0
+      backoff_ms:
+        type: integer
+        default: 0
+      escalate_to:
+        type: string
+        nullable: true
+        description: ANS event type to emit for escalation
+      manual_steps:
+        type: string
+        nullable: true
+        description: Instructions for manual resolution
+
+  emit_event:
+    type: boolean
+    default: true
+    description: Whether to emit ANS event for this error
+
+# Blackboard Errors (E1xxx)
+errors:
+  # E1001 - Key Not Registered
+  E1001:
+    category: blackboard
+    severity: error
+    message: "Blackboard key '{key}' is not registered. Register with bb.register('{key}', SchemaType) before use."
+    context_required:
+      - key: { type: string, description: "The unregistered key" }
+      - available_keys: { type: array, description: "List of registered keys" }
+      - node_id: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Add bb.register() call in node initialization or tree setup"
+    emit_event: true
+    event_type: blackboard.key.unregistered
+
+  # E1002 - Schema Validation Failed
+  E1002:
+    category: blackboard
+    severity: error
+    message: "Blackboard validation failed for key '{key}': {validation_error}"
+    context_required:
+      - key: { type: string }
+      - expected_schema: { type: string, description: "Pydantic model name" }
+      - actual_type: { type: string }
+      - validation_error: { type: string, description: "Pydantic validation message" }
+      - value_preview: { type: string, description: "Truncated string repr of value (max 100 chars)" }
+    recovery:
+      action: abort
+      manual_steps: "Ensure value matches schema. Check Lua type coercion rules."
+    emit_event: true
+    event_type: blackboard.validation.failed
+
+  # E1003 - Reserved Key Access
+  E1003:
+    category: blackboard
+    severity: error
+    message: "Cannot write to reserved key '{key}'. Keys starting with '_' are system-reserved."
+    context_required:
+      - key: { type: string }
+      - node_id: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Use a key without underscore prefix for user data"
+    emit_event: true
+    event_type: blackboard.key.reserved
+
+  # E1004 - Size Limit Exceeded
+  E1004:
+    category: blackboard
+    severity: error
+    message: "Blackboard size limit exceeded: {current_size_mb}MB > {limit_mb}MB limit"
+    context_required:
+      - current_size_mb: { type: number }
+      - limit_mb: { type: number }
+      - key_being_written: { type: string }
+      - value_size_bytes: { type: integer }
+    recovery:
+      action: abort
+      manual_steps: "Reduce data stored in blackboard. Consider persisting large data externally."
+    emit_event: true
+    event_type: blackboard.size.exceeded
+
+  # E1005 - Scope Chain Corruption
+  E1005:
+    category: blackboard
+    severity: critical
+    message: "Blackboard scope chain corrupted: circular reference detected from '{scope_name}'"
+    context_required:
+      - scope_name: { type: string }
+      - parent_chain: { type: array, items: { type: string } }
+    recovery:
+      action: abort
+      escalate_to: tree.critical.error
+      manual_steps: "This is a bug in the runtime. Report with full context."
+    emit_event: true
+    event_type: blackboard.scope.corrupted
+
+  # Node Errors (E2xxx)
+
+  # E2001 - Contract Violation: Missing Input
+  E2001:
+    category: node
+    severity: error
+    message: "Node '{node_name}' missing required input: '{key}' (type: {expected_type})"
+    context_required:
+      - node_id: { type: string }
+      - node_name: { type: string }
+      - key: { type: string }
+      - expected_type: { type: string }
+      - contract_description: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Ensure upstream node writes '{key}' to blackboard before this node runs"
+    emit_event: true
+    event_type: node.contract.missing_input
+
+  # E2002 - Contract Violation: Undeclared Read
+  E2002:
+    category: node
+    severity: warning
+    message: "Node '{node_name}' read undeclared key '{key}'. Add to contract inputs or optional_inputs."
+    context_required:
+      - node_id: { type: string }
+      - node_name: { type: string }
+      - key: { type: string }
+      - declared_inputs: { type: array }
+    recovery:
+      action: skip
+      manual_steps: "Update NodeContract to declare this input"
+    emit_event: true
+    event_type: node.contract.undeclared_read
+
+  # E2003 - Contract Violation: Undeclared Write
+  E2003:
+    category: node
+    severity: warning
+    message: "Node '{node_name}' wrote undeclared key '{key}'. Add to contract outputs."
+    context_required:
+      - node_id: { type: string }
+      - node_name: { type: string }
+      - key: { type: string }
+      - declared_outputs: { type: array }
+    recovery:
+      action: skip
+      manual_steps: "Update NodeContract to declare this output"
+    emit_event: true
+    event_type: node.contract.undeclared_write
+
+  # E2004 - Invalid Node ID
+  E2004:
+    category: node
+    severity: error
+    message: "Invalid node ID '{node_id}': must match pattern ^[a-zA-Z][a-zA-Z0-9_-]*$"
+    context_required:
+      - node_id: { type: string }
+      - source_location: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Rename node to valid identifier (letters, numbers, underscore, hyphen)"
+    emit_event: true
+    event_type: node.id.invalid
+
+  # E2005 - Duplicate Node ID
+  E2005:
+    category: node
+    severity: error
+    message: "Duplicate node ID '{node_id}' in tree '{tree_id}'. Each node must have unique ID."
+    context_required:
+      - node_id: { type: string }
+      - tree_id: { type: string }
+      - first_location: { type: string }
+      - second_location: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Rename one of the nodes to have a unique ID"
+    emit_event: true
+    event_type: node.id.duplicate
+
+  # E2006 - Node Type Mismatch
+  E2006:
+    category: node
+    severity: error
+    message: "Node '{node_id}' is {actual_type} but has {child_count} children (expected: {expected_children})"
+    context_required:
+      - node_id: { type: string }
+      - actual_type: { type: string, enum: [composite, decorator, leaf] }
+      - child_count: { type: integer }
+      - expected_children: { type: string, description: "e.g., '1+' for composite, '1' for decorator, '0' for leaf" }
+    recovery:
+      action: abort
+      manual_steps: "Fix node type or adjust children count"
+    emit_event: true
+    event_type: node.type.mismatch
+
+  # Tree Errors (E3xxx)
+
+  # E3001 - Tree Not Found
+  E3001:
+    category: tree
+    severity: error
+    message: "Tree '{tree_id}' not found in registry. Available trees: [{available_trees}]"
+    context_required:
+      - tree_id: { type: string }
+      - available_trees: { type: array }
+      - requested_by: { type: string, description: "Node/subtree that requested this tree" }
+    recovery:
+      action: abort
+      manual_steps: "Check tree name spelling. Ensure .lua file exists in tree directory."
+    emit_event: true
+    event_type: tree.not_found
+
+  # E3002 - Circular Reference
+  E3002:
+    category: tree
+    severity: error
+    message: "Circular tree reference detected: {cycle_path}"
+    context_required:
+      - cycle_path: { type: array, items: { type: string }, description: "e.g., ['tree_a', 'tree_b', 'tree_a']" }
+      - source_location: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Break the circular dependency by refactoring tree structure"
+    emit_event: true
+    event_type: tree.circular_reference
+
+  # E3003 - Tree Stuck (Watchdog)
+  E3003:
+    category: tree
+    severity: critical
+    message: "Tree '{tree_id}' stuck: node '{node_id}' RUNNING for {duration_ms}ms without progress (limit: {limit_ms}ms)"
+    context_required:
+      - tree_id: { type: string }
+      - node_id: { type: string }
+      - node_path: { type: array }
+      - duration_ms: { type: integer }
+      - limit_ms: { type: integer }
+      - last_progress_at: { type: datetime, nullable: true }
+    recovery:
+      action: abort
+      escalate_to: tree.watchdog.timeout
+      manual_steps: "Node is hanging. Check for infinite loops, network issues, or missing async completion."
+    emit_event: true
+    event_type: tree.watchdog.timeout
+
+  # E3004 - Budget Exceeded
+  E3004:
+    category: tree
+    severity: warning
+    message: "Tree '{tree_id}' exceeded tick budget: {tick_count} >= {tick_budget}"
+    context_required:
+      - tree_id: { type: string }
+      - tick_count: { type: integer }
+      - tick_budget: { type: integer }
+      - current_node: { type: string }
+    recovery:
+      action: retry
+      manual_steps: "Tree will be resumed on next event. Consider increasing tick_budget if legitimate."
+    emit_event: true
+    event_type: tree.budget.exceeded
+
+  # E3005 - Reload Failed
+  E3005:
+    category: tree
+    severity: error
+    message: "Failed to reload tree '{tree_id}': {reason}"
+    context_required:
+      - tree_id: { type: string }
+      - source_path: { type: string }
+      - reason: { type: string }
+      - previous_version: { type: string, nullable: true }
+    recovery:
+      action: manual
+      manual_steps: "Fix the error in the tree definition file and save again"
+    emit_event: true
+    event_type: tree.reload.failed
+
+  # E3006 - Cancellation
+  E3006:
+    category: tree
+    severity: warning
+    message: "Tree '{tree_id}' execution cancelled: {reason}"
+    context_required:
+      - tree_id: { type: string }
+      - reason: { type: string, enum: [reload, timeout, user_request, budget] }
+      - node_id: { type: string, description: "Node that was running when cancelled" }
+      - async_operations_cancelled: { type: integer }
+    recovery:
+      action: abort
+      manual_steps: "Cancellation is intentional. Tree will restart if configured."
+    emit_event: true
+    event_type: tree.cancelled
+
+  # Loader Errors (E4xxx)
+
+  # E4001 - File Not Found
+  E4001:
+    category: loader
+    severity: error
+    message: "Tree file not found: '{path}'"
+    context_required:
+      - path: { type: string }
+      - tree_dir: { type: string }
+      - searched_paths: { type: array }
+    recovery:
+      action: abort
+      manual_steps: "Create the file or check the path spelling"
+    emit_event: true
+    event_type: loader.file.not_found
+
+  # E4002 - Invalid Tree Definition
+  E4002:
+    category: loader
+    severity: error
+    message: "Invalid tree definition in '{path}': {reason}"
+    context_required:
+      - path: { type: string }
+      - reason: { type: string }
+      - line_number: { type: integer, nullable: true }
+      - snippet: { type: string, nullable: true, description: "Code snippet around error" }
+    recovery:
+      action: abort
+      manual_steps: "Fix the tree definition syntax"
+    emit_event: true
+    event_type: loader.definition.invalid
+
+  # E4003 - Function Not Found
+  E4003:
+    category: loader
+    severity: error
+    message: "Function '{fn_path}' not found for action '{node_name}'"
+    context_required:
+      - fn_path: { type: string, description: "e.g., 'oracle.load_context'" }
+      - node_name: { type: string }
+      - available_modules: { type: array }
+      - source_location: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Check function path spelling. Ensure module is importable."
+    emit_event: true
+    event_type: loader.function.not_found
+
+  # E4004 - Subtree Not Found
+  E4004:
+    category: loader
+    severity: error
+    message: "Subtree '{subtree_name}' referenced in '{tree_id}' not found"
+    context_required:
+      - subtree_name: { type: string }
+      - tree_id: { type: string }
+      - available_trees: { type: array }
+      - source_location: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Create the subtree .lua file or fix the reference name"
+    emit_event: true
+    event_type: loader.subtree.not_found
+
+  # Script Errors (E5xxx)
+
+  # E5001 - Lua Syntax Error
+  E5001:
+    category: script
+    severity: error
+    message: "Lua syntax error in '{source}' line {line}: {error_message}"
+    context_required:
+      - source: { type: string, description: "File path or script name" }
+      - line: { type: integer }
+      - column: { type: integer, nullable: true }
+      - error_message: { type: string }
+      - snippet: { type: string, description: "3 lines around the error" }
+    recovery:
+      action: abort
+      manual_steps: "Fix the Lua syntax error at the indicated line"
+    emit_event: true
+    event_type: script.syntax.error
+
+  # E5002 - Lua Runtime Error
+  E5002:
+    category: script
+    severity: error
+    message: "Lua runtime error in '{node_name}': {error_message}"
+    context_required:
+      - node_name: { type: string }
+      - node_id: { type: string }
+      - error_message: { type: string }
+      - lua_traceback: { type: string, description: "Full Lua stack trace" }
+      - script_source: { type: string, nullable: true }
+    recovery:
+      action: abort
+      manual_steps: "Fix the runtime error. Check for nil access, type errors, etc."
+    emit_event: true
+    event_type: script.runtime.error
+
+  # E5003 - Lua Timeout
+  E5003:
+    category: script
+    severity: error
+    message: "Lua script '{node_name}' exceeded timeout ({timeout_ms}ms)"
+    context_required:
+      - node_name: { type: string }
+      - node_id: { type: string }
+      - timeout_ms: { type: integer }
+      - script_source: { type: string, nullable: true }
+    recovery:
+      action: abort
+      manual_steps: "Script has infinite loop or is too slow. Optimize or increase timeout."
+    emit_event: true
+    event_type: script.timeout
+
+  # E5004 - Lua Intended Failure
+  E5004:
+    category: script
+    severity: warning
+    message: "Lua script '{node_name}' returned failure: {reason}"
+    context_required:
+      - node_name: { type: string }
+      - node_id: { type: string }
+      - reason: { type: string }
+    recovery:
+      action: skip
+      manual_steps: "This is an intentional failure from the script, not a bug"
+    emit_event: false
+    event_type: null
+
+  # Async Errors (E6xxx)
+
+  # E6001 - Async Operation Timeout
+  E6001:
+    category: async
+    severity: error
+    message: "Async operation '{operation_id}' timed out after {timeout_ms}ms"
+    context_required:
+      - operation_id: { type: string }
+      - operation_type: { type: string, enum: [llm_call, http_request, subtree, tool_call] }
+      - node_id: { type: string }
+      - timeout_ms: { type: integer }
+    recovery:
+      action: retry
+      max_retries: 2
+      backoff_ms: 1000
+      manual_steps: "Check network connectivity. Consider increasing timeout."
+    emit_event: true
+    event_type: async.timeout
+
+  # E6002 - Async Operation Cancelled
+  E6002:
+    category: async
+    severity: warning
+    message: "Async operation '{operation_id}' cancelled: {reason}"
+    context_required:
+      - operation_id: { type: string }
+      - operation_type: { type: string }
+      - node_id: { type: string }
+      - reason: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Cancellation is intentional"
+    emit_event: true
+    event_type: async.cancelled
+
+  # E6003 - LLM API Error
+  E6003:
+    category: async
+    severity: error
+    message: "LLM API error in '{node_name}': {error_type} - {error_message}"
+    context_required:
+      - node_name: { type: string }
+      - node_id: { type: string }
+      - model: { type: string }
+      - error_type: { type: string, enum: [rate_limit, auth_error, context_length, api_error, network_error] }
+      - error_message: { type: string }
+      - request_id: { type: string, nullable: true }
+      - tokens_used: { type: integer, nullable: true }
+    recovery:
+      action: retry
+      max_retries: 3
+      backoff_ms: 2000
+      manual_steps: "Check API key, rate limits, or model availability"
+    emit_event: true
+    event_type: llm.api.error
+
+  # Security Errors (E7xxx)
+
+  # E7001 - Sandbox Violation
+  E7001:
+    category: security
+    severity: critical
+    message: "Lua sandbox violation: attempted to access '{blocked_item}'"
+    context_required:
+      - blocked_item: { type: string, description: "e.g., 'os.execute', 'io.open'" }
+      - node_id: { type: string }
+      - script_source: { type: string }
+      - lua_traceback: { type: string }
+    recovery:
+      action: abort
+      escalate_to: security.sandbox.violation
+      manual_steps: "Remove forbidden API access from script. This may indicate malicious code."
+    emit_event: true
+    event_type: security.sandbox.violation
+
+  # E7002 - Path Traversal Attempt
+  E7002:
+    category: security
+    severity: critical
+    message: "Path traversal attempt detected: '{path}'"
+    context_required:
+      - path: { type: string }
+      - requested_by: { type: string }
+      - tree_dir: { type: string }
+    recovery:
+      action: abort
+      escalate_to: security.path.traversal
+      manual_steps: "Subtree names must be alphanumeric. This may indicate malicious input."
+    emit_event: true
+    event_type: security.path.traversal
+
+  # E7003 - Rate Limit Exceeded
+  E7003:
+    category: security
+    severity: warning
+    message: "Script rate limit exceeded: {current_rate}/s > {limit}/s"
+    context_required:
+      - current_rate: { type: number }
+      - limit: { type: number }
+      - node_id: { type: string }
+    recovery:
+      action: retry
+      max_retries: 1
+      backoff_ms: 1000
+      manual_steps: "Reduce script execution frequency"
+    emit_event: true
+    event_type: security.rate.exceeded
+
+  # Merge Errors (E8xxx)
+
+  # E8001 - Merge Conflict
+  E8001:
+    category: merge
+    severity: error
+    message: "Parallel merge conflict on key '{key}': {writer_count} children wrote different values"
+    context_required:
+      - key: { type: string }
+      - writer_count: { type: integer }
+      - child_values: { type: array, description: "List of {child_index, value_preview}" }
+      - merge_strategy: { type: string }
+      - parallel_node_id: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Use a different merge strategy or ensure children write to different keys"
+    emit_event: true
+    event_type: parallel.merge.conflict
+
+  # E8002 - Merge Type Mismatch
+  E8002:
+    category: merge
+    severity: error
+    message: "Cannot merge values for key '{key}': incompatible types ({types})"
+    context_required:
+      - key: { type: string }
+      - types: { type: array, items: { type: string } }
+      - merge_strategy: { type: string }
+    recovery:
+      action: abort
+      manual_steps: "Ensure all children write same type, or use COLLECT strategy"
+    emit_event: true
+    event_type: parallel.merge.type_mismatch
+
+# Error Result Type (returned by all operations that can fail)
+error_result_schema:
+  type: object
+  description: |
+    Standard result wrapper for operations that can fail.
+    Every method that can error MUST return this type.
+    Use pattern: `if result.is_error: handle_error(result.error)`
+  properties:
+    success:
+      type: boolean
+      required: true
+    value:
+      type: any
+      nullable: true
+      description: "Result value if success=true"
+    error:
+      $ref: "#/base_error"
+      nullable: true
+      description: "Error details if success=false"
+  examples:
+    success:
+      success: true
+      value: { key: "context", data: { user_id: "123" } }
+      error: null
+    failure:
+      success: false
+      value: null
+      error:
+        code: "E1001"
+        category: "blackboard"
+        severity: "error"
+        message: "Blackboard key 'context' is not registered"
+        context:
+          key: "context"
+          node_id: "load-context"
+          timestamp: "2025-01-07T12:00:00Z"
+        recovery:
+          action: "abort"
+
+# Failure Trace Type (accumulated during tree execution)
+failure_trace_schema:
+  type: object
+  description: |
+    Accumulated trace of failures during tree execution.
+    Written to _failure_trace blackboard key.
+    Displayed in debug panel when tree fails.
+  properties:
+    tree_id:
+      type: string
+      required: true
+    total_errors:
+      type: integer
+      required: true
+    first_error_at:
+      type: datetime
+      required: true
+    last_error_at:
+      type: datetime
+      required: true
+    errors:
+      type: array
+      items:
+        type: object
+        properties:
+          code: { type: string }
+          node_id: { type: string }
+          node_path: { type: array }
+          message: { type: string }
+          timestamp: { type: datetime }
+      max_items: 50
+      description: "Capped at 50 to prevent memory issues"
+
+# Required Logging for All Errors
+logging_requirements:
+  format: "structured_json"
+  required_fields:
+    - error_code
+    - timestamp_utc
+    - tree_id
+    - node_path
+    - message
+  optional_fields:
+    - lua_traceback
+    - request_id
+    - user_id
+  retention_days: 30
+  severity_log_levels:
+    warning: INFO
+    error: ERROR
+    critical: CRITICAL

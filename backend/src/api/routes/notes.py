@@ -32,7 +32,7 @@ def _ensure_write_allowed(user_id: str) -> None:
             status_code=403,
             detail={
                 "error": "demo_read_only",
-                "message": "Demo mode is read-only. Sign in with Hugging Face to make changes.",
+                "message": "Demo mode is read-only. Sign in with GitHub to make changes.",
             },
         )
 

@@ -125,7 +125,7 @@ class LibrarianService:
                 provider = ModelProvider.OPENROUTER
                 # Use a default OpenRouter model if the current model is Google-specific
                 if model.startswith("gemini") or model.startswith("models/"):
-                    model = "deepseek/deepseek-chat"  # Free, capable model
+                    model = "deepseek/deepseek-chat-v3"  # Free, capable model
             else:
                 return {
                     "summary": current_summary or "Summarization unavailable.",

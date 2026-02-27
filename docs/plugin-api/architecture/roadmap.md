@@ -9,8 +9,56 @@ This document outlines stretch goals and future enhancements for the Oracle Plug
 - Four built-in rules (token budget, iteration budget, large result, repeated failure)
 - SQLite-backed plugin state persistence
 - Settings UI for rule management
+- **Behavior Tree Architecture** (Honorbuddy-style)
+  - PrioritySelector, Sequence, Parallel composites
+  - Guard, Inverter, Cooldown decorators
+  - Frame locking optimization for O(1) resume
+  - Context detection for environment-aware behavior
 
 ## Near-Term Enhancements
+
+### Cython Behavior Tree Core
+
+**Priority**: High
+**Timeline**: v1.1
+
+Migrate behavior tree hot path to Cython for performance:
+
+```
+backend/src/services/plugins/behavior_tree/
++-- types.pyx             # RunStatus, TickContext, Blackboard
++-- node.pyx              # BehaviorNode base class
++-- composites.pyx        # PrioritySelector, Sequence, Parallel
++-- decorators.pyx        # Inverter, Guard, Cooldown
++-- leaves.pyx            # ConditionNode, ActionNode, ScriptNode
++-- tree.pyx              # BehaviorTree with frame locking
+```
+
+**Performance targets**:
+| Metric | Current (Python) | Target (Cython) |
+|--------|-----------------|-----------------|
+| Single node tick | 1-10 ms | <100 ns |
+| Tree traversal (100 nodes) | 10-50 ms | <10 us |
+| Condition evaluation | 0.1-1 ms | <1 us |
+| Full hook point cycle | 1-5 ms | <100 us |
+
+**Build setup**:
+```python
+# backend/src/services/plugins/setup.py
+from setuptools import setup
+from Cython.Build import cythonize
+
+setup(
+    ext_modules=cythonize([
+        "behavior_tree/types.pyx",
+        "behavior_tree/node.pyx",
+        "behavior_tree/composites.pyx",
+        "behavior_tree/decorators.pyx",
+        "behavior_tree/leaves.pyx",
+        "behavior_tree/tree.pyx",
+    ], language_level="3"),
+)
+```
 
 ### Expression Language Extensions
 
@@ -192,5 +240,8 @@ Feature requests and feedback welcome:
 ## See Also
 
 - [Architecture Overview](./overview.md)
+- [Decision Tree Architecture](./decision-tree.md)
 - [Performance Considerations](./performance.md)
+- [Advanced Patterns](../rules/advanced-patterns.md)
+- [Behavior Tree Tasks](../../../specs/015-oracle-plugin-system/behavior-tree-tasks.md)
 - [Research Notes](../../../specs/015-oracle-plugin-system/research.md)

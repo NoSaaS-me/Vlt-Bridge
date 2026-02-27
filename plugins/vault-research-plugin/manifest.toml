@@ -1,0 +1,23 @@
+[plugin]
+id = "vault-research-plugin"
+name = "Vault Research Plugin"
+version = "1.0.0"
+description = "Enhanced vault usage tracking and workflow hints"
+
+[capabilities]
+requires = ["vault_search", "vault_read", "vault_write"]
+
+[rules]
+include = ["rules/*.toml"]
+
+[settings.heavy_use_threshold]
+type = "integer"
+default = 10
+min = 5
+max = 50
+description = "Number of vault operations before heavy use warning"
+
+[settings.auto_save_reminder]
+type = "boolean"
+default = true
+description = "Remind agent to save important findings to vault"

@@ -1,0 +1,74 @@
+openapi: 3.0.0
+info:
+  title: Vlt Daemon Protocol
+  version: 1.0.0
+  description: JSON-RPC over WebSocket protocol for Client-Server-Daemon communication.
+
+paths:
+  /v1/daemon/connect:
+    get:
+      summary: WebSocket endpoint for Daemon to connect to Server.
+      description: Establishes a persistent connection for receiving instructions.
+      responses:
+        101:
+          description: Switching Protocols
+
+  /v1/client/connect:
+    get:
+      summary: WebSocket endpoint for Clients (Web/Desktop) to connect to Server.
+      description: Establishes a persistent connection for sending commands and receiving session streams.
+      responses:
+        101:
+          description: Switching Protocols
+
+components:
+  schemas:
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, method, params, id]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        method:
+          type: string
+        params:
+          type: object
+        id:
+          type: [string, integer]
+
+    JsonRpcResponse:
+      type: object
+      required: [jsonrpc, result, id]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        result:
+          type: object
+        error:
+          type: object
+        id:
+          type: [string, integer]
+
+    # Command: Start Session
+    StartSessionParams:
+      type: object
+      properties:
+        project_path:
+          type: string
+        task:
+          type: string
+        model:
+          type: string
+
+    # Event: Terminal Output
+    TerminalOutputParams:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        data:
+          type: string
+          format: base64

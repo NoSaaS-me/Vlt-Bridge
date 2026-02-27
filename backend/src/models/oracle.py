@@ -47,7 +47,7 @@ class OracleRequest(BaseModel):
 
 class OracleStreamChunk(BaseModel):
     """Server-sent event chunk for streaming responses."""
-    type: Literal["thinking", "content", "source", "tool_call", "tool_result", "done", "error", "system", "context_update"] = Field(
+    type: Literal["thinking", "content", "source", "tool_call", "tool_result", "done", "error", "system", "context_update", "progress"] = Field(
         ..., description="Chunk type"
     )
     content: Optional[str] = Field(None, description="Text content for thinking/content chunks")

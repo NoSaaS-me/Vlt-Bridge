@@ -1,0 +1,15 @@
+[workspace]
+authors = ["User <bigwolfeman@users.noreply.github.com>"]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "vlt-daemon"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+start = "mojo run src/server.mojo"
+test = "mojo test src"
+
+[dependencies]
+max = ">=25.1.0,<26"
+python = ">=3.11"
+websockets = ">=12.0"

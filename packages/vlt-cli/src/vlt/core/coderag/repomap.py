@@ -38,6 +38,7 @@ class Symbol:
         symbol_type: str,  # 'class', 'function', 'method'
         signature: Optional[str] = None,
         lineno: Optional[int] = None,
+        end_line: Optional[int] = None,
         parent: Optional[str] = None,  # For methods: parent class name
         docstring: Optional[str] = None,
     ):
@@ -47,6 +48,7 @@ class Symbol:
         self.symbol_type = symbol_type
         self.signature = signature
         self.lineno = lineno
+        self.end_line = end_line
         self.parent = parent
         self.docstring = docstring
 
@@ -80,6 +82,8 @@ def extract_symbols_from_ast(
         symbols.extend(_extract_python_symbols(tree, source_code, file_path))
     elif language in ("typescript", "javascript"):
         symbols.extend(_extract_ts_js_symbols(tree, source_code, file_path, language))
+    elif language == "go":
+        symbols.extend(_extract_go_symbols(tree, source_code, file_path))
 
     return symbols
 
@@ -109,6 +113,7 @@ def _extract_python_symbols(tree: Tree, source_code: str, file_path: str) -> Lis
                     symbol_type='class',
                     signature=signature,
                     lineno=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
                     docstring=docstring
                 ))
 
@@ -131,6 +136,7 @@ def _extract_python_symbols(tree: Tree, source_code: str, file_path: str) -> Lis
                                 symbol_type='method',
                                 signature=method_sig,
                                 lineno=child.start_point[0] + 1,
+                                end_line=child.end_point[0] + 1,
                                 parent=class_name,
                                 docstring=method_doc
                             ))
@@ -152,6 +158,7 @@ def _extract_python_symbols(tree: Tree, source_code: str, file_path: str) -> Lis
                     symbol_type='function',
                     signature=signature,
                     lineno=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
                     docstring=docstring
                 ))
 
@@ -180,7 +187,8 @@ def _extract_ts_js_symbols(tree: Tree, source_code: str, file_path: str, languag
                     file_path=file_path,
                     symbol_type='class',
                     signature=signature,
-                    lineno=node.start_point[0] + 1
+                    lineno=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
                 ))
 
                 # Extract methods
@@ -200,6 +208,7 @@ def _extract_ts_js_symbols(tree: Tree, source_code: str, file_path: str, languag
                                 symbol_type='method',
                                 signature=method_sig,
                                 lineno=child.start_point[0] + 1,
+                                end_line=child.end_point[0] + 1,
                                 parent=class_name
                             ))
 
@@ -218,10 +227,154 @@ def _extract_ts_js_symbols(tree: Tree, source_code: str, file_path: str, languag
                     file_path=file_path,
                     symbol_type='function',
                     signature=signature,
-                    lineno=node.start_point[0] + 1
+                    lineno=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
                 ))
 
     return symbols
+
+
+def _extract_go_symbols(tree: Tree, source_code: str, file_path: str) -> List[Symbol]:
+    """Extract Go symbols: functions, methods, and type declarations (structs/interfaces).
+
+    Note: Go's tree-sitter grammar does not use field names, so we use
+    _find_child_by_type() rather than _find_child_by_field().
+    """
+    symbols: List[Symbol] = []
+    root = tree.root_node
+    module_name = _file_path_to_module_name(file_path)
+
+    for node in _traverse(root):
+        # Top-level function declarations: func Name(params) result { ... }
+        if node.type == "function_declaration":
+            # Name is an 'identifier' child (no field name in Go grammar)
+            name_node = _find_child_by_type(node, "identifier")
+            if name_node:
+                func_name = _get_text(name_node, source_code)
+                qualified_name = f"{module_name}.{func_name}"
+                signature = _extract_go_function_signature(node, source_code)
+                symbols.append(Symbol(
+                    name=func_name,
+                    qualified_name=qualified_name,
+                    file_path=file_path,
+                    symbol_type='function',
+                    signature=signature,
+                    lineno=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
+                ))
+
+        # Method declarations: func (recv T) Name(params) result { ... }
+        elif node.type == "method_declaration":
+            # Method name is a 'field_identifier' child
+            name_node = _find_child_by_type(node, "field_identifier")
+            if name_node:
+                method_name = _get_text(name_node, source_code)
+                # Receiver is the first 'parameter_list' child
+                receiver_node = _find_child_by_type(node, "parameter_list")
+                receiver_type = _extract_go_receiver_type(receiver_node, source_code) if receiver_node else None
+                if receiver_type:
+                    qualified_name = f"{module_name}.{receiver_type}.{method_name}"
+                else:
+                    qualified_name = f"{module_name}.{method_name}"
+                signature = _extract_go_method_signature(node, source_code)
+                symbols.append(Symbol(
+                    name=method_name,
+                    qualified_name=qualified_name,
+                    file_path=file_path,
+                    symbol_type='method',
+                    signature=signature,
+                    lineno=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
+                    parent=receiver_type,
+                ))
+
+        # Type declarations: type Name struct/interface/alias
+        elif node.type == "type_declaration":
+            for child in node.children:
+                if child.type == "type_spec":
+                    # Name is a 'type_identifier' child of type_spec
+                    name_node = _find_child_by_type(child, "type_identifier")
+                    if name_node:
+                        type_name = _get_text(name_node, source_code)
+                        qualified_name = f"{module_name}.{type_name}"
+                        # Determine struct vs interface vs alias
+                        struct_node = _find_child_by_type(child, "struct_type")
+                        iface_node = _find_child_by_type(child, "interface_type")
+                        if struct_node:
+                            sig = f"type {type_name} struct"
+                        elif iface_node:
+                            sig = f"type {type_name} interface"
+                        else:
+                            sig = f"type {type_name}"
+                        symbols.append(Symbol(
+                            name=type_name,
+                            qualified_name=qualified_name,
+                            file_path=file_path,
+                            symbol_type='class',  # Map Go types to 'class' for display
+                            signature=sig,
+                            lineno=node.start_point[0] + 1,
+                            end_line=node.end_point[0] + 1,
+                        ))
+
+    return symbols
+
+
+def _extract_go_function_signature(node: TSNode, source_code: str) -> str:
+    """Extract Go function signature: func Name(params) result."""
+    name_node = _find_child_by_type(node, "identifier")
+    if not name_node:
+        return "func <unknown>()"
+    func_name = _get_text(name_node, source_code)
+    # Parameters: first (and only) parameter_list
+    params_node = _find_child_by_type(node, "parameter_list")
+    params_text = _get_text(params_node, source_code) if params_node else "()"
+    # Result: everything between params and block
+    result_text = _extract_go_result(node, source_code, after_node=params_node)
+    if result_text:
+        return f"func {func_name}{params_text} {result_text}"
+    return f"func {func_name}{params_text}"
+
+
+def _extract_go_method_signature(node: TSNode, source_code: str) -> str:
+    """Extract Go method signature including receiver: func (r T) Name(params) result."""
+    name_node = _find_child_by_type(node, "field_identifier")
+    if not name_node:
+        return "func <unknown>()"
+    method_name = _get_text(name_node, source_code)
+    # First parameter_list is receiver, second is params
+    param_lists = [c for c in node.children if c.type == "parameter_list"]
+    receiver_text = _get_text(param_lists[0], source_code) if param_lists else ""
+    params_node = param_lists[1] if len(param_lists) > 1 else None
+    params_text = _get_text(params_node, source_code) if params_node else "()"
+    result_text = _extract_go_result(node, source_code, after_node=params_node)
+    if result_text:
+        return f"func {receiver_text} {method_name}{params_text} {result_text}"
+    return f"func {receiver_text} {method_name}{params_text}"
+
+
+def _extract_go_result(node: TSNode, source_code: str, after_node: Optional[TSNode]) -> Optional[str]:
+    """Extract Go function result type (everything between the last params and block)."""
+    found = after_node is None
+    for child in node.children:
+        if not found:
+            if child == after_node:
+                found = True
+            continue
+        # Stop at the block
+        if child.type == "block":
+            break
+        # Result type: named node that isn't another parameter_list
+        if child.is_named and child.type != "parameter_list":
+            return _get_text(child, source_code).strip()
+    return None
+
+
+def _extract_go_receiver_type(receiver_node: TSNode, source_code: str) -> Optional[str]:
+    """Extract the bare receiver type name from a Go method receiver (e.g., `(s *Foo)` → `Foo`)."""
+    for child in _traverse(receiver_node):
+        if child.type == "type_identifier":
+            return _get_text(child, source_code)
+    return None
 
 
 # ============================================================================
@@ -682,7 +835,7 @@ def _file_path_to_module_name(file_path: str) -> str:
     """
     # Remove extension
     path = file_path
-    for ext in ['.py', '.ts', '.js', '.tsx', '.jsx']:
+    for ext in ['.py', '.ts', '.js', '.tsx', '.jsx', '.go']:
         if path.endswith(ext):
             path = path[:-len(ext)]
             break

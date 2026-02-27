@@ -1,0 +1,930 @@
+# Behavior Tree Universal Runtime - Node Contracts
+# Defines BehaviorNode, NodeContract, all node types, and error propagation rules
+
+version: "1.0.0"
+
+# RunStatus Enum
+enums:
+  RunStatus:
+    description: "Result of a node tick"
+    values:
+      FRESH:
+        value: 0
+        description: "Node has never been ticked"
+      RUNNING:
+        value: 1
+        description: "Node is mid-execution, will continue next tick"
+      SUCCESS:
+        value: 2
+        description: "Node completed successfully"
+      FAILURE:
+        value: 3
+        description: "Node failed"
+    methods:
+      from_bool:
+        signature: "from_bool(value: bool) -> RunStatus"
+        description: "Convert boolean to SUCCESS (True) or FAILURE (False)"
+      is_complete:
+        signature: "is_complete() -> bool"
+        description: "Returns True if SUCCESS or FAILURE"
+      is_running:
+        signature: "is_running() -> bool"
+        description: "Returns True if RUNNING"
+
+  NodeType:
+    description: "Classification of node behavior"
+    values:
+      COMPOSITE:
+        description: "Has 1+ children, orchestrates their execution"
+        child_count: "1+"
+        examples: ["Sequence", "Selector", "Parallel"]
+      DECORATOR:
+        description: "Has exactly 1 child, modifies its behavior"
+        child_count: "1"
+        examples: ["Timeout", "Retry", "Guard", "Cooldown"]
+      LEAF:
+        description: "Has 0 children, performs actual work"
+        child_count: "0"
+        examples: ["Action", "Condition", "LLMCall", "Script"]
+
+# NodeContract - Declares node state requirements
+dataclasses:
+  NodeContract:
+    description: |
+      Declares a node's state requirements and outputs.
+      Used for static validation and runtime enforcement.
+      Inspired by function type signatures / C++ header files.
+
+    fields:
+      inputs:
+        type: "Dict[str, Type[BaseModel]]"
+        default: "{}"
+        description: "Required inputs. Node FAILS if missing."
+
+      optional_inputs:
+        type: "Dict[str, Type[BaseModel]]"
+        default: "{}"
+        description: "Optional inputs. Node works without them."
+
+      outputs:
+        type: "Dict[str, Type[BaseModel]]"
+        default: "{}"
+        description: "Keys this node may write."
+
+      description:
+        type: str
+        default: '""'
+        description: "Human-readable description for documentation"
+
+    invariants:
+      - "inputs, optional_inputs, and outputs have disjoint keys"
+      - "All schema types are BaseModel subclasses"
+
+    methods:
+      validate_inputs:
+        signature: "validate_inputs(blackboard: TypedBlackboard) -> List[str]"
+        description: "Check all required inputs exist in blackboard"
+        returns:
+          success: "Empty list"
+          failure: "List of missing key names"
+        errors:
+          - code: E2001
+            condition: "Required input missing"
+
+      validate_access:
+        signature: "validate_access(reads: Set[str], writes: Set[str]) -> List[str]"
+        description: "Check actual access matches declared contract"
+        returns:
+          success: "Empty list"
+          failure: "List of violation descriptions"
+        violations:
+          - description: "Read undeclared key"
+            error_code: E2002
+            severity: warning
+          - description: "Wrote undeclared key"
+            error_code: E2003
+            severity: warning
+
+      all_input_keys:
+        signature: "all_input_keys() -> Set[str]"
+        description: "Union of required and optional input keys"
+        property: true
+
+    example:
+      name: "LoadContextContract"
+      code: |
+        NodeContract(
+            inputs={
+                "session_id": SessionId,
+            },
+            optional_inputs={
+                "history_limit": HistoryLimit,
+            },
+            outputs={
+                "context": ConversationContext,
+                "turn_number": TurnNumber,
+            },
+            description="Load conversation context from database"
+        )
+
+# BehaviorNode Base Class
+interfaces:
+  BehaviorNode:
+    description: |
+      Base class for all behavior tree nodes.
+      All nodes MUST inherit from this class.
+
+    invariants:
+      - "_id is unique within tree"
+      - "_status reflects result of most recent tick"
+      - "_tick_count >= 0"
+      - "If _status == RUNNING, _running_since is not None"
+      - "If _status != RUNNING, _running_since is None"
+
+    constructor:
+      signature: |
+        __init__(
+            id: str,
+            name: Optional[str] = None,
+            metadata: Optional[Dict[str, Any]] = None
+        ) -> None
+      preconditions:
+        - condition: "id matches ^[a-zA-Z][a-zA-Z0-9_-]*$"
+          error_on_violation: E2004
+        - condition: "id is unique within tree (checked at tree build time)"
+          error_on_violation: E2005
+      postconditions:
+        - "_status = RunStatus.FRESH"
+        - "_tick_count = 0"
+        - "_running_since = None"
+        - "_last_tick_duration_ms = 0.0"
+        - "_name = name or id"
+
+    properties:
+      id:
+        type: str
+        readonly: true
+        description: "Unique identifier within tree"
+
+      name:
+        type: str
+        readonly: true
+        description: "Human-readable name (defaults to id)"
+
+      node_type:
+        type: NodeType
+        readonly: true
+        abstract: true
+        description: "COMPOSITE, DECORATOR, or LEAF"
+
+      status:
+        type: RunStatus
+        readonly: true
+        description: "Result of most recent tick"
+
+      tick_count:
+        type: int
+        readonly: true
+        description: "Total times this node has been ticked"
+
+      running_since:
+        type: "Optional[datetime]"
+        readonly: true
+        description: "When node entered RUNNING state (None if not RUNNING)"
+
+      last_tick_duration_ms:
+        type: float
+        readonly: true
+        description: "Duration of most recent tick in milliseconds"
+
+      children:
+        type: "List[BehaviorNode]"
+        readonly: true
+        description: "Child nodes (empty for LEAF)"
+
+      parent:
+        type: "Optional[BehaviorNode]"
+        readonly: true
+        description: "Parent node (None for root)"
+
+    methods:
+      tick:
+        signature: "tick(ctx: TickContext) -> RunStatus"
+        description: |
+          Execute node for one tick. DO NOT override - override _tick instead.
+          Handles timing, state updates, contract validation.
+        preconditions:
+          - condition: "ctx is valid TickContext"
+            error_on_violation: "TypeError"
+          - condition: "ctx.blackboard has schemas for contract inputs"
+            error_on_violation: E1001
+          - condition: "ctx.cancellation_requested == False (checked inside)"
+            error_on_violation: "Returns FAILURE with cancellation reason"
+        postconditions:
+          - "_tick_count incremented by 1"
+          - "_status set to return value"
+          - "If RUNNING and was not RUNNING: _running_since = now"
+          - "If not RUNNING: _running_since = None"
+          - "_last_tick_duration_ms updated"
+          - "Contract violations logged as warnings (E2002, E2003)"
+        implementation: |
+          def tick(self, ctx: TickContext) -> RunStatus:
+              # Check cancellation
+              if ctx.cancellation_requested:
+                  self._handle_cancellation()
+                  return RunStatus.FAILURE
+
+              # Clear access tracking
+              ctx.blackboard.clear_access_tracking()
+
+              # Validate inputs
+              missing = self.contract().validate_inputs(ctx.blackboard)
+              if missing:
+                  self._log_error(E2001, missing=missing)
+                  return RunStatus.FAILURE
+
+              # Execute
+              start = time.perf_counter()
+              try:
+                  status = self._tick(ctx)
+              except Exception as e:
+                  self._log_error(e)
+                  status = RunStatus.FAILURE
+
+              # Update state
+              self._tick_count += 1
+              self._last_tick_duration_ms = (time.perf_counter() - start) * 1000
+              self._status = status
+
+              if status == RunStatus.RUNNING:
+                  if self._running_since is None:
+                      self._running_since = datetime.utcnow()
+              else:
+                  self._running_since = None
+
+              # Validate contract (warnings only)
+              violations = self.contract().validate_access(
+                  ctx.blackboard.get_reads(),
+                  ctx.blackboard.get_writes()
+              )
+              for v in violations:
+                  self._log_warning(v)
+
+              return status
+
+      _tick:
+        signature: "_tick(ctx: TickContext) -> RunStatus"
+        abstract: true
+        description: |
+          Subclass implementation. Override THIS method, not tick().
+          All actual node logic goes here.
+
+      reset:
+        signature: "reset() -> None"
+        description: "Reset node to initial state"
+        postconditions:
+          - "_status = RunStatus.FRESH"
+          - "_running_since = None"
+          - "_tick_count NOT reset (intentional for debugging)"
+          - "Subclass-specific state reset"
+
+      contract:
+        signature: "contract() -> NodeContract"
+        classmethod: true
+        description: |
+          Declare state requirements. Override in subclasses.
+          Default: Empty contract (no requirements).
+
+      debug_info:
+        signature: "debug_info() -> Dict[str, Any]"
+        description: "Return debug information dictionary"
+        returns:
+          fields:
+            - id
+            - name
+            - node_type
+            - status
+            - tick_count
+            - running_since
+            - last_tick_duration_ms
+            - contract_summary
+            - children_ids (for composites)
+
+# Composite Nodes
+composite_nodes:
+  Sequence:
+    description: |
+      Executes children in order until one fails or all succeed.
+      Short-circuits on first FAILURE.
+    behavior:
+      - "Tick children left-to-right"
+      - "If child returns FAILURE: return FAILURE immediately"
+      - "If child returns RUNNING: return RUNNING, resume from this child next tick"
+      - "If all children return SUCCESS: return SUCCESS"
+    contract:
+      inputs: {}
+      outputs: {}
+      description: "Executes children sequentially"
+    failure_propagation: |
+      Child FAILURE -> Parent FAILURE (immediate)
+      Child SUCCESS -> Continue to next child
+      Child RUNNING -> Parent RUNNING (pause here)
+    state:
+      _current_child_index:
+        type: int
+        description: "Index of child currently executing"
+        reset_to: 0
+
+  Selector:
+    description: |
+      Executes children in order until one succeeds or all fail.
+      Short-circuits on first SUCCESS.
+    behavior:
+      - "Tick children left-to-right"
+      - "If child returns SUCCESS: return SUCCESS immediately"
+      - "If child returns RUNNING: return RUNNING, resume from this child next tick"
+      - "If all children return FAILURE: return FAILURE"
+    contract:
+      inputs: {}
+      outputs: {}
+      description: "Tries children until one succeeds"
+    failure_propagation: |
+      Child SUCCESS -> Parent SUCCESS (immediate)
+      Child FAILURE -> Continue to next child
+      Child RUNNING -> Parent RUNNING (pause here)
+    state:
+      _current_child_index:
+        type: int
+        reset_to: 0
+
+  Parallel:
+    description: |
+      Executes all children concurrently with configurable success policy.
+    behavior:
+      - "Tick ALL children every tick (not truly concurrent, sequential in tick)"
+      - "Each child gets isolated scope (no cross-child visibility mid-tick)"
+      - "After all children tick, merge scopes per merge_strategy"
+      - "Return based on policy"
+    policies:
+      REQUIRE_ALL:
+        description: "SUCCESS if all succeed, FAILURE if any fail"
+        success_condition: "All children SUCCESS"
+        failure_condition: "Any child FAILURE"
+      REQUIRE_ONE:
+        description: "SUCCESS if any succeeds, FAILURE if all fail"
+        success_condition: "Any child SUCCESS"
+        failure_condition: "All children FAILURE"
+      REQUIRE_N:
+        description: "SUCCESS if N succeed, FAILURE if too many fail"
+        success_condition: "N children SUCCESS"
+        failure_condition: "More than (total - N) FAILURE"
+    merge_strategies:
+      LAST_WINS:
+        description: "Last child's value wins on conflict"
+        conflict_handling: "No conflict - always succeeds"
+      FIRST_WINS:
+        description: "First child's value wins on conflict"
+        conflict_handling: "No conflict - always succeeds"
+      COLLECT:
+        description: "Collect all values into list"
+        conflict_handling: "No conflict - creates list"
+      MERGE_DICT:
+        description: "Deep merge dicts, later wins"
+        conflict_handling: "No conflict for dicts"
+      FAIL_ON_CONFLICT:
+        description: "Return FAILURE if any key has multiple writers"
+        conflict_handling: "E8001 on conflict, Parallel returns FAILURE"
+    contract:
+      inputs: {}
+      outputs:
+        _parallel_conflicts:
+          type: "List[Dict]"
+          description: "Conflict info if FAIL_ON_CONFLICT triggered"
+        _parallel_child_errors:
+          type: "List[Dict]"
+          description: "Errors from failed children"
+    failure_propagation: |
+      Depends on policy:
+      - REQUIRE_ALL: Any FAILURE -> Parent FAILURE
+      - REQUIRE_ONE: All FAILURE -> Parent FAILURE
+      - Merge conflict (FAIL_ON_CONFLICT) -> Parent FAILURE
+    state:
+      _child_statuses:
+        type: "List[RunStatus]"
+        description: "Last status of each child"
+      _merge_strategy:
+        type: MergeStrategyType
+
+  ForEach:
+    description: |
+      Iterate over collection, executing children for each item.
+    behavior:
+      - "Read collection from blackboard key"
+      - "For each item, set iteration variable and tick children"
+      - "If empty collection: return SUCCESS (not FAILURE)"
+      - "If child returns FAILURE: depends on policy"
+    contract:
+      inputs:
+        collection_key:
+          type: "List[Any]"
+          description: "Key containing iterable"
+      outputs:
+        _for_each_results:
+          type: "List[Any]"
+          description: "Results from each iteration"
+    options:
+      continue_on_failure:
+        type: bool
+        default: false
+        description: "Continue to next item if child fails"
+      min_items:
+        type: int
+        default: 0
+        description: "Minimum items required (0 = empty OK)"
+    failure_propagation: |
+      Empty collection (min_items met): SUCCESS
+      Empty collection (min_items not met): FAILURE
+      Child FAILURE (continue_on_failure=false): Parent FAILURE
+      Child FAILURE (continue_on_failure=true): Continue, track error
+
+# Decorator Nodes
+decorator_nodes:
+  Timeout:
+    description: "Fails child if it runs too long"
+    behavior:
+      - "Track time since child started RUNNING"
+      - "If timeout exceeded: reset child, return FAILURE"
+    contract:
+      outputs:
+        _timeout_triggered:
+          type: bool
+    config:
+      timeout_ms:
+        type: int
+        required: true
+        description: "Maximum RUNNING time in milliseconds"
+    failure_propagation: |
+      Child SUCCESS -> Parent SUCCESS
+      Child FAILURE -> Parent FAILURE
+      Timeout exceeded -> Parent FAILURE (E6001 emitted)
+
+  Retry:
+    description: "Retries child on failure"
+    behavior:
+      - "On child FAILURE: increment retry count, reset child, try again"
+      - "On max retries: return FAILURE"
+      - "On child SUCCESS: return SUCCESS"
+    config:
+      max_retries:
+        type: int
+        required: true
+      backoff_ms:
+        type: int
+        default: 0
+        description: "Delay between retries"
+    state:
+      _retry_count:
+        type: int
+        reset_to: 0
+    failure_propagation: |
+      Child SUCCESS -> Parent SUCCESS
+      Child FAILURE (retries remaining) -> Reset, retry
+      Child FAILURE (no retries) -> Parent FAILURE
+
+  Guard:
+    description: "Only ticks child if condition passes"
+    behavior:
+      - "Evaluate condition (Lua expression or Python callable)"
+      - "If true: tick child, return child status"
+      - "If false: return FAILURE (child not ticked)"
+    config:
+      condition:
+        type: "Union[str, Callable]"
+        required: true
+        description: "Lua expression or Python function returning bool"
+    failure_propagation: |
+      Condition false -> Parent FAILURE (child not run)
+      Condition true + Child SUCCESS -> Parent SUCCESS
+      Condition true + Child FAILURE -> Parent FAILURE
+
+  Cooldown:
+    description: "Prevents child from running too frequently"
+    behavior:
+      - "Track last completion time"
+      - "If cooldown elapsed: tick child"
+      - "If cooldown not elapsed: return FAILURE"
+    config:
+      cooldown_ms:
+        type: int
+        required: true
+    state:
+      _last_completion_at:
+        type: "Optional[datetime]"
+        reset_to: null
+    failure_propagation: |
+      Cooldown not elapsed -> Parent FAILURE
+      Cooldown elapsed + Child status -> Parent gets child status
+
+  Inverter:
+    description: "Inverts child result (SUCCESS <-> FAILURE)"
+    behavior:
+      - "Tick child"
+      - "SUCCESS becomes FAILURE, FAILURE becomes SUCCESS"
+      - "RUNNING stays RUNNING"
+    failure_propagation: |
+      Child SUCCESS -> Parent FAILURE
+      Child FAILURE -> Parent SUCCESS
+      Child RUNNING -> Parent RUNNING
+
+  AlwaysSucceed:
+    description: "Converts any completion to SUCCESS"
+    behavior:
+      - "Tick child"
+      - "Both SUCCESS and FAILURE become SUCCESS"
+      - "RUNNING stays RUNNING"
+    failure_propagation: |
+      Child SUCCESS -> Parent SUCCESS
+      Child FAILURE -> Parent SUCCESS
+      Child RUNNING -> Parent RUNNING
+
+  AlwaysFail:
+    description: "Converts any completion to FAILURE"
+    failure_propagation: |
+      Child SUCCESS -> Parent FAILURE
+      Child FAILURE -> Parent FAILURE
+      Child RUNNING -> Parent RUNNING
+
+# Leaf Nodes
+leaf_nodes:
+  Action:
+    description: "Executes a Python function"
+    behavior:
+      - "Call configured function with blackboard access"
+      - "Function returns RunStatus"
+      - "May return RUNNING for async operations"
+    config:
+      fn:
+        type: str
+        required: true
+        description: "Dotted path to function (e.g., 'oracle.load_context')"
+    contract:
+      description: "Defined per action via @action_contract decorator"
+    errors:
+      - code: E4003
+        condition: "Function path doesn't resolve"
+
+  Condition:
+    description: "Evaluates a boolean condition"
+    behavior:
+      - "Evaluate condition"
+      - "Return SUCCESS if true, FAILURE if false"
+      - "Never returns RUNNING"
+    config:
+      condition:
+        type: "Union[str, Callable]"
+        required: true
+    contract:
+      description: "Inputs are condition dependencies, no outputs"
+
+  LLMCall:
+    description: "Makes LLM API call with streaming support"
+    behavior:
+      - "First tick: initiate request, return RUNNING"
+      - "Subsequent ticks: check completion"
+      - "On completion: write response to blackboard, return SUCCESS"
+      - "On error: write error, return FAILURE"
+    config:
+      model:
+        type: str
+        required: true
+      prompt_key:
+        type: str
+        required: true
+        description: "Blackboard key containing prompt"
+      response_key:
+        type: str
+        required: true
+        description: "Blackboard key to write response"
+      stream_to:
+        type: str
+        required: false
+        description: "Blackboard key for streaming chunks"
+      timeout:
+        type: int
+        default: 120
+        description: "Timeout in seconds"
+      budget_tokens:
+        type: int
+        required: false
+        description: "Max tokens for this call"
+    contract:
+      inputs:
+        prompt_key:
+          type: "PromptContent"
+      outputs:
+        response_key:
+          type: "LLMResponse"
+        stream_to:
+          type: "StreamChunk"
+          optional: true
+    errors:
+      - code: E6001
+        condition: "Request timeout"
+      - code: E6003
+        condition: "LLM API error"
+    state:
+      _request_id:
+        type: "Optional[str]"
+      _partial_response:
+        type: str
+      _tokens_used:
+        type: int
+
+  Script:
+    description: "Executes Lua script"
+    behavior:
+      - "Execute Lua code in sandbox"
+      - "Script accesses blackboard via ctx.bb"
+      - "Script returns {status='success'|'failure'|'running', ...}"
+      - "Parse return value, update blackboard, return status"
+    config:
+      code:
+        type: str
+        required: false
+        description: "Inline Lua code"
+      file:
+        type: str
+        required: false
+        description: "Path to Lua file (relative to tree)"
+    contract:
+      description: "Declared in Lua via BT.contract() call"
+    errors:
+      - code: E5001
+        condition: "Lua syntax error"
+      - code: E5002
+        condition: "Lua runtime error"
+      - code: E5003
+        condition: "Script timeout"
+    timeout:
+      default_ms: 5000
+      max_ms: 30000
+    failure_propagation: |
+      Script returns {status='success'} -> SUCCESS
+      Script returns {status='failure', reason='...'} -> FAILURE (intentional, E5004 logged)
+      Script throws error -> FAILURE (bug, E5002 logged with traceback)
+      Script timeout -> FAILURE (E5003)
+
+  SubtreeRef:
+    description: "References another tree as subtree"
+    behavior:
+      - "Resolve tree from registry"
+      - "Create child blackboard scope"
+      - "Tick subtree root"
+      - "Merge results back per merge config"
+    config:
+      tree_name:
+        type: str
+        required: true
+        description: "Name of tree to reference"
+      lazy:
+        type: bool
+        default: false
+        description: "If true, resolve at runtime instead of load time"
+    errors:
+      - code: E3001
+        condition: "Tree not found"
+      - code: E3002
+        condition: "Circular reference"
+
+  # MCP Tool Integration Leaves (see contracts/integrations.yaml for full details)
+
+  Tool:
+    description: "Executes any MCP tool from the registry"
+    behavior:
+      - "Look up tool in ToolRegistry"
+      - "Interpolate parameters from blackboard (${bb.key} syntax)"
+      - "For sync tools: execute, write result, return SUCCESS/FAILURE"
+      - "For async tools: return RUNNING, track request_id, check completion"
+    lua_api: |
+      BT.tool("search_notes", {
+        query = "${bb.user_query}",
+        limit = 10,
+        output = "search_results"
+      })
+    config:
+      tool_name:
+        type: str
+        required: true
+        description: "MCP tool name from registry"
+      params:
+        type: "Dict[str, Any]"
+        description: "Tool parameters (supports ${bb.key} interpolation)"
+      output:
+        type: str
+        required: true
+        description: "Blackboard key for result"
+      timeout:
+        type: int
+        description: "Override default timeout (ms)"
+    contract:
+      inputs: {}  # Dynamic based on tool
+      outputs:
+        output: { type: Any }
+        _tool_error: { type: str, optional: true }
+        _tool_duration_ms: { type: float }
+    errors:
+      - code: E4003
+        condition: "Tool not found in registry"
+      - code: E6001
+        condition: "Tool timeout"
+      - code: E2001
+        condition: "Missing required tool parameter"
+    state:
+      _request_id:
+        type: "Optional[str]"
+      _tool_start_time:
+        type: "Optional[datetime]"
+
+  Oracle:
+    description: "Multi-source oracle query with streaming support"
+    behavior:
+      - "First tick: initiate oracle request via OracleBridge"
+      - "During streaming: update stream_to key with chunks"
+      - "On completion: write full response to output key"
+      - "Emit llm.request.complete event with token usage"
+    lua_api: |
+      BT.oracle({
+        question = "${bb.user_question}",
+        sources = {"code", "vault"},
+        stream_to = "partial_response",
+        output = "oracle_answer"
+      })
+    config:
+      question:
+        type: str
+        required: true
+        description: "Natural language question"
+      sources:
+        type: "List[str]"
+        default: ["code", "vault", "threads"]
+        description: "Filter: code, vault, threads"
+      explain:
+        type: bool
+        default: false
+        description: "Include reasoning in response"
+      stream_to:
+        type: str
+        description: "Blackboard key for streaming chunks"
+      output:
+        type: str
+        required: true
+        description: "Blackboard key for final response"
+    contract:
+      inputs:
+        question: { type: str }
+      optional_inputs:
+        sources: { type: "List[str]" }
+      outputs:
+        output: { type: OracleResponse }
+        stream_to: { type: str, optional: true }
+        _oracle_tokens_used: { type: int }
+    errors:
+      - code: E6001
+        condition: "Request timeout"
+      - code: E6003
+        condition: "Oracle API error"
+    timeout:
+      default_ms: 120000
+    state:
+      _request_id:
+        type: "Optional[str]"
+      _chunks_received:
+        type: int
+
+  CodeSearch:
+    description: "Code search operations via CodeRAG"
+    behavior:
+      - "Execute search operation via CodeRAGService"
+      - "Supports: search (semantic), definition, references, repo_map"
+      - "Results written to output blackboard key"
+      - "Async operation, returns RUNNING until complete"
+    lua_api: |
+      BT.code_search({
+        operation = "search",
+        query = "${bb.search_query}",
+        limit = 20,
+        output = "code_results"
+      })
+    config:
+      operation:
+        type: str
+        required: true
+        enum: [search, definition, references, repo_map]
+        description: "Type of code search operation"
+      query:
+        type: str
+        description: "Search query or symbol name"
+      limit:
+        type: int
+        default: 10
+        description: "Max results to return"
+      language:
+        type: str
+        description: "Filter by language (python, typescript, etc.)"
+      file_pattern:
+        type: str
+        description: "Glob pattern for files"
+      scope:
+        type: str
+        description: "Directory scope for repo_map"
+      output:
+        type: str
+        required: true
+        description: "Blackboard key for results"
+    contract:
+      inputs:
+        query: { type: str, optional_for: [repo_map] }
+      outputs:
+        output: { type: "Union[List[CodeSearchResult], DefinitionResult, RepoMapResult]" }
+        _code_search_duration_ms: { type: float }
+    errors:
+      - code: E6001
+        condition: "Search timeout"
+      - code: E4001
+        condition: "Project not indexed"
+    timeout:
+      default_ms: 60000
+    cacheable:
+      repo_map: true
+      search: false
+
+  VaultSearch:
+    description: "Search vault notes via BM25"
+    behavior:
+      - "Execute search_notes MCP tool"
+      - "Filter by tags if provided"
+      - "Results include BM25 score and snippets"
+    lua_api: |
+      BT.vault_search({
+        query = "${bb.query}",
+        tags = {"project", "design"},
+        limit = 5,
+        output = "notes"
+      })
+    config:
+      query:
+        type: str
+        required: true
+      tags:
+        type: "List[str]"
+        description: "Filter by tags"
+      limit:
+        type: int
+        default: 10
+      output:
+        type: str
+        required: true
+    contract:
+      inputs:
+        query: { type: str }
+      optional_inputs:
+        tags: { type: "List[str]" }
+      outputs:
+        output: { type: "List[SearchResult]" }
+
+# Error Propagation Summary
+error_propagation_rules:
+  description: |
+    Complete rules for how errors/failures propagate through the tree.
+    These rules are MANDATORY and must be followed by all implementations.
+
+  general_rules:
+    - rule: "FAILURE from leaf is the leaf's decision (condition false, action failed)"
+      propagation: "Composite handles per its semantics"
+
+    - rule: "FAILURE from composite is based on policy (Sequence/Selector/Parallel)"
+      propagation: "Documented per composite type above"
+
+    - rule: "FAILURE from decorator is decorator's decision (may transform or propagate)"
+      propagation: "Documented per decorator type above"
+
+    - rule: "Exceptions in _tick() are caught and converted to FAILURE"
+      propagation: "Error logged, node returns FAILURE"
+
+    - rule: "Contract violations (E2002, E2003) are warnings, not failures"
+      propagation: "Logged but execution continues"
+
+    - rule: "Contract missing input (E2001) causes immediate FAILURE"
+      propagation: "Node fails without executing _tick()"
+
+  failure_trace:
+    description: |
+      All FAILURE results should be traced for debugging.
+      Trace written to _failure_trace blackboard key.
+    structure:
+      - node_id
+      - node_path
+      - error_code (if applicable)
+      - reason
+      - timestamp
+    max_entries: 50
