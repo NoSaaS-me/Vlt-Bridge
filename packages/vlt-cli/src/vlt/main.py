@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.prompt import Prompt, Confirm
 import json
 import os
+import sys
 import time
 import logging
 from vlt.core.migrations import init_db
@@ -751,6 +752,119 @@ def daemon_logs(
             print(result.stdout)
         except Exception as e:
             print(f"[red]Error reading log file: {e}[/red]")
+
+
+def _install_shell_snippet(rc_file: Path, snippet: str, force: bool, console: Console, shell_name: str) -> None:
+    """Append snippet to shell rc file if not already present."""
+    marker = "vlt session-relay"
+    if rc_file.exists():
+        content = rc_file.read_text()
+        if marker in content:
+            if not force:
+                console.print(f"[yellow]![/yellow] {shell_name} config already has vlt relay (use --force to overwrite)")
+                return
+            # Remove existing block — fish uses 'end', bash/zsh use '}'
+            lines = content.splitlines(keepends=True)
+            filtered = []
+            skip = False
+            for line in lines:
+                if marker in line:
+                    skip = True
+                if not skip:
+                    filtered.append(line)
+                if skip and line.strip() in ("end", "}"):
+                    skip = False
+            content = "".join(filtered)
+            rc_file.write_text(content)
+
+    with open(rc_file, "a") as f:
+        f.write(snippet)
+    console.print(f"[green]✓[/green] {shell_name} function written to {rc_file}")
+
+
+@daemon_app.command("install")
+def daemon_install(
+    shell: Optional[str] = typer.Option(None, help="Shell to install for (fish/bash/zsh). Auto-detected if not specified."),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing configuration"),
+):
+    """
+    Install vlt daemon hooks into shell and Claude Code settings.
+
+    This sets up:
+    1. Shell function: 'claude' -> 'vlt session-relay' (transparent wrapper)
+    2. Claude Code hooks: SessionStart/PostToolUse/Stop/UserPromptSubmit -> daemon webhook
+    """
+    from vlt.config import get_settings
+
+    settings = get_settings()
+    daemon_port = getattr(settings, "daemon_port", 8765)
+    hook_url = f"http://localhost:{daemon_port}/api/hooks"
+
+    # ── Detect shell ──────────────────────────────────────────────────────
+    detected_shell = shell or Path(os.environ.get("SHELL", "")).name or "bash"
+
+    console = Console()
+
+    # ── Fish ──────────────────────────────────────────────────────────────
+    if detected_shell == "fish":
+        fish_config = Path.home() / ".config" / "fish" / "config.fish"
+        fish_snippet = """
+# vlt session-relay — installed by `vlt daemon install`
+function claude
+    vlt session-relay $argv
+end
+"""
+        _install_shell_snippet(fish_config, fish_snippet, force, console, "fish")
+
+    # ── Bash / Zsh ────────────────────────────────────────────────────────
+    elif detected_shell in ("bash", "zsh"):
+        rc_file = Path.home() / (".bashrc" if detected_shell == "bash" else ".zshrc")
+        bash_snippet = """
+# vlt session-relay — installed by `vlt daemon install`
+claude() { vlt session-relay "$@"; }
+"""
+        _install_shell_snippet(rc_file, bash_snippet, force, console, detected_shell)
+
+    else:
+        console.print(f"[yellow]![/yellow] Unknown shell '{detected_shell}'. Skipping shell function install.")
+        console.print("[dim]Supported: fish, bash, zsh. You can manually add: claude() { vlt session-relay \"$@\"; }[/dim]")
+
+    # ── Claude Code hooks ─────────────────────────────────────────────────
+    claude_settings_path = Path.home() / ".claude" / "settings.json"
+    claude_settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if claude_settings_path.exists():
+        with open(claude_settings_path) as f:
+            claude_settings = json.load(f)
+    else:
+        claude_settings = {}
+
+    hooks = claude_settings.setdefault("hooks", {})
+
+    hook_cmd = f"curl -s -X POST {hook_url} -H 'Content-Type: application/json' -d @- &"
+    # New Claude Code hook format: {"hooks": [{"type": "command", "command": "..."}]}
+    hook_entry = {"hooks": [{"type": "command", "command": hook_cmd}]}
+
+    for event in ["SessionStart", "PostToolUse", "Stop", "UserPromptSubmit"]:
+        existing = hooks.get(event, [])
+        # Check if already installed (check nested hooks array for our URL)
+        already = any(
+            hook_url in inner.get("command", "")
+            for h in existing if isinstance(h, dict)
+            for inner in h.get("hooks", []) if isinstance(inner, dict)
+        )
+        if not already:
+            existing.append(hook_entry)
+            hooks[event] = existing
+
+    with open(claude_settings_path, "w") as f:
+        json.dump(claude_settings, f, indent=2)
+
+    console.print(f"[green]✓[/green] Claude Code hooks written to {claude_settings_path}")
+    console.print()
+    console.print("[bold]Setup complete![/bold] Changes take effect in:")
+    console.print("  - New terminal sessions (shell function)")
+    console.print("  - New Claude Code sessions (hooks)")
 
 
 # ...
@@ -4555,6 +4669,13 @@ def bt_breakpoint(
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(code=1)
+
+
+@app.command("session-relay", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def session_relay_cmd(ctx: typer.Context):
+    """Transparently wrap claude with vlt daemon session relay (PTY recording + web access)."""
+    from vlt.commands.session_relay import run_relay
+    sys.exit(run_relay(ctx.args))
 
 
 if __name__ == "__main__":

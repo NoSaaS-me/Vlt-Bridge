@@ -1,0 +1,354 @@
+"""
+vlt session-relay — Transparent PTY bridge for Claude Code sessions.
+
+Wraps the `claude` CLI so the vlt daemon can relay terminal I/O to the web UI.
+The user experience is identical to running `claude` directly.
+
+Platform support:
+  Linux/macOS: os.openpty() + select (stdlib only)
+  Windows:     pywinpty ConPTY (if available), else graceful fallback
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import platform
+import shlex
+import shutil
+import signal
+import struct
+import sys
+import termios
+import tty
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+
+def find_real_claude() -> str:
+    """Find the real claude binary, not a shell function wrapper."""
+    # On Linux/Mac, shutil.which follows PATH — since we're a subprocess
+    # (not a shell function), there's no fish function shadowing us here.
+    # But be defensive: skip any path that looks like a vlt wrapper.
+    for candidate in _which_all("claude"):
+        # Skip if it's a symlink to vlt or contains "vlt"
+        try:
+            real = os.path.realpath(candidate)
+            if "vlt" not in real.lower():
+                return candidate
+        except OSError:
+            continue
+    raise RuntimeError("claude binary not found in PATH")
+
+
+def _which_all(name: str) -> list[str]:
+    """Return all PATH entries for a command name."""
+    results = []
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    for d in path_dirs:
+        full = os.path.join(d, name)
+        if os.path.isfile(full) and os.access(full, os.X_OK):
+            results.append(full)
+    return results
+
+
+def detect_vlt_project(cwd: str) -> Optional[str]:
+    """Walk up from cwd looking for vlt.toml to identify project_id."""
+    path = Path(cwd)
+    for parent in [path] + list(path.parents):
+        toml = parent / "vlt.toml"
+        if toml.exists():
+            try:
+                import tomllib  # Python 3.11+
+            except ImportError:
+                try:
+                    import tomli as tomllib
+                except ImportError:
+                    return None
+            with open(toml, "rb") as f:
+                data = tomllib.load(f)
+            return data.get("project", {}).get("id") or data.get("project_id")
+    return None
+
+
+def get_daemon_url() -> str:
+    """Get the daemon base URL from settings."""
+    try:
+        from vlt.config import get_settings
+        settings = get_settings()
+        port = getattr(settings, "daemon_port", 8765)
+        return f"http://localhost:{port}"
+    except Exception:
+        return "http://localhost:8765"
+
+
+def register_session(session_id: str, cwd: str, pid: int, args: list[str]) -> None:
+    """Register this session with the daemon (best-effort, non-blocking)."""
+    try:
+        import httpx
+        project_id = detect_vlt_project(cwd)
+        httpx.post(
+            f"{get_daemon_url()}/api/sessions/register",
+            json={
+                "session_id": session_id,
+                "cwd": cwd,
+                "project_id": project_id,
+                "pid": pid,
+                "args": args,
+            },
+            timeout=1.0,
+        )
+    except Exception:
+        pass  # Daemon not running — relay still works for the user
+
+
+def deregister_session(session_id: str) -> None:
+    """Deregister session from daemon on exit (best-effort)."""
+    try:
+        import httpx
+        httpx.post(
+            f"{get_daemon_url()}/api/sessions/deregister",
+            json={"session_id": session_id},
+            timeout=1.0,
+        )
+    except Exception:
+        pass
+
+
+# ── Linux/macOS PTY relay ────────────────────────────────────────────────────
+
+def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
+    """
+    POSIX (Linux/macOS) relay using os.openpty().
+
+    Creates a PTY pair:
+      master_fd <- daemon reads this (terminal output stream)
+      slave_fd  -> attached to claude's stdin/stdout/stderr
+
+    The user's terminal is bridged:
+      user stdin  -> master_fd  -> claude's stdin
+      claude's stdout/stderr -> master_fd -> user stdout + daemon stream
+    """
+    import select
+    import subprocess
+    import threading
+
+    master_fd, slave_fd = os.openpty()
+
+    # Match terminal size
+    try:
+        import fcntl
+        winsize = struct.pack("HHHH", 0, 0, 0, 0)
+        winsize = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, winsize)
+        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+    except Exception:
+        pass
+
+    env = os.environ.copy()
+    env["VLT_SESSION_ID"] = session_id
+    env["TERM"] = os.environ.get("TERM", "xterm-256color")
+
+    proc = subprocess.Popen(
+        [claude_bin] + args,
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        close_fds=True,
+        env=env,
+        preexec_fn=os.setsid,
+    )
+    os.close(slave_fd)
+
+    # Register with daemon (includes our real PID, claude's PID is proc.pid)
+    register_session(session_id, os.getcwd(), proc.pid, args)
+
+    # WebSocket stream thread (best-effort, daemon may not be running)
+    ws_write_queue = None
+
+    def start_ws_relay():
+        """Background thread: opens WebSocket to daemon and streams output."""
+        nonlocal ws_write_queue
+        try:
+            import queue as _queue
+            import websocket  # websocket-client
+
+            q: _queue.Queue = _queue.Queue(maxsize=1000)
+            daemon_base = get_daemon_url().replace("http://", "ws://").replace("https://", "wss://")
+            ws_url = f"{daemon_base}/ws/sessions/{session_id}"
+
+            def on_message(ws, message):
+                # Received inject/resize from web UI
+                try:
+                    data = json.loads(message)
+                    if data.get("type") == "inject":
+                        text = data.get("data", "")
+                        os.write(master_fd, text.encode())
+                    elif data.get("type") == "resize":
+                        cols = data.get("cols", 80)
+                        rows = data.get("rows", 24)
+                        win = struct.pack("HHHH", rows, cols, 0, 0)
+                        import fcntl
+                        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, win)
+                except Exception:
+                    pass
+
+            def ws_send_loop(ws):
+                while True:
+                    chunk = q.get()
+                    if chunk is None:
+                        break
+                    try:
+                        ws.send_binary(chunk)
+                    except Exception:
+                        break
+
+            ws = websocket.WebSocketApp(ws_url, on_message=on_message)
+            send_thread = threading.Thread(target=ws_send_loop, args=(ws,), daemon=True)
+            send_thread.start()
+
+            # Expose queue for main loop
+            ws_write_queue = q
+
+            ws.run_forever(ping_interval=30)
+            q.put(None)  # stop send thread
+        except Exception:
+            pass  # websocket-client not installed or daemon not running
+
+    ws_thread = threading.Thread(target=start_ws_relay, daemon=True)
+    ws_thread.start()
+
+    # Save terminal settings, switch to raw mode
+    old_settings = termios.tcgetattr(sys.stdin.fileno())
+    tty.setraw(sys.stdin.fileno())
+
+    # SIGWINCH: propagate terminal resize to PTY
+    def handle_sigwinch(sig, frame):
+        try:
+            import fcntl
+            winsize = struct.pack("HHHH", 0, 0, 0, 0)
+            winsize = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, winsize)
+            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+        except Exception:
+            pass
+
+    signal.signal(signal.SIGWINCH, handle_sigwinch)
+
+    try:
+        while True:
+            try:
+                r, _, _ = select.select([sys.stdin.fileno(), master_fd], [], [], 0.1)
+            except (ValueError, OSError):
+                break
+
+            if sys.stdin.fileno() in r:
+                try:
+                    data = os.read(sys.stdin.fileno(), 4096)
+                    if data:
+                        os.write(master_fd, data)
+                except OSError:
+                    break
+
+            if master_fd in r:
+                try:
+                    data = os.read(master_fd, 4096)
+                    if not data:
+                        break
+                    os.write(sys.stdout.fileno(), data)
+                    # Forward to WebSocket stream
+                    if ws_write_queue is not None:
+                        try:
+                            ws_write_queue.put_nowait(data)
+                        except Exception:
+                            pass
+                except OSError:
+                    break
+
+            if proc.poll() is not None:
+                break
+
+    finally:
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+        signal.signal(signal.SIGWINCH, signal.SIG_DFL)
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        deregister_session(session_id)
+
+    proc.wait()
+    return proc.returncode
+
+
+# ── Windows ConPTY relay ────────────────────────────────────────────────────
+
+def _relay_windows(claude_bin: str, args: list[str], session_id: str) -> int:
+    """
+    Windows relay using pywinpty ConPTY.
+    Falls back to subprocess without relay if pywinpty not available.
+    """
+    try:
+        from winpty import PtyProcess
+    except ImportError:
+        # Graceful fallback: just run claude directly, no relay
+        import subprocess
+        proc = subprocess.run([claude_bin] + args)
+        return proc.returncode
+
+    import threading
+    import msvcrt
+
+    cols, rows = os.get_terminal_size()
+    proc = PtyProcess.spawn([claude_bin] + args, dimensions=(rows, cols))
+
+    register_session(session_id, os.getcwd(), os.getpid(), args)
+
+    def stdin_to_pty():
+        while proc.isalive():
+            try:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    proc.write(ch)
+            except Exception:
+                break
+
+    def pty_to_stdout():
+        while proc.isalive():
+            try:
+                data = proc.read(4096)
+                if data:
+                    sys.stdout.write(data)
+                    sys.stdout.flush()
+            except Exception:
+                break
+
+    t1 = threading.Thread(target=stdin_to_pty, daemon=True)
+    t2 = threading.Thread(target=pty_to_stdout, daemon=True)
+    t1.start()
+    t2.start()
+
+    proc.wait()
+    deregister_session(session_id)
+    return proc.exitstatus or 0
+
+
+# ── Public entry point ───────────────────────────────────────────────────────
+
+def run_relay(args: list[str]) -> int:
+    """
+    Main entry point. Called from the CLI command.
+    Detects platform and runs the appropriate relay.
+    """
+    session_id = str(uuid.uuid4())
+
+    try:
+        claude_bin = find_real_claude()
+    except RuntimeError as e:
+        print(f"vlt session-relay: {e}", file=sys.stderr)
+        return 1
+
+    if platform.system() == "Windows":
+        return _relay_windows(claude_bin, args, session_id)
+    else:
+        return _relay_posix(claude_bin, args, session_id)
