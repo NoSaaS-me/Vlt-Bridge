@@ -13,37 +13,41 @@ FRONTEND_PID_FILE="$PROJECT_ROOT/.frontend.pid"
 echo -e "${RED}Stopping Document Viewer Development Environment${NC}"
 echo "=================================================="
 
-# Stop Backend
-if [ -f "$BACKEND_PID_FILE" ]; then
-    BACKEND_PID=$(cat "$BACKEND_PID_FILE")
-    if ps -p $BACKEND_PID > /dev/null 2>&1; then
-        echo "Stopping backend (PID: $BACKEND_PID)..."
-        kill $BACKEND_PID
-        rm "$BACKEND_PID_FILE"
-        echo -e "${GREEN}✓ Backend stopped${NC}"
-    else
-        echo "Backend process not found (PID: $BACKEND_PID)"
-        rm "$BACKEND_PID_FILE"
-    fi
-else
-    echo "No backend PID file found"
-fi
+_stop_service() {
+    local pid_file="$1"
+    local label="$2"
+    local port="$3"
 
-# Stop Frontend
-if [ -f "$FRONTEND_PID_FILE" ]; then
-    FRONTEND_PID=$(cat "$FRONTEND_PID_FILE")
-    if ps -p $FRONTEND_PID > /dev/null 2>&1; then
-        echo "Stopping frontend (PID: $FRONTEND_PID)..."
-        kill $FRONTEND_PID
-        rm "$FRONTEND_PID_FILE"
-        echo -e "${GREEN}✓ Frontend stopped${NC}"
-    else
-        echo "Frontend process not found (PID: $FRONTEND_PID)"
-        rm "$FRONTEND_PID_FILE"
+    if [ -f "$pid_file" ]; then
+        local pid
+        pid=$(cat "$pid_file")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo "Stopping $label (PID: $pid and children)..."
+            # Kill the process group to catch uvicorn reload child workers
+            kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null
+            sleep 1
+            ps -p "$pid" > /dev/null 2>&1 && kill -9 "$pid" 2>/dev/null
+        fi
+        rm -f "$pid_file"
     fi
-else
-    echo "No frontend PID file found"
-fi
+
+    # Also kill anything still holding the port (catches orphaned children)
+    if [ -n "$port" ]; then
+        local port_pid
+        port_pid=$(lsof -ti tcp:"$port" 2>/dev/null)
+        if [ -n "$port_pid" ]; then
+            echo "Killing process on port $port (PID: $port_pid)..."
+            kill "$port_pid" 2>/dev/null
+            sleep 0.5
+            kill -0 "$port_pid" 2>/dev/null && kill -9 "$port_pid" 2>/dev/null
+        fi
+    fi
+
+    echo -e "${GREEN}✓ $label stopped${NC}"
+}
+
+_stop_service "$BACKEND_PID_FILE"  "Backend"  8000
+_stop_service "$FRONTEND_PID_FILE" "Frontend" 5173
 
 echo ""
 echo -e "${GREEN}Development servers stopped${NC}"

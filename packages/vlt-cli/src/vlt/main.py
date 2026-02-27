@@ -1,6 +1,6 @@
 import typer
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from rich import print
 from rich.table import Table
 from rich.markdown import Markdown

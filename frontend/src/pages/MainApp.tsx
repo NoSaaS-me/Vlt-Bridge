@@ -642,7 +642,7 @@ export function MainApp() {
         return;
       }
 
-      await moveNote(oldPath, newPath);
+      await moveNote(oldPath, newPath, selectedProjectId || undefined);
 
       // Refresh notes list
       const notesList = await listNotes(selectedProjectId || undefined);

@@ -100,39 +100,40 @@ class OracleBridge:
         # Key: user_id, Value: list of conversation messages
         self._conversation_history: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         # Cache for vlt command availability check
+        # Only True is cached permanently — False is never cached so transient failures retry
         self._vlt_available: Optional[bool] = None
-        # Cache for CodeRAG initialization status
-        self._coderag_initialized: Optional[bool] = None
+        # Note: CodeRAG initialized state is checked fresh each time (no cache)
+        # because user can initialize the index at any point after startup
 
     def _check_vlt_available(self) -> bool:
         """Check if vlt command is available.
 
+        Only caches True (success). Failure is not cached so the next call retries.
+        This prevents a transient startup failure from permanently breaking the bridge.
+
         Returns:
             True if vlt is available, False otherwise
         """
-        if self._vlt_available is not None:
-            return self._vlt_available
+        if self._vlt_available is True:
+            return True
 
         try:
-            # Use --help since vlt doesn't have --version
+            # Use --help since vlt doesn't have --version flag
             result = subprocess.run(
                 [self.vlt_command, "--help"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            # --help returns 0 on success
-            self._vlt_available = result.returncode == 0
-            if self._vlt_available:
+            if result.returncode == 0:
+                self._vlt_available = True
                 logger.info(f"vlt CLI available at: {self.vlt_command}")
+                return True
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
             logger.warning(f"Failed to check vlt availability: {e}")
-            self._vlt_available = False
 
-        if not self._vlt_available:
-            logger.warning(f"vlt command not available: {self.vlt_command}")
-
-        return self._vlt_available
+        logger.warning(f"vlt command not available: {self.vlt_command}")
+        return False
 
     def _check_coderag_initialized(self, project: Optional[str] = None) -> bool:
         """Check if CodeRAG index exists for the project.
@@ -164,31 +165,24 @@ class OracleBridge:
 
             if result.returncode != 0:
                 logger.warning(f"CodeRAG status check failed: returncode={result.returncode}, stderr={result.stderr}")
-                self._coderag_initialized = False
                 return False
 
             # Try to parse the status response
             try:
                 status = json.loads(result.stdout)
-                # Check if index exists based on status response
-                # Status can be "ready", "indexing", etc.
-                # Chunks can be in chunks_created or index_stats.chunks_count
                 is_ready = status.get("status") == "ready"
                 has_chunks = (
                     status.get("chunks_created", 0) > 0 or
                     status.get("index_stats", {}).get("chunks_count", 0) > 0
                 )
-                self._coderag_initialized = is_ready or has_chunks
-                logger.info(f"CodeRAG initialized check: status={status.get('status')}, chunks={has_chunks}, result={self._coderag_initialized}")
-                return self._coderag_initialized
+                initialized = is_ready or has_chunks
+                logger.info(f"CodeRAG initialized check: status={status.get('status')}, chunks={has_chunks}, result={initialized}")
+                return initialized
             except json.JSONDecodeError:
-                # If output isn't JSON, check for success indicators in text
-                self._coderag_initialized = "ready" in result.stdout.lower()
-                return self._coderag_initialized
+                return "ready" in result.stdout.lower()
 
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
             logger.warning(f"Failed to check CodeRAG status: {e}")
-            self._coderag_initialized = False
             return False
 
     def _run_vlt_command(
