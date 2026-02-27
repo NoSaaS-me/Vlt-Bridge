@@ -299,6 +299,34 @@ DDL_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_github_cache_lookup ON github_cache(repo, path, ref)",
+    # Asset metadata table (multi-format-files)
+    """
+    CREATE TABLE IF NOT EXISTS asset_metadata (
+        user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT 'default',
+        asset_path TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        ocr_text TEXT,
+        ocr_status TEXT NOT NULL DEFAULT 'skipped',
+        created TEXT NOT NULL,
+        updated TEXT NOT NULL,
+        PRIMARY KEY (user_id, project_id, asset_path)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_asset_metadata_user_project ON asset_metadata(user_id, project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_asset_metadata_ocr_status ON asset_metadata(user_id, project_id, ocr_status)",
+    # Asset FTS table (multi-format-files)
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS asset_fts USING fts5(
+        user_id UNINDEXED,
+        project_id UNINDEXED,
+        asset_path UNINDEXED,
+        filename,
+        ocr_text,
+        tokenize='porter unicode61'
+    )
+    """,
 )
 
 # Migration statements for existing databases
