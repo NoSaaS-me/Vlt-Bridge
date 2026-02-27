@@ -2,6 +2,7 @@ import type { Note, NoteSummary, NoteUpdateRequest, NoteCreateRequest, WikilinkR
 import type { SearchResult, Tag, IndexHealth } from '@/types/search';
 import type { User } from '@/types/user';
 import type { APIError } from '@/types/auth';
+import type { AssetSummary, AssetMetadata, AssetUploadResponse } from '@/types/asset';
 
 /**
  * Custom error class for API errors
@@ -381,5 +382,84 @@ export async function updateOracleSettings(enabled: boolean): Promise<OracleSett
   return apiFetch<OracleSettings>('/api/settings/oracle', {
     method: 'PUT',
     body: JSON.stringify({ oracle_mcp_enabled: enabled }),
+  });
+}
+
+// ============ Asset API ============
+
+export async function listAssets(folder?: string, projectId?: string): Promise<AssetSummary[]> {
+  const params = new URLSearchParams();
+  if (folder) params.set('folder', folder);
+  if (projectId) params.set('project_id', projectId);
+  const qs = params.toString() ? `?${params}` : '';
+  return apiFetch<AssetSummary[]>(`/api/assets${qs}`);
+}
+
+export async function getAssetMetadata(path: string, projectId?: string): Promise<AssetMetadata> {
+  const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  return apiFetch<AssetMetadata>(`/api/assets/${encodeURIComponent(path)}/metadata${params}`);
+}
+
+export async function deleteAsset(path: string, projectId?: string): Promise<void> {
+  const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  await apiFetch<void>(`/api/assets/${encodeURIComponent(path)}${params}`, { method: 'DELETE' });
+}
+
+export async function moveAsset(path: string, newPath: string, projectId?: string): Promise<void> {
+  const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  await apiFetch<void>(`/api/assets/${encodeURIComponent(path)}${params}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_path: newPath }),
+  });
+}
+
+/**
+ * Returns a URL for direct asset access (image/video/audio src attributes).
+ * Uses ?token= query param instead of Authorization header because HTML media
+ * elements (<img>, <video>, <audio>) cannot set custom request headers.
+ * NOTE: The backend /api/assets/{path} route must accept auth via BOTH
+ * the Authorization Bearer header AND the ?token= query param to support
+ * this use-case.
+ */
+export function getAssetUrl(path: string, projectId?: string): string {
+  const base = window.API_BASE_URL || 'http://localhost:8000';
+  const token = localStorage.getItem('auth_token') || '';
+  const params = new URLSearchParams({ token });
+  if (projectId) params.set('project_id', projectId);
+  return `${base}/api/assets/${encodeURIComponent(path)}?${params}`;
+}
+
+export async function uploadAsset(
+  file: File,
+  targetPath: string,
+  projectId?: string,
+  onProgress?: (pct: number) => void
+): Promise<AssetUploadResponse> {
+  const base = window.API_BASE_URL || 'http://localhost:8000';
+  const token = localStorage.getItem('auth_token') || '';
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('path', targetPath);
+  if (projectId) formData.append('project_id', projectId);
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${base}/api/assets/upload`);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText));
+      } else {
+        reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.send(formData);
   });
 }
