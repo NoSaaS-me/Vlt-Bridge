@@ -26,7 +26,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function getApiBase(): string {
-  return (window as unknown as { API_BASE_URL?: string }).API_BASE_URL || 'http://localhost:8000';
+  return (window as unknown as { API_BASE_URL?: string }).API_BASE_URL || '';
 }
 
 function getAuthToken(): string {

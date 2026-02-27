@@ -423,7 +423,8 @@ export async function moveAsset(path: string, newPath: string, projectId?: strin
  * this use-case.
  */
 export function getAssetUrl(path: string, projectId?: string): string {
-  const base = window.API_BASE_URL || 'http://localhost:8000';
+  // Use relative URL in dev (Vite proxies /api → backend); use API_BASE_URL in production.
+  const base = window.API_BASE_URL || '';
   const token = localStorage.getItem('auth_token') || '';
   const params = new URLSearchParams({ token });
   if (projectId) params.set('project_id', projectId);
@@ -436,7 +437,8 @@ export async function uploadAsset(
   projectId?: string,
   onProgress?: (pct: number) => void
 ): Promise<AssetUploadResponse> {
-  const base = window.API_BASE_URL || 'http://localhost:8000';
+  // Use relative URL in dev (Vite proxies /api → backend); use API_BASE_URL in production.
+  const base = window.API_BASE_URL || '';
   const token = localStorage.getItem('auth_token') || '';
   const formData = new FormData();
   formData.append('file', file);

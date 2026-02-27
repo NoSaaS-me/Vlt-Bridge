@@ -21,8 +21,9 @@ interface HtmlEditorProps {
 type ViewMode = 'source' | 'split' | 'preview';
 
 // Resolve the API base safely (matches pattern in services/api.ts)
+// Empty string = relative URL → goes through Vite proxy in dev.
 function getApiBase(): string {
-  return (window as unknown as { API_BASE_URL?: string }).API_BASE_URL || 'http://localhost:8000';
+  return (window as unknown as { API_BASE_URL?: string }).API_BASE_URL || '';
 }
 
 function getAuthToken(): string {

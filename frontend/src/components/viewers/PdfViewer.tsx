@@ -12,9 +12,10 @@ import { Badge } from '@/components/ui/badge';
 import { getAssetUrl, getAssetMetadata } from '@/services/api';
 import type { OcrStatus } from '@/types/asset';
 
-// react-pdf v10 worker setup
+// react-pdf v10 worker setup — must use the pdfjs-dist version bundled inside
+// react-pdf (5.4.296), not any top-level pdfjs-dist install (may differ).
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
+  'react-pdf/node_modules/pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url
 ).toString();
 
