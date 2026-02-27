@@ -33,6 +33,8 @@ interface FileUploadProps {
   projectId?: string;
   /** Pre-populate target path prefix (e.g. the current folder). */
   defaultFolder?: string;
+  /** Existing asset paths used to avoid overwrites (auto-dedup with -1, -2…). */
+  existingPaths?: string[];
 }
 
 type UploadStatus = 'pending' | 'uploading' | 'done' | 'error';
@@ -66,6 +68,25 @@ function buildTargetPath(file: File, defaultFolder?: string): string {
   return `${defaultFolder.replace(/\/$/, '')}/${name}`;
 }
 
+/** Return a path that doesn't collide with anything in `taken`.
+ *  e.g. "docs/foo.html" → "docs/foo-1.html" → "docs/foo-2.html" */
+function deduplicatePath(path: string, taken: Set<string>): string {
+  if (!taken.has(path)) return path;
+  const lastSlash = path.lastIndexOf('/');
+  const dir = lastSlash >= 0 ? path.slice(0, lastSlash + 1) : '';
+  const filename = lastSlash >= 0 ? path.slice(lastSlash + 1) : path;
+  const lastDot = filename.lastIndexOf('.');
+  const stem = lastDot >= 0 ? filename.slice(0, lastDot) : filename;
+  const ext = lastDot >= 0 ? filename.slice(lastDot) : '';
+  let counter = 1;
+  let candidate = `${dir}${stem}-${counter}${ext}`;
+  while (taken.has(candidate)) {
+    counter++;
+    candidate = `${dir}${stem}-${counter}${ext}`;
+  }
+  return candidate;
+}
+
 function uniqueId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -78,6 +99,7 @@ export function FileUpload({
   onUploadComplete,
   projectId,
   defaultFolder,
+  existingPaths = [],
 }: FileUploadProps) {
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -86,16 +108,22 @@ export function FileUpload({
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
-      const newItems: QueuedFile[] = acceptedFiles.map((file) => ({
-        id: uniqueId(),
-        file,
-        targetPath: buildTargetPath(file, defaultFolder),
-        status: 'pending' as UploadStatus,
-        progress: 0,
-      }));
-      setQueue((prev) => [...prev, ...newItems]);
+      // Build a set of all taken paths: existing on server + already queued
+      setQueue((prev) => {
+        const taken = new Set<string>([
+          ...existingPaths,
+          ...prev.map((i) => i.targetPath),
+        ]);
+        const newItems: QueuedFile[] = acceptedFiles.map((file) => {
+          const raw = buildTargetPath(file, defaultFolder);
+          const targetPath = deduplicatePath(raw, taken);
+          taken.add(targetPath); // reserve for next file in the same drop
+          return { id: uniqueId(), file, targetPath, status: 'pending', progress: 0 };
+        });
+        return [...prev, ...newItems];
+      });
     },
-    [defaultFolder]
+    [defaultFolder, existingPaths]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({

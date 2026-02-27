@@ -11,6 +11,24 @@ export default defineConfig({
     },
   },
   server: {
+    headers: {
+      // CSP set here (HTTP header) so all directives work — including frame-src,
+      // frame-ancestors, and https: sources for CDN resources in HTML preview iframes.
+      'Content-Security-Policy': [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https: blob:",
+        "style-src 'self' 'unsafe-inline' https:",
+        "img-src 'self' data: blob: https:",
+        "connect-src 'self' ws: wss: https:",
+        "font-src 'self' data: https:",
+        "frame-src 'self' blob:",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+      ].join('; '),
+      'X-Frame-Options': 'DENY',
+      'X-Content-Type-Options': 'nosniff',
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:8000',

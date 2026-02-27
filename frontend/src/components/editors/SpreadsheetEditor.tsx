@@ -196,7 +196,7 @@ interface SpreadsheetEditorProps {
   fileName?: string;
 }
 
-export function SpreadsheetEditor({ assetPath, fileName }: SpreadsheetEditorProps) {
+export function SpreadsheetEditor({ assetPath, projectId, fileName }: SpreadsheetEditorProps) {
   // Raw CSV data (rows × cols); row 0 is the header row
   const [rows, setRows] = useState<string[][]>([]);
   const [isDirty, setIsDirty] = useState(false);
@@ -216,7 +216,8 @@ export function SpreadsheetEditor({ assetPath, fileName }: SpreadsheetEditorProp
       try {
         const base = getApiBase();
         const token = getAuthToken();
-        const res = await fetch(`${base}/api/assets/${encodeURIComponent(assetPath)}`, {
+        const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+        const res = await fetch(`${base}/api/assets/${encodeURIComponent(assetPath)}${qs}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -249,8 +250,9 @@ export function SpreadsheetEditor({ assetPath, fileName }: SpreadsheetEditorProp
     try {
       const base = getApiBase();
       const token = getAuthToken();
+      const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
       const csv = Papa.unparse(rows);
-      const res = await fetch(`${base}/api/assets/${encodeURIComponent(assetPath)}`, {
+      const res = await fetch(`${base}/api/assets/${encodeURIComponent(assetPath)}${qs}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'text/csv',

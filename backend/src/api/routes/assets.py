@@ -7,7 +7,7 @@ import mimetypes
 from pathlib import Path
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from ...models.asset import AssetMetadata, AssetMoveRequest, AssetSearchResult, AssetSummary, AssetUploadResponse
@@ -254,6 +254,70 @@ async def get_asset(
         path=str(full_path),
         media_type=mime_type,
         filename=filename,
+    )
+
+
+@router.put("/api/assets/{asset_path:path}", response_model=AssetSummary)
+async def update_asset(
+    asset_path: str,
+    request: Request,
+    project_id: str = Query(DEFAULT_PROJECT_ID),
+    auth: AuthContext = Depends(require_auth_context),
+):
+    """Update the content of an existing text asset (HTML, CSV, TXT).
+
+    Accepts raw body bytes with any text/* content type. Does not re-trigger OCR.
+    """
+    user_id = auth.user_id
+
+    is_valid, msg = validate_asset_path(asset_path)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=msg)
+
+    data = await request.body()
+    if len(data) > MAX_ASSET_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large: {len(data)} bytes (max {MAX_ASSET_BYTES} bytes)",
+        )
+
+    vault = _get_vault()
+    indexer = _get_indexer()
+
+    # Verify file exists before allowing update
+    try:
+        full_path = vault.get_full_path(user_id, project_id, asset_path)
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail=f"Asset not found: {asset_path}")
+    except (ValueError, HTTPException):
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to resolve asset")
+
+    try:
+        vault.write_asset(user_id, project_id, asset_path, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        logger.exception("Failed to update asset %s for user %s", asset_path, user_id)
+        raise HTTPException(status_code=500, detail="Failed to update asset")
+
+    mime_type, _ = mimetypes.guess_type(asset_path)
+    mime_type = mime_type or "application/octet-stream"
+    stat = full_path.stat()
+
+    # Update index size/timestamp; preserve existing ocr_text and status
+    meta = indexer.get_asset_metadata(user_id, project_id, asset_path)
+    ocr_status = meta["ocr_status"] if meta else "skipped"  # type: ignore[assignment]
+
+    from datetime import datetime, timezone
+    updated = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return AssetSummary(
+        asset_path=asset_path,
+        mime_type=mime_type,
+        file_size=len(data),
+        ocr_status=ocr_status,
+        updated=updated,
     )
 
 

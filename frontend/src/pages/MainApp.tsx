@@ -1120,6 +1120,7 @@ export function MainApp() {
               ? selectedPath.substring(0, selectedPath.lastIndexOf('/')) || undefined
               : undefined
           }
+          existingPaths={assetSummaries.map((a) => a.asset_path)}
         />
       )}
 

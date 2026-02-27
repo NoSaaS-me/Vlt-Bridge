@@ -60,8 +60,9 @@ export function HtmlEditor({ assetPath, projectId, fileName }: HtmlEditorProps) 
 
     const base = getApiBase();
     const token = getAuthToken();
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
 
-    fetch(`${base}/api/assets/${encodeURIComponent(assetPath)}`, {
+    fetch(`${base}/api/assets/${encodeURIComponent(assetPath)}${qs}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
