@@ -369,3 +369,35 @@ class CodeRAGIndexJob(Base):
 
     # Relationship
     project: Mapped["Project"] = relationship()
+
+
+# ============================================================================
+# Session Relay - Agent Session Model
+# ============================================================================
+
+class AgentSession(Base):
+    """Live Claude Code agent session tracked by the daemon.
+
+    Sessions are discovered via three sources:
+    - "relay": The `vlt relay` command wraps claude in a PTY and registers
+      the session directly (full terminal stream relay).
+    - "hook": Claude Code lifecycle hooks POST to /api/hooks as events fire
+      (status updates only, no PTY stream).
+    - "discovery": The daemon's background ~/.claude/history.jsonl watcher
+      finds sessions that were never explicitly registered.
+    """
+    __tablename__ = "agent_sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # Claude session_id UUID
+    project_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    name: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # derived from cwd basename
+    cwd: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="idle")  # idle/thinking/executing/dead
+    model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    ctx_pct: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    args: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array
+    bypass_perms: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[str] = mapped_column(String, default="relay")  # relay/discovery/hook
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    last_activity: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())

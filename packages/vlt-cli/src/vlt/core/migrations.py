@@ -191,6 +191,28 @@ def apply_oracle_migrations():
         except Exception:
             pass  # Column already exists
 
+        # ============================================================
+        # Agent Sessions - Session Relay
+        # ============================================================
+
+        # Index for listing active sessions quickly
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_agent_session_status
+            ON agent_sessions(status)
+        """))
+
+        # Index for looking up by project
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_agent_session_project
+            ON agent_sessions(project_id)
+        """))
+
+        # Index for ordering by activity
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_agent_session_activity
+            ON agent_sessions(last_activity DESC)
+        """))
+
         conn.commit()
 
 

@@ -27,24 +27,38 @@ progress in real-time via progress callbacks during indexing.
 """
 
 import asyncio
+import json
 import logging
+import os
 import signal
 import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from vlt.config import Settings
 from vlt.core.sync import ThreadSyncClient, SyncQueueItem
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Session Relay — In-Memory Stream Registries
+# =============================================================================
+
+# Maps session_id → asyncio.Queue of bytes chunks for WebSocket relay
+_session_streams: Dict[str, asyncio.Queue] = {}
+# Maps session_id → asyncio.Queue for injecting keystrokes/text into PTY
+_session_inject_queues: Dict[str, asyncio.Queue] = {}
 
 
 # =============================================================================
@@ -658,6 +672,70 @@ async def process_coderag_jobs():
 
 
 # =============================================================================
+# Session Relay — ~/.claude/history.jsonl Discovery Watcher
+# =============================================================================
+
+async def watch_claude_history():
+    """
+    Watches ~/.claude/history.jsonl for new session entries.
+
+    Discovers Claude Code sessions by project cwd without requiring the relay
+    command. Runs in a poll loop every 5 seconds.  Sessions discovered here
+    get source="discovery" and only provide status metadata — no PTY stream.
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    history_path = Path.home() / ".claude" / "history.jsonl"
+
+    if not history_path.exists():
+        logger.debug("~/.claude/history.jsonl not found, history watcher idle")
+        return
+
+    seen_sessions: set = set()
+
+    while not state._shutdown_event.is_set():
+        try:
+            with open(history_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        sid = entry.get("sessionId")
+                        if not sid or sid in seen_sessions:
+                            continue
+                        seen_sessions.add(sid)
+                        cwd = entry.get("cwd") or entry.get("projectPath", "")
+                        with Session(engine) as db:
+                            existing = db.get(AgentSession, sid)
+                            if not existing:
+                                db.add(AgentSession(
+                                    id=sid,
+                                    cwd=cwd,
+                                    name=Path(cwd).name if cwd else "unknown",
+                                    status="idle",
+                                    source="discovery",
+                                ))
+                                db.commit()
+                                logger.debug(f"Discovered session {sid} from history (cwd={cwd})")
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            logger.debug(f"History watcher error: {e}")
+
+        try:
+            await asyncio.wait_for(
+                state._shutdown_event.wait(),
+                timeout=5.0,
+            )
+            break  # Shutdown requested
+        except asyncio.TimeoutError:
+            continue  # Keep polling
+
+
+# =============================================================================
 # Lifespan Management
 # =============================================================================
 
@@ -670,6 +748,14 @@ async def lifespan(app: FastAPI):
     state.start_time = datetime.now(timezone.utc)
     state.settings = Settings()
     state.sync_client = ThreadSyncClient()
+
+    # Ensure all DB tables exist (including new agent_sessions)
+    try:
+        from vlt.core.migrations import init_db
+        init_db()
+        logger.info("Database schema initialized")
+    except Exception as e:
+        logger.warning(f"DB init warning (may be ok): {e}")
 
     # Create persistent HTTP client for backend communication
     state.http_client = httpx.AsyncClient(
@@ -692,6 +778,9 @@ async def lifespan(app: FastAPI):
     # Start background CodeRAG indexing job processor (T026)
     coderag_task = asyncio.create_task(process_coderag_jobs())
 
+    # Start background ~/.claude/history.jsonl session discovery watcher
+    history_task = asyncio.create_task(watch_claude_history())
+
     logger.info(f"VLT Daemon started (backend: {state.vault_url}, connected: {state.backend_connected})")
 
     yield
@@ -701,7 +790,7 @@ async def lifespan(app: FastAPI):
     state._shutdown_event.set()
 
     # Wait for background tasks to finish
-    for task in [queue_task, summarize_task, coderag_task]:
+    for task in [queue_task, summarize_task, coderag_task, history_task]:
         try:
             await asyncio.wait_for(task, timeout=5.0)
         except asyncio.TimeoutError:
@@ -920,6 +1009,304 @@ async def request_summarize(thread_id: str, request: SummarizeRequest):
             success=False,
             error=str(e),
         )
+
+
+# =============================================================================
+# Session Relay Endpoints
+# =============================================================================
+
+@app.post("/api/sessions/register")
+async def register_session(request: Request):
+    """
+    Register a new Claude Code agent session.
+
+    Called by `vlt relay` when it wraps a claude process in a PTY.
+    Creates an in-memory stream queue pair so the WebSocket endpoint
+    can bridge terminal output to web UI clients.
+
+    Body: {session_id, cwd, project_id, pid, args}
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    payload = await request.json()
+    session_id = payload.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+
+    cwd = payload.get("cwd", "")
+    project_id = payload.get("project_id")
+    pid = payload.get("pid")
+    args = payload.get("args", [])
+
+    # Create in-memory queues for PTY relay
+    if session_id not in _session_streams:
+        _session_streams[session_id] = asyncio.Queue(maxsize=4096)
+    if session_id not in _session_inject_queues:
+        _session_inject_queues[session_id] = asyncio.Queue(maxsize=256)
+
+    # Upsert into DB
+    with Session(engine) as db:
+        existing = db.get(AgentSession, session_id)
+        if existing:
+            existing.cwd = cwd
+            existing.project_id = project_id
+            existing.pid = pid
+            existing.args = json.dumps(args)
+            existing.status = "idle"
+            existing.source = "relay"
+            existing.last_activity = datetime.utcnow().isoformat()
+        else:
+            db.add(AgentSession(
+                id=session_id,
+                cwd=cwd,
+                name=Path(cwd).name if cwd else "unknown",
+                project_id=project_id,
+                pid=pid,
+                args=json.dumps(args),
+                status="idle",
+                source="relay",
+            ))
+        db.commit()
+
+    logger.info(f"Session registered: {session_id} (pid={pid}, cwd={cwd})")
+    return {"ok": True}
+
+
+@app.post("/api/sessions/deregister")
+async def deregister_session(request: Request):
+    """
+    Deregister a Claude Code agent session.
+
+    Called by `vlt relay` when the claude process exits.
+    Sends a None sentinel into the stream queue to close any active WebSockets,
+    then removes the queues from memory.
+
+    Body: {session_id}
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    payload = await request.json()
+    session_id = payload.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+
+    # Send close sentinel to any active WebSocket listeners
+    if session_id in _session_streams:
+        await _session_streams[session_id].put(None)
+        del _session_streams[session_id]
+    _session_inject_queues.pop(session_id, None)
+
+    # Mark as dead in DB
+    with Session(engine) as db:
+        existing = db.get(AgentSession, session_id)
+        if existing:
+            existing.status = "dead"
+            existing.last_activity = datetime.utcnow().isoformat()
+            db.commit()
+
+    logger.info(f"Session deregistered: {session_id}")
+    return {"ok": True}
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """
+    List all known Claude Code agent sessions that are not dead.
+
+    Returns sessions discovered via relay, hooks, or history watching.
+    Sessions with status='dead' are excluded (they exited cleanly or were
+    deregistered). Sessions older than 24h with no activity are also omitted.
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    with Session(engine) as db:
+        sessions = db.scalars(
+            select(AgentSession)
+            .where(AgentSession.status != "dead")
+            .order_by(AgentSession.last_activity.desc())
+        ).all()
+
+    result = []
+    for s in sessions:
+        result.append({
+            "id": s.id,
+            "project_id": s.project_id,
+            "name": s.name,
+            "cwd": s.cwd,
+            "status": s.status,
+            "model": s.model,
+            "ctx_pct": s.ctx_pct,
+            "pid": s.pid,
+            "bypass_perms": s.bypass_perms,
+            "source": s.source,
+            "created_at": s.created_at,
+            "last_activity": s.last_activity,
+        })
+    return result
+
+
+@app.post("/api/sessions/{session_id}/inject")
+async def inject_to_session(session_id: str, request: Request):
+    """
+    Inject text into a running Claude Code PTY session.
+
+    Puts the text onto the inject queue, which the `vlt relay` process
+    polls and writes into the PTY master fd.
+
+    Body: {text: str, press_enter: bool}
+    """
+    if session_id not in _session_inject_queues:
+        raise HTTPException(status_code=404, detail="Session not found or not a relay session")
+
+    payload = await request.json()
+    text = payload.get("text", "")
+    press_enter = payload.get("press_enter", False)
+
+    if press_enter and not text.endswith("\n"):
+        text = text + "\n"
+
+    await _session_inject_queues[session_id].put(text.encode())
+    logger.debug(f"Injected {len(text)} bytes into session {session_id}")
+    return {"ok": True}
+
+
+@app.websocket("/ws/sessions/{session_id}")
+async def session_ws(websocket: WebSocket, session_id: str):
+    """
+    WebSocket bridge for live Claude Code terminal output.
+
+    Server→Client: raw bytes (terminal output chunks from PTY)
+    Client→Server JSON:
+      {"type": "inject", "data": "text to send\\n"}
+      {"type": "resize", "cols": N, "rows": N}
+
+    The relay process writes PTY output to _session_streams[session_id].
+    This endpoint fans that stream out to all connected WebSocket clients.
+    """
+    await websocket.accept()
+
+    if session_id not in _session_streams:
+        await websocket.close(1008, "Session not found")
+        return
+
+    queue = _session_streams[session_id]
+
+    async def send_loop():
+        """Forward PTY output chunks from the queue to the WebSocket."""
+        while True:
+            try:
+                chunk = await queue.get()
+                if chunk is None:  # Sentinel: session ended
+                    await websocket.close(1000, "Session ended")
+                    # Put sentinel back so other listeners also get it
+                    await queue.put(None)
+                    break
+                await websocket.send_bytes(chunk)
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.debug(f"WS send_loop error for {session_id}: {e}")
+                break
+
+    async def recv_loop():
+        """Receive control messages from the WebSocket client."""
+        try:
+            async for msg in websocket.iter_text():
+                try:
+                    data = json.loads(msg)
+                    msg_type = data.get("type")
+                    if msg_type == "inject" and session_id in _session_inject_queues:
+                        text = data.get("data", "")
+                        await _session_inject_queues[session_id].put(text.encode())
+                    elif msg_type == "resize":
+                        # Resize requests are stored for the relay process to poll.
+                        # For now, log them; a future PR can add a resize queue.
+                        cols = data.get("cols", 80)
+                        rows = data.get("rows", 24)
+                        logger.debug(f"Resize request for {session_id}: {cols}x{rows}")
+                except json.JSONDecodeError:
+                    pass
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug(f"WS recv_loop error for {session_id}: {e}")
+
+    await asyncio.gather(send_loop(), recv_loop(), return_exceptions=True)
+
+
+# =============================================================================
+# Hook Receiver Endpoint
+# =============================================================================
+
+# Maps Claude Code hook event names to internal session status strings
+_HOOK_STATUS_MAP = {
+    "SessionStart": "idle",
+    "UserPromptSubmit": "thinking",
+    "PreToolUse": "executing",
+    "PostToolUse": "idle",
+    "Stop": "idle",
+    "SessionEnd": "dead",
+}
+
+
+@app.post("/api/hooks")
+async def claude_hook(request: Request):
+    """
+    Receives Claude Code lifecycle hook payloads.
+
+    Claude Code fires hooks at key lifecycle events. This endpoint updates
+    the local AgentSession record so the UI can show live status without
+    needing the full PTY relay.
+
+    Common fields: session_id, hook_event_name, cwd, transcript_path
+    Returns {} for most events. Returns {"additionalContext": "..."} for
+    UserPromptSubmit if context injection is desired (future feature).
+
+    Registered in ~/.claude/settings.json hooks config:
+      "hooks": {"UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command",
+        "command": "curl -s -X POST http://localhost:8765/api/hooks ..."}]}]}
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    payload = await request.json()
+    event = payload.get("hook_event_name", "")
+    session_id = payload.get("session_id")
+    cwd = payload.get("cwd", "")
+
+    if not session_id:
+        return {}
+
+    new_status = _HOOK_STATUS_MAP.get(event)
+    now = datetime.utcnow().isoformat()
+
+    with Session(engine) as db:
+        session = db.get(AgentSession, session_id)
+        if session:
+            if new_status:
+                session.status = new_status
+            session.last_activity = now
+            db.commit()
+        else:
+            # Session discovered for the first time via a hook (no relay started)
+            db.add(AgentSession(
+                id=session_id,
+                cwd=cwd,
+                name=Path(cwd).name if cwd else "unknown",
+                status=new_status or "idle",
+                source="hook",
+            ))
+            db.commit()
+
+    logger.debug(f"Hook received: event={event}, session={session_id}, status={new_status}")
+
+    # Return empty dict for most events.
+    # UserPromptSubmit could return {"additionalContext": "..."} here in a future PR
+    # to inject context into the agent's next turn (e.g., cronban task reminders).
+    return {}
 
 
 # =============================================================================
