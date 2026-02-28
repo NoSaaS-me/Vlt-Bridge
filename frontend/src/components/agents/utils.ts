@@ -37,7 +37,8 @@ export function timeAgo(isoStr: string): string {
 export const XTERM_THEME = {
   background: '#0a0f1a',
   foreground: '#c9d1d9',
-  cursor: '#58a6ff',
+  cursor: 'transparent',
+  cursorAccent: 'transparent',
   black: '#0d1117',
   brightBlack: '#6e7681',
   red: '#f85149',

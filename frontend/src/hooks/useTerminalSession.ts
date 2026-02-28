@@ -61,7 +61,7 @@ export function useTerminalSession({
         fontFamily: '"Cascadia Code", "Fira Code", "JetBrains Mono", monospace',
         fontSize: 13,
         lineHeight: 1.2,
-        cursorBlink: true,
+        cursorBlink: false,
         allowProposedApi: true,
       });
 
