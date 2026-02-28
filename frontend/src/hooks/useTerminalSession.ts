@@ -36,6 +36,7 @@ export function useTerminalSession({
   const wsRef = useRef<WebSocket | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [connectAttempt, setConnectAttempt] = useState(0);
   const isFocusedRef = useRef(isFocused);
 
   // Keep focus ref current without triggering effects
@@ -156,15 +157,23 @@ export function useTerminalSession({
 
     ws.onclose = (ev) => {
       setIsConnected(false);
+      wsRef.current = null;
       term.writeln(`\x1b[2m── disconnected (${ev.code}) ──\x1b[0m`);
+      // Schedule a reconnect attempt after a short delay (unless component unmounts)
+      const timer = setTimeout(() => setConnectAttempt((n) => n + 1), 2000);
+      // Store timer so cleanup can cancel it
+      (ws as WebSocket & { _reconnectTimer?: ReturnType<typeof setTimeout> })._reconnectTimer = timer;
     };
 
     return () => {
+      // Cancel any pending reconnect timer from this ws instance
+      const timer = (ws as WebSocket & { _reconnectTimer?: ReturnType<typeof setTimeout> })._reconnectTimer;
+      if (timer !== undefined) clearTimeout(timer);
       ws.close();
       wsRef.current = null;
       setIsConnected(false);
     };
-  }, [isReady, isVisible, sessionId]);
+  }, [isReady, isVisible, sessionId, connectAttempt]);
 
   // ── Cleanup on unmount ─────────────────────────────────────────────────
   useEffect(() => {

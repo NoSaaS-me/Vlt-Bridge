@@ -750,6 +750,7 @@ export function MainApp() {
             </Button>
           </div>
           <h1
+            data-tour="app-title"
             className="text-2xl tracking-[0.15em] uppercase select-none"
             style={{
               fontFamily: '"Press Start 2P", monospace',
@@ -786,6 +787,7 @@ export function MainApp() {
             )}
             {/* [T] Threads flyout button */}
             <Button
+              data-tour="threads-button"
               variant={isThreadsOpen ? "secondary" : "ghost"}
               size="sm"
               onClick={() => isThreadsOpen ? setIsThreadsOpen(false) : openThreadsFlyout()}
@@ -804,6 +806,7 @@ export function MainApp() {
             </Button>
             {/* [C] Chat button */}
             <Button
+              data-tour="chat-button"
               variant={(chatCenterMode ? isChatCenterView : isChatOpen) ? "secondary" : "ghost"}
               size="sm"
               onClick={openChatFlyout}
@@ -834,7 +837,7 @@ export function MainApp() {
               <Network className="h-4 w-4 transition-transform duration-250" />
             </Button>
             {/* [S] Settings button */}
-            <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
+            <Button data-tour="settings-button" variant="ghost" size="sm" onClick={() => navigate('/settings')}>
               <SettingsIcon className="h-4 w-4" />
             </Button>
           </div>
@@ -847,7 +850,7 @@ export function MainApp() {
         <ResizablePanelGroup direction="horizontal" style={{ display: isAgentsView ? 'none' : undefined }}>
           {/* Left sidebar */}
           <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
-            <div className="h-full flex flex-col">
+            <div data-tour="sidebar" className="h-full flex flex-col">
               <div className="p-4 space-y-4">
                 <div className="flex gap-2">
                 <Dialog
@@ -984,7 +987,7 @@ export function MainApp() {
 
           {/* Main content pane */}
           <ResizablePanel defaultSize={75}>
-            <div className="h-full bg-background">
+            <div data-tour="main-pane" className="h-full bg-background">
               {error && (
                 <div className="p-4">
                   <Alert variant="destructive">

@@ -145,29 +145,32 @@ export function AgentsPage() {
   return (
     <div className="h-full flex">
       {/* Left nav sidebar */}
-      <aside className="w-12 border-r border-border flex flex-col items-center pt-3 pb-2 gap-1 shrink-0">
+      <aside className="w-16 border-r border-border flex flex-col items-center pt-3 pb-2 gap-0.5 shrink-0">
         {NAV_ITEMS.map((item) => (
           <button
             key={item.id}
             onClick={() => setActiveSection(item.id)}
             className={cn(
-              'w-8 h-8 rounded flex items-center justify-center transition-colors duration-150',
+              'w-14 rounded flex flex-col items-center justify-center py-1.5 gap-0.5 transition-colors duration-150',
               activeSection === item.id
                 ? 'bg-blue-500/20 text-blue-400'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/60',
             )}
-            title={item.label}
           >
             <item.icon className="h-4 w-4" />
+            <span className="text-[9px] font-medium uppercase tracking-wider leading-none">
+              {item.label}
+            </span>
           </button>
         ))}
         <div className="flex-1" />
         <button
           onClick={polling.refresh}
-          className="w-8 h-8 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+          className="w-14 rounded flex flex-col items-center justify-center py-1.5 gap-0.5 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
           title={`Last refresh: ${polling.lastRefresh.toLocaleTimeString()}`}
         >
           <RefreshCw className="h-3.5 w-3.5" />
+          <span className="text-[9px] font-medium uppercase tracking-wider leading-none">Refresh</span>
         </button>
       </aside>
 

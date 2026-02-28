@@ -7,6 +7,7 @@ import { isAuthenticated, getCurrentUser, setAuthTokenFromHash, ensureDemoToken,
 import { AuthLoadingSkeleton } from './components/AuthLoadingSkeleton';
 import { Toaster } from './components/ui/toaster';
 import { ProjectProvider } from './contexts/ProjectContext';
+import { OnboardingProvider, OnboardingOverlay } from './onboarding';
 import './App.css';
 
 // Protected route wrapper with auth check
@@ -88,29 +89,32 @@ function App() {
   return (
     <>
       <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <ProjectProvider>
-                  <MainApp />
-                </ProjectProvider>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <ProtectedRoute>
-                <ProjectProvider>
-                  <Settings />
-                </ProjectProvider>
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
+        <OnboardingProvider>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <ProjectProvider>
+                    <MainApp />
+                  </ProjectProvider>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute>
+                  <ProjectProvider>
+                    <Settings />
+                  </ProjectProvider>
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+          <OnboardingOverlay />
+        </OnboardingProvider>
       </BrowserRouter>
       <Toaster />
     </>
