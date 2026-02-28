@@ -89,3 +89,58 @@ export async function listHookEvents(limit = 100): Promise<HookEvent[]> {
 export function parseDaemonTs(isoStr: string): Date {
   return new Date(isoStr.endsWith('Z') ? isoStr : isoStr + 'Z');
 }
+
+// ---------------------------------------------------------------------------
+// Transcript API
+// ---------------------------------------------------------------------------
+
+export interface TranscriptEntry {
+  lineIndex: number;
+  type: string;
+  message?: { role: string; content: string | ContentBlock[] };
+  timestamp?: string;
+  uuid?: string;
+  sessionId?: string;
+  cwd?: string;
+  raw: Record<string, unknown>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type ContentBlock = { type: string; [key: string]: any };
+
+export interface TranscriptResponse {
+  path: string;
+  entries: TranscriptEntry[];
+  total_lines: number;
+}
+
+/**
+ * Fetch parsed JSONL transcript for a session.
+ */
+export async function fetchTranscript(
+  sessionId: string,
+  types?: string[],
+): Promise<TranscriptResponse> {
+  const params = types?.length ? `?types=${types.join(',')}` : '';
+  const response = await fetch(`/vlt/api/sessions/${sessionId}/transcript${params}`, {
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw new Error(`Transcript fetch failed: ${response.status}`);
+  return response.json();
+}
+
+/**
+ * Write back a modified transcript (full JSONL replacement).
+ */
+export async function saveTranscript(
+  sessionId: string,
+  entries: Record<string, unknown>[],
+): Promise<void> {
+  const response = await fetch(`/vlt/api/sessions/${sessionId}/transcript`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entries }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error(`Transcript save failed: ${response.status}`);
+}

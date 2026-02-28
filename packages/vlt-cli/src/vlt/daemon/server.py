@@ -1444,6 +1444,112 @@ async def list_hook_events(limit: int = 100):
 
 
 # =============================================================================
+# Transcript API — Read/Write JSONL session transcripts
+# =============================================================================
+
+@app.get("/api/sessions/{session_id}/transcript")
+async def get_transcript(session_id: str, types: str = "user,assistant,system"):
+    """
+    Read a Claude Code session transcript (JSONL file).
+
+    Returns parsed entries filtered by type. The JSONL path is derived from
+    the session's cwd: ~/.claude/projects/{slug}/{session_id}.jsonl
+
+    Query params:
+        types: comma-separated entry types to include (default: user,assistant,system)
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    # Look up session to get cwd
+    with Session(engine) as db:
+        session = db.get(AgentSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Derive JSONL path
+    cwd = session.cwd or ""
+    slug = cwd.replace("/", "-")
+    jsonl_path = Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl"
+
+    if not jsonl_path.exists():
+        raise HTTPException(status_code=404, detail=f"Transcript not found: {jsonl_path}")
+
+    type_filter = set(t.strip() for t in types.split(",") if t.strip())
+
+    entries = []
+    total_lines = 0
+    try:
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line_idx, line in enumerate(f):
+                total_lines += 1
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                entry_type = obj.get("type", "")
+                if type_filter and entry_type not in type_filter:
+                    continue
+                entries.append({
+                    "lineIndex": line_idx,
+                    "type": entry_type,
+                    "message": obj.get("message"),
+                    "timestamp": obj.get("timestamp"),
+                    "uuid": obj.get("uuid"),
+                    "sessionId": obj.get("sessionId"),
+                    "cwd": obj.get("cwd"),
+                    "raw": obj,
+                })
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read transcript: {e}")
+
+    return {
+        "path": str(jsonl_path),
+        "entries": entries,
+        "total_lines": total_lines,
+    }
+
+
+@app.post("/api/sessions/{session_id}/transcript")
+async def save_transcript(session_id: str, request: Request):
+    """
+    Write back a modified transcript (full JSONL replacement).
+
+    Body: { entries: [ {...raw json objects...} ] }
+    Each entry is written as one JSON line.
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    with Session(engine) as db:
+        session = db.get(AgentSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    cwd = session.cwd or ""
+    slug = cwd.replace("/", "-")
+    jsonl_path = Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl"
+
+    payload = await request.json()
+    raw_entries = payload.get("entries", [])
+
+    if not isinstance(raw_entries, list):
+        raise HTTPException(status_code=400, detail="entries must be an array")
+
+    try:
+        with open(jsonl_path, "w", encoding="utf-8") as f:
+            for entry in raw_entries:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write transcript: {e}")
+
+    return {"ok": True, "lines_written": len(raw_entries)}
+
+
+# =============================================================================
 # Entry Point
 # =============================================================================
 
