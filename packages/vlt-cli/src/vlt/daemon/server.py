@@ -58,7 +58,15 @@ logger = logging.getLogger(__name__)
 # Maps session_id → asyncio.Queue of bytes chunks for WebSocket relay
 _session_streams: Dict[str, asyncio.Queue] = {}
 # Maps session_id → asyncio.Queue for injecting keystrokes/text into PTY
+# Items are raw bytes for inject OR JSON bytes for control messages (resize, etc.)
 _session_inject_queues: Dict[str, asyncio.Queue] = {}
+# Scrollback buffer: last 64 KB of PTY output per session (for late-joining browsers)
+_session_scrollback: Dict[str, bytearray] = {}
+_MAX_SCROLLBACK = 64 * 1024
+
+# Ring buffer for recent hook events (max 500 entries) — served via GET /api/hooks/recent
+_hook_events: List[Dict[str, Any]] = []
+_MAX_HOOK_EVENTS = 500
 
 
 # =============================================================================
@@ -707,7 +715,10 @@ async def watch_claude_history():
                         if not sid or sid in seen_sessions:
                             continue
                         seen_sessions.add(sid)
-                        cwd = entry.get("cwd") or entry.get("projectPath", "")
+                        cwd = (entry.get("cwd")
+                               or entry.get("projectPath")
+                               or entry.get("project")
+                               or "")
                         with Session(engine) as db:
                             existing = db.get(AgentSession, sid)
                             if not existing:
@@ -720,6 +731,11 @@ async def watch_claude_history():
                                 ))
                                 db.commit()
                                 logger.debug(f"Discovered session {sid} from history (cwd={cwd})")
+                            elif cwd and not existing.cwd:
+                                # Backfill cwd for sessions stored before this fix
+                                existing.cwd = cwd
+                                existing.name = Path(cwd).name or existing.name
+                                db.commit()
                     except json.JSONDecodeError:
                         continue
         except Exception as e:
@@ -1173,26 +1189,121 @@ async def inject_to_session(session_id: str, request: Request):
     return {"ok": True}
 
 
+@app.websocket("/ws/relay/{session_id}")
+async def relay_ws(websocket: WebSocket, session_id: str):
+    """
+    PTY relay → daemon WebSocket bridge.
+
+    The `vlt session-relay` process connects here to stream terminal output.
+
+    Relay→Daemon: binary PTY chunks  → put in _session_streams[session_id]
+    Daemon→Relay: JSON text messages ← drained from _session_inject_queues[session_id]
+      {"type": "inject", "data": "text"}
+      {"type": "resize", "cols": N, "rows": N}
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    await websocket.accept()
+
+    # Verify session is known (registered via HTTP first, or already in DB)
+    with Session(engine) as db:
+        existing = db.get(AgentSession, session_id)
+    if not existing:
+        await websocket.close(1008, "Session not registered")
+        return
+
+    # Create queues on-demand — survives daemon restarts
+    if session_id not in _session_streams:
+        _session_streams[session_id] = asyncio.Queue(maxsize=4096)
+    if session_id not in _session_inject_queues:
+        _session_inject_queues[session_id] = asyncio.Queue(maxsize=256)
+
+    stream_q = _session_streams[session_id]
+    inject_q = _session_inject_queues[session_id]
+
+    async def receive_pty():
+        """Receive binary PTY chunks from relay → fill scrollback + stream queue."""
+        if session_id not in _session_scrollback:
+            _session_scrollback[session_id] = bytearray()
+        buf = _session_scrollback[session_id]
+        try:
+            async for chunk in websocket.iter_bytes():
+                # Maintain rolling scrollback buffer
+                buf.extend(chunk)
+                if len(buf) > _MAX_SCROLLBACK:
+                    del buf[:len(buf) - _MAX_SCROLLBACK]
+                try:
+                    stream_q.put_nowait(chunk)
+                except asyncio.QueueFull:
+                    pass
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug(f"Relay WS receive_pty error for {session_id}: {e}")
+
+    async def forward_inject():
+        """Forward inject/control messages from inject queue → relay as JSON text.
+
+        Items in inject_q can be:
+          - raw bytes (keyboard input) → wrapped as {"type": "inject", "data": "..."}
+          - JSON bytes (resize/control) → forwarded as-is
+        """
+        while True:
+            try:
+                data = await inject_q.get()
+                text = data.decode(errors="replace")
+                # Already JSON (resize, etc.) — forward as-is; else wrap as inject
+                if text.startswith("{"):
+                    await websocket.send_text(text)
+                else:
+                    await websocket.send_text(json.dumps({"type": "inject", "data": text}))
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.debug(f"Relay WS forward_inject error for {session_id}: {e}")
+                break
+
+    logger.info(f"Relay WS connected: {session_id}")
+    await asyncio.gather(receive_pty(), forward_inject(), return_exceptions=True)
+    logger.info(f"Relay WS disconnected: {session_id}")
+
+
 @app.websocket("/ws/sessions/{session_id}")
 async def session_ws(websocket: WebSocket, session_id: str):
     """
-    WebSocket bridge for live Claude Code terminal output.
+    Browser → daemon WebSocket bridge for live terminal viewing.
 
-    Server→Client: raw bytes (terminal output chunks from PTY)
+    Server→Client: raw bytes (terminal output chunks from PTY via _session_streams)
     Client→Server JSON:
       {"type": "inject", "data": "text to send\\n"}
       {"type": "resize", "cols": N, "rows": N}
-
-    The relay process writes PTY output to _session_streams[session_id].
-    This endpoint fans that stream out to all connected WebSocket clients.
     """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
     await websocket.accept()
 
     if session_id not in _session_streams:
-        await websocket.close(1008, "Session not found")
-        return
+        # On daemon restart, queues are wiped — recreate on-demand for DB sessions
+        with Session(engine) as db:
+            existing = db.get(AgentSession, session_id)
+        if not existing:
+            await websocket.close(1008, "Session not found")
+            return
+        _session_streams[session_id] = asyncio.Queue(maxsize=4096)
+        if session_id not in _session_inject_queues:
+            _session_inject_queues[session_id] = asyncio.Queue(maxsize=256)
 
     queue = _session_streams[session_id]
+
+    # Send scrollback buffer to late-joining browser clients
+    scrollback = _session_scrollback.get(session_id)
+    if scrollback:
+        try:
+            await websocket.send_bytes(bytes(scrollback))
+        except Exception:
+            pass
 
     async def send_loop():
         """Forward PTY output chunks from the queue to the WebSocket."""
@@ -1212,7 +1323,7 @@ async def session_ws(websocket: WebSocket, session_id: str):
                 break
 
     async def recv_loop():
-        """Receive control messages from the WebSocket client."""
+        """Receive inject/resize control messages from the browser."""
         try:
             async for msg in websocket.iter_text():
                 try:
@@ -1222,11 +1333,16 @@ async def session_ws(websocket: WebSocket, session_id: str):
                         text = data.get("data", "")
                         await _session_inject_queues[session_id].put(text.encode())
                     elif msg_type == "resize":
-                        # Resize requests are stored for the relay process to poll.
-                        # For now, log them; a future PR can add a resize queue.
                         cols = data.get("cols", 80)
                         rows = data.get("rows", 24)
                         logger.debug(f"Resize request for {session_id}: {cols}x{rows}")
+                        # Forward resize to relay so PTY dimensions stay in sync
+                        if session_id in _session_inject_queues:
+                            resize_cmd = json.dumps({"type": "resize", "cols": cols, "rows": rows}).encode()
+                            try:
+                                _session_inject_queues[session_id].put_nowait(resize_cmd)
+                            except asyncio.QueueFull:
+                                pass
                 except json.JSONDecodeError:
                     pass
         except WebSocketDisconnect:
@@ -1303,10 +1419,28 @@ async def claude_hook(request: Request):
 
     logger.debug(f"Hook received: event={event}, session={session_id}, status={new_status}")
 
+    # Append to in-memory ring buffer for the Events panel
+    _hook_events.append({
+        "id": str(uuid.uuid4()),
+        "ts": now,
+        "event": event,
+        "session_id": session_id,
+        "cwd": cwd,
+        "status": new_status,
+    })
+    if len(_hook_events) > _MAX_HOOK_EVENTS:
+        del _hook_events[:-_MAX_HOOK_EVENTS]
+
     # Return empty dict for most events.
     # UserPromptSubmit could return {"additionalContext": "..."} here in a future PR
     # to inject context into the agent's next turn (e.g., cronban task reminders).
     return {}
+
+
+@app.get("/api/hooks/recent")
+async def list_hook_events(limit: int = 100):
+    """Return the most recent Claude Code hook events (in-memory, resets on restart)."""
+    return {"events": _hook_events[-limit:]}
 
 
 # =============================================================================

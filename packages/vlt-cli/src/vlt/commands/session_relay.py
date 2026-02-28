@@ -164,30 +164,48 @@ def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
     # Register with daemon (includes our real PID, claude's PID is proc.pid)
     register_session(session_id, os.getcwd(), proc.pid, args)
 
-    # WebSocket stream thread (best-effort, daemon may not be running)
-    ws_write_queue = None
+    # Pre-allocate write queue NOW so PTY output is captured from the very first byte.
+    # Claude renders its TUI immediately; if the queue is None we'd drop all of it.
+    import queue as _relay_queue
+    ws_write_queue: _relay_queue.Queue = _relay_queue.Queue(maxsize=8192)
+
+    _relay_active = threading.Event()
+    _relay_active.set()
 
     def start_ws_relay():
-        """Background thread: opens WebSocket to daemon and streams output."""
+        """Background thread: opens WebSocket to daemon and streams output.
+        Reconnects automatically if the daemon restarts or the connection drops.
+        """
         nonlocal ws_write_queue
         try:
             import queue as _queue
+            import time
             import websocket  # websocket-client
+        except ImportError:
+            return  # websocket-client not installed — relay works without streaming
 
-            q: _queue.Queue = _queue.Queue(maxsize=1000)
-            daemon_base = get_daemon_url().replace("http://", "ws://").replace("https://", "wss://")
-            ws_url = f"{daemon_base}/ws/sessions/{session_id}"
+        daemon_base = get_daemon_url().replace("http://", "ws://").replace("https://", "wss://")
+        ws_url = f"{daemon_base}/ws/relay/{session_id}"
+        backoff = 1.0
+        first_connection = True
+
+        while _relay_active.is_set():
+            if first_connection:
+                # Reuse the pre-initialized queue so we drain buffered initial output
+                q = ws_write_queue
+                first_connection = False
+            else:
+                # On reconnect, start fresh (stale data from a dead WS is irrelevant)
+                q = _queue.Queue(maxsize=8192)
+                ws_write_queue = q
 
             def on_message(ws, message):
-                # Received inject/resize from web UI
                 try:
                     data = json.loads(message)
                     if data.get("type") == "inject":
-                        text = data.get("data", "")
-                        os.write(master_fd, text.encode())
+                        os.write(master_fd, data.get("data", "").encode())
                     elif data.get("type") == "resize":
-                        cols = data.get("cols", 80)
-                        rows = data.get("rows", 24)
+                        cols, rows = data.get("cols", 80), data.get("rows", 24)
                         win = struct.pack("HHHH", rows, cols, 0, 0)
                         import fcntl
                         fcntl.ioctl(master_fd, termios.TIOCSWINSZ, win)
@@ -200,21 +218,33 @@ def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
                     if chunk is None:
                         break
                     try:
-                        ws.send_binary(chunk)
+                        ws.send_bytes(chunk)
                     except Exception:
                         break
 
-            ws = websocket.WebSocketApp(ws_url, on_message=on_message)
-            send_thread = threading.Thread(target=ws_send_loop, args=(ws,), daemon=True)
-            send_thread.start()
+            try:
+                ws = websocket.WebSocketApp(ws_url, on_message=on_message)
 
-            # Expose queue for main loop
-            ws_write_queue = q
+                def on_open(ws):
+                    nonlocal backoff
+                    backoff = 1.0  # reset backoff on successful connect
+                    # Re-register session each time we reconnect (daemon may have restarted)
+                    register_session(session_id, os.getcwd(), proc.pid, args)
+                    # Start send thread AFTER socket is open so ws.send_binary() succeeds
+                    send_thread = threading.Thread(target=ws_send_loop, args=(ws,), daemon=True)
+                    send_thread.start()
 
-            ws.run_forever(ping_interval=30)
-            q.put(None)  # stop send thread
-        except Exception:
-            pass  # websocket-client not installed or daemon not running
+                ws.on_open = on_open
+                ws.run_forever(ping_interval=30)
+                q.put(None)  # stop send thread
+            except Exception:
+                pass
+
+            if not _relay_active.is_set():
+                break
+            # Exponential backoff before reconnect (cap at 30s)
+            time.sleep(min(backoff, 30.0))
+            backoff = min(backoff * 2, 30.0)
 
     ws_thread = threading.Thread(target=start_ws_relay, daemon=True)
     ws_thread.start()
@@ -269,6 +299,7 @@ def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
                 break
 
     finally:
+        _relay_active.clear()  # stop reconnect loop
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
         signal.signal(signal.SIGWINCH, signal.SIG_DFL)
         try:

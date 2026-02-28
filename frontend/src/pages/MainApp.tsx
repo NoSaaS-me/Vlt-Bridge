@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle, List, AlertCircle, Upload } from 'lucide-react';
+import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle, List, AlertCircle, Upload, Bot } from 'lucide-react';
 import { useFontSize } from '@/hooks/useFontSize';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
@@ -62,6 +62,7 @@ import { CreateProjectDialog } from '@/components/CreateProjectDialog';
 import { ThreadsFlyout } from '@/components/ThreadsFlyout';
 import { IssuesFlyout } from '@/components/IssuesFlyout';
 import { ThreadDetail } from '@/components/ThreadDetail';
+import { AgentsPage } from '@/pages/AgentsPage';
 
 export function MainApp() {
   const navigate = useNavigate();
@@ -98,6 +99,7 @@ export function MainApp() {
   const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isChatCenterView, setIsChatCenterView] = useState(false);
+  const [isAgentsView, setIsAgentsView] = useState(false);
   const [chatCenterMode, setChatCenterMode] = useState(false);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
   const [isSynthesizingTts, setIsSynthesizingTts] = useState(false);
@@ -403,6 +405,7 @@ export function MainApp() {
     setError(null);
     setIsEditMode(false); // Exit edit mode when switching notes
     setIsChatCenterView(false); // Exit chat center view when switching notes
+    setIsAgentsView(false); // Exit agents view when a file is selected
 
     const category = getFileCategory(path);
     if (category !== 'markdown') {
@@ -478,6 +481,7 @@ export function MainApp() {
     setIsEditMode(false);
     setIsChatCenterView(false);
     setIsGraphView(false);
+    setIsAgentsView(false);
     setSelectedThreadId(null); // Clear selected thread when switching projects
   };
 
@@ -720,8 +724,8 @@ export function MainApp() {
       {/* Top bar */}
       <div className="border-b border-border p-2 animate-fade-in">
         <div className="relative flex items-center justify-center">
-          {/* Project dropdown on the left */}
-          <div className="absolute left-0">
+          {/* Project dropdown + Agents button on the left */}
+          <div className="absolute left-0 flex items-center gap-1">
             <ProjectDropdown
               projects={projects}
               selectedProject={selectedProject}
@@ -729,6 +733,21 @@ export function MainApp() {
               onCreateProject={() => setIsCreateProjectOpen(true)}
               disabled={isLoadingProjects}
             />
+            <Button
+              variant={isAgentsView ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => {
+                const next = !isAgentsView;
+                setIsAgentsView(next);
+                if (next) {
+                  setIsGraphView(false);
+                  setIsChatCenterView(false);
+                }
+              }}
+              title={isAgentsView ? "Close Agents" : "Open Agents Dashboard"}
+            >
+              <Bot className="h-4 w-4" />
+            </Button>
           </div>
           <h1
             className="text-2xl tracking-[0.15em] uppercase select-none"
@@ -806,6 +825,7 @@ export function MainApp() {
                 // Exit chat center view when entering graph view
                 if (newGraphView) {
                   setIsChatCenterView(false);
+                  setIsAgentsView(false);
                 }
               }}
               title={isGraphView ? "Switch to Note View" : "Switch to Graph View"}
@@ -823,7 +843,8 @@ export function MainApp() {
 
       {/* Main content */}
       <div className="flex-1 overflow-hidden animate-fade-in" style={{ animationDelay: '0.1s' }}>
-        <ResizablePanelGroup direction="horizontal">
+        {isAgentsView && <AgentsPage />}
+        <ResizablePanelGroup direction="horizontal" style={{ display: isAgentsView ? 'none' : undefined }}>
           {/* Left sidebar */}
           <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
             <div className="h-full flex flex-col">
