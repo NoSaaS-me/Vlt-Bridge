@@ -213,6 +213,14 @@ def apply_oracle_migrations():
             ON agent_sessions(last_activity DESC)
         """))
 
+        # Add transcript_path column if it doesn't exist (idempotent)
+        try:
+            conn.execute(text(
+                "ALTER TABLE agent_sessions ADD COLUMN transcript_path TEXT"
+            ))
+        except Exception:
+            pass  # Column already exists
+
         conn.commit()
 
 

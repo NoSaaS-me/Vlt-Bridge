@@ -1258,7 +1258,6 @@ def init(
                     _run_foreground_indexing(project_id, target_path, force=False, console=console)
 
                     # Update vlt.toml with indexed timestamp
-                    from datetime import datetime, timezone
                     indexed_at = datetime.now(timezone.utc).isoformat()
                     update_vlt_toml_coderag_indexed(target_path / "vlt.toml", str(target_path), indexed_at)
 

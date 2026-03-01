@@ -7,15 +7,16 @@
  *   Compositor        — horizontal scrolling terminal panes
  *   Events ticker     — compact event strip at bottom
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { Bot, Clock, Plug, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { type AgentSession } from '@/services/daemon-api';
+import { type AgentSession, dismissSession, spawnSession } from '@/services/daemon-api';
 import { useSessionPolling } from '@/hooks/useSessionPolling';
+import { useProjectContext } from '@/contexts/ProjectContext';
 import { SessionSidebar } from '@/components/agents/SessionSidebar';
 import { TerminalCompositor } from '@/components/agents/TerminalCompositor';
 import { EventsTicker } from '@/components/agents/EventsTicker';
-import { TranscriptOverlay } from '@/components/agents/TranscriptOverlay';
+import { LiveSessionPanel } from '@/components/agents/LiveSessionPanel';
 
 // ---------------------------------------------------------------------------
 // Nav
@@ -87,14 +88,29 @@ function ConnectorsView() {
 function AgentsCompositorView({
   polling,
   focusedSessionId,
+  liveSession,
+  selectedProjectId,
   onSelectSession,
   onSelectDiscoveredSession,
+  onDismissSession,
+  onCloseLiveSession,
+  onSpawnSession,
 }: {
   polling: ReturnType<typeof useSessionPolling>;
   focusedSessionId: string | null;
+  liveSession: AgentSession | null;
+  selectedProjectId: string | null;
   onSelectSession: (id: string) => void;
   onSelectDiscoveredSession: (session: AgentSession) => void;
+  onDismissSession: (id: string) => void;
+  onCloseLiveSession: () => void;
+  onSpawnSession: () => void;
 }) {
+  const hasRelaySessions = useMemo(
+    () => polling.sessions.some((s) => s.source === 'relay' && s.status !== 'dead'),
+    [polling.sessions],
+  );
+
   return (
     <div className="h-full flex">
       {/* Session sidebar */}
@@ -103,20 +119,37 @@ function AgentsCompositorView({
           sessions={polling.sessions}
           isLoading={polling.isLoading}
           daemonOnline={polling.daemonOnline}
-          focusedSessionId={focusedSessionId}
+          focusedSessionId={liveSession?.id ?? focusedSessionId}
+          currentProjectId={selectedProjectId}
           onSelectSession={onSelectSession}
           onSelectDiscoveredSession={onSelectDiscoveredSession}
+          onDismissSession={onDismissSession}
+          onSpawnSession={onSpawnSession}
+          onRefresh={polling.refresh}
         />
       </div>
 
-      {/* Compositor + events */}
+      {/* Main content: LiveSessionPanel (hook sessions) or TerminalCompositor (relay) */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 overflow-hidden">
-          <TerminalCompositor
-            sessions={polling.sessions}
-            focusedSessionId={focusedSessionId}
-            onFocusSession={onSelectSession}
-          />
+          {liveSession ? (
+            <LiveSessionPanel
+              session={liveSession}
+              onClose={onCloseLiveSession}
+            />
+          ) : hasRelaySessions ? (
+            <TerminalCompositor
+              sessions={polling.sessions}
+              focusedSessionId={focusedSessionId}
+              onFocusSession={onSelectSession}
+            />
+          ) : (
+            <TerminalCompositor
+              sessions={polling.sessions}
+              focusedSessionId={focusedSessionId}
+              onFocusSession={onSelectSession}
+            />
+          )}
         </div>
         <EventsTicker events={polling.events} />
       </div>
@@ -130,17 +163,54 @@ function AgentsCompositorView({
 
 export function AgentsPage() {
   const [activeSection, setActiveSection] = useState<NavSection>('agents');
-  const polling = useSessionPolling();
+  const { selectedProjectId } = useProjectContext();
+  const polling = useSessionPolling(selectedProjectId);
   const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null);
-  const [transcriptSession, setTranscriptSession] = useState<AgentSession | null>(null);
+  const [liveSession, setLiveSession] = useState<AgentSession | null>(null);
+
+  // Derive a CWD for spawning: use the most recent session's CWD for this project,
+  // or fall back to a sensible default.
+  const spawnCwd = useMemo(() => {
+    const projectSession = polling.sessions.find((s) => s.cwd);
+    return projectSession?.cwd ?? '/mnt/sda1/Projects/00Tooling/Vlt-Bridge';
+  }, [polling.sessions]);
 
   const handleSelectSession = useCallback((id: string) => {
+    setLiveSession(null); // close live panel when selecting a relay session
     setFocusedSessionId(id);
   }, []);
 
   const handleSelectDiscoveredSession = useCallback((session: AgentSession) => {
-    setTranscriptSession(session);
+    setLiveSession(session);
   }, []);
+
+  const handleDismissSession = useCallback((id: string) => {
+    dismissSession(id).then(() => polling.refresh()).catch(console.error);
+  }, [polling]);
+
+  const handleSpawnSession = useCallback(() => {
+    spawnSession(spawnCwd, { prompt: 'Hello! Ready for instructions.' })
+      .then((result) => {
+        setTimeout(() => polling.refresh(), 2000);
+        if (result.session_id) {
+          setLiveSession({
+            id: result.session_id,
+            project_id: selectedProjectId,
+            name: 'New Session',
+            cwd: result.cwd,
+            status: 'thinking',
+            model: null,
+            ctx_pct: null,
+            pid: 0,
+            bypass_perms: true,
+            source: 'managed',
+            created_at: new Date().toISOString(),
+            last_activity: new Date().toISOString(),
+          });
+        }
+      })
+      .catch((err) => console.error('Spawn failed:', err));
+  }, [polling, spawnCwd, selectedProjectId]);
 
   return (
     <div className="h-full flex">
@@ -180,22 +250,18 @@ export function AgentsPage() {
           <AgentsCompositorView
             polling={polling}
             focusedSessionId={focusedSessionId}
+            liveSession={liveSession}
+            selectedProjectId={selectedProjectId}
             onSelectSession={handleSelectSession}
             onSelectDiscoveredSession={handleSelectDiscoveredSession}
+            onDismissSession={handleDismissSession}
+            onCloseLiveSession={() => setLiveSession(null)}
+            onSpawnSession={handleSpawnSession}
           />
         )}
         {activeSection === 'cronban' && <CronbanView />}
         {activeSection === 'connectors' && <ConnectorsView />}
       </div>
-
-      {/* Transcript overlay for discovered sessions */}
-      {transcriptSession && (
-        <TranscriptOverlay
-          session={transcriptSession}
-          open={!!transcriptSession}
-          onClose={() => setTranscriptSession(null)}
-        />
-      )}
     </div>
   );
 }

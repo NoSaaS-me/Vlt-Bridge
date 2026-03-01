@@ -399,5 +399,6 @@ class AgentSession(Base):
     args: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array
     bypass_perms: Mapped[bool] = mapped_column(Boolean, default=False)
     source: Mapped[str] = mapped_column(String, default="relay")  # relay/discovery/hook
+    transcript_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # path from hook payload
     created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
     last_activity: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())

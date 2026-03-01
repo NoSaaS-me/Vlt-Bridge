@@ -27,17 +27,23 @@ progress in real-time via progress callbacks during indexing.
 """
 
 import asyncio
+import fcntl
 import json
 import logging
 import os
+import pty
+import shutil
 import signal
+import struct
+import subprocess
 import sys
+import termios
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import httpx
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, WebSocket, WebSocketDisconnect
@@ -52,6 +58,51 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Project ID Inference from CWD (cached)
+# =============================================================================
+
+_cwd_project_cache: Dict[str, Optional[str]] = {}
+
+
+def _infer_project_id(cwd: str) -> Optional[str]:
+    """Walk up from cwd looking for vlt.toml and extract project.id.
+
+    Results (including None) are cached per resolved path for the lifetime
+    of the daemon process to avoid repeated filesystem walks.
+    """
+    resolved = os.path.realpath(cwd)
+    if resolved in _cwd_project_cache:
+        return _cwd_project_cache[resolved]
+
+    result = None
+    current = Path(resolved)
+    while True:
+        candidate = current / "vlt.toml"
+        if candidate.exists():
+            try:
+                import tomllib
+            except ImportError:
+                try:
+                    import tomli as tomllib  # type: ignore
+                except ImportError:
+                    break
+            try:
+                with open(candidate, "rb") as f:
+                    data = tomllib.load(f)
+                result = data.get("project", {}).get("id") or data.get("project_id")
+            except Exception:
+                pass
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    _cwd_project_cache[resolved] = result
+    return result
+
+
+# =============================================================================
 # Session Relay — In-Memory Stream Registries
 # =============================================================================
 
@@ -63,6 +114,36 @@ _session_inject_queues: Dict[str, asyncio.Queue] = {}
 # Scrollback buffer: last 64 KB of PTY output per session (for late-joining browsers)
 _session_scrollback: Dict[str, bytearray] = {}
 _MAX_SCROLLBACK = 64 * 1024
+
+# Scrollback persistence — written to disk so content survives daemon restarts
+_scrollback_dir = Path.home() / ".vlt" / "scrollback"
+_scrollback_dir.mkdir(parents=True, exist_ok=True)
+_scrollback_write_tasks: Dict[str, "asyncio.Task[None]"] = {}
+
+
+def _scrollback_path(session_id: str) -> Path:
+    return _scrollback_dir / f"{session_id}.bin"
+
+
+async def _persist_scrollback(session_id: str, buf: bytearray) -> None:
+    """Write scrollback buffer to disk (called from debounced task)."""
+    try:
+        await asyncio.to_thread(_scrollback_path(session_id).write_bytes, bytes(buf))
+    except Exception as e:
+        logger.debug(f"Failed to persist scrollback for {session_id}: {e}")
+
+
+def _schedule_scrollback_persist(session_id: str, buf: bytearray) -> None:
+    """Debounce scrollback disk writes — coalesces rapid chunks into one write."""
+    existing = _scrollback_write_tasks.get(session_id)
+    if existing and not existing.done():
+        existing.cancel()
+
+    async def _delayed() -> None:
+        await asyncio.sleep(0.5)
+        await _persist_scrollback(session_id, buf)
+
+    _scrollback_write_tasks[session_id] = asyncio.create_task(_delayed())
 
 # Ring buffer for recent hook events (max 500 entries) — served via GET /api/hooks/recent
 _hook_events: List[Dict[str, Any]] = []
@@ -1113,6 +1194,12 @@ async def deregister_session(request: Request):
         await _session_streams[session_id].put(None)
         del _session_streams[session_id]
     _session_inject_queues.pop(session_id, None)
+    # Clean up scrollback (in-memory + disk) since session ended cleanly
+    _session_scrollback.pop(session_id, None)
+    try:
+        _scrollback_path(session_id).unlink(missing_ok=True)
+    except Exception:
+        pass
 
     # Mark as dead in DB
     with Session(engine) as db:
@@ -1127,23 +1214,47 @@ async def deregister_session(request: Request):
 
 
 @app.get("/api/sessions")
-async def list_sessions():
+async def list_sessions(
+    project_id: Optional[str] = None,
+    include_all: bool = False,
+):
     """
-    List all known Claude Code agent sessions that are not dead.
+    List Claude Code agent sessions.
 
-    Returns sessions discovered via relay, hooks, or history watching.
-    Sessions with status='dead' are excluded (they exited cleanly or were
-    deregistered). Sessions older than 24h with no activity are also omitted.
+    Query params:
+        project_id: Filter to sessions belonging to this project.
+        include_all: If true, include dead sessions too (for find dialog).
+
+    Sessions with no project_id and a cwd are lazily backfilled via
+    _infer_project_id on each list call.
     """
     from vlt.db import engine
     from vlt.core.models import AgentSession
 
     with Session(engine) as db:
-        sessions = db.scalars(
+        # Step 1: Backfill project_id for any sessions that lack one.
+        # This must happen BEFORE the filtered query so that newly-tagged
+        # sessions are included in project-scoped results.
+        untagged = db.scalars(
             select(AgentSession)
-            .where(AgentSession.status != "dead")
-            .order_by(AgentSession.last_activity.desc())
+            .where(AgentSession.project_id.is_(None))
+            .where(AgentSession.cwd.isnot(None))
         ).all()
+        for s in untagged:
+            inferred = _infer_project_id(s.cwd)
+            if inferred:
+                s.project_id = inferred
+        if untagged:
+            db.commit()
+
+        # Step 2: Build the filtered query
+        query = select(AgentSession)
+        if not include_all:
+            query = query.where(AgentSession.status != "dead")
+        if project_id:
+            query = query.where(AgentSession.project_id == project_id)
+        query = query.order_by(AgentSession.last_activity.desc())
+        sessions = db.scalars(query).all()
 
     result = []
     for s in sessions:
@@ -1162,6 +1273,27 @@ async def list_sessions():
             "last_activity": s.last_activity,
         })
     return result
+
+
+@app.patch("/api/sessions/{session_id}")
+async def update_session(session_id: str, request: Request):
+    """
+    Update a session's metadata (e.g. assign it to a project).
+
+    Body: {"project_id": "vlt-bridge"}
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    body = await request.json()
+    with Session(engine) as db:
+        session = db.get(AgentSession, session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if "project_id" in body:
+            session.project_id = body["project_id"]
+        db.commit()
+    return {"ok": True}
 
 
 @app.post("/api/sessions/{session_id}/inject")
@@ -1233,6 +1365,8 @@ async def relay_ws(websocket: WebSocket, session_id: str):
                 buf.extend(chunk)
                 if len(buf) > _MAX_SCROLLBACK:
                     del buf[:len(buf) - _MAX_SCROLLBACK]
+                # Debounced disk persist so content survives daemon restarts
+                _schedule_scrollback_persist(session_id, buf)
                 try:
                     stream_q.put_nowait(chunk)
                 except asyncio.QueueFull:
@@ -1297,8 +1431,19 @@ async def session_ws(websocket: WebSocket, session_id: str):
 
     queue = _session_streams[session_id]
 
-    # Send scrollback buffer to late-joining browser clients
+    # Send scrollback buffer to late-joining browser clients.
+    # If in-memory buffer is empty (e.g. after daemon restart), fall back to disk.
     scrollback = _session_scrollback.get(session_id)
+    if not scrollback:
+        sb_file = _scrollback_path(session_id)
+        if sb_file.exists():
+            try:
+                disk_data = await asyncio.to_thread(sb_file.read_bytes)
+                if disk_data:
+                    _session_scrollback[session_id] = bytearray(disk_data)
+                    scrollback = disk_data
+            except Exception as e:
+                logger.debug(f"Failed to load scrollback from disk for {session_id}: {e}")
     if scrollback:
         try:
             await websocket.send_bytes(bytes(scrollback))
@@ -1392,6 +1537,8 @@ async def claude_hook(request: Request):
     event = payload.get("hook_event_name", "")
     session_id = payload.get("session_id")
     cwd = payload.get("cwd", "")
+    transcript_path = payload.get("transcript_path")
+    model = payload.get("model")
 
     if not session_id:
         return {}
@@ -1399,21 +1546,44 @@ async def claude_hook(request: Request):
     new_status = _HOOK_STATUS_MAP.get(event)
     now = datetime.utcnow().isoformat()
 
+    # Check if this session belongs to a managed session — don't mark as "dead"
+    # since managed sessions persist between individual claude -p invocations
+    is_managed = any(
+        m["session_id"] == session_id for m in _managed_sessions.values()
+    )
+    if is_managed and new_status == "dead":
+        new_status = "idle"
+
     with Session(engine) as db:
         session = db.get(AgentSession, session_id)
         if session:
             if new_status:
                 session.status = new_status
             session.last_activity = now
+            if transcript_path:
+                session.transcript_path = transcript_path
+            if model and not session.model:
+                session.model = model
+            if is_managed:
+                session.source = "managed"
+            # Backfill project_id if missing
+            if not session.project_id and session.cwd:
+                inferred = _infer_project_id(session.cwd)
+                if inferred:
+                    session.project_id = inferred
             db.commit()
         else:
             # Session discovered for the first time via a hook (no relay started)
+            inferred_pid = _infer_project_id(cwd) if cwd else None
             db.add(AgentSession(
                 id=session_id,
                 cwd=cwd,
                 name=Path(cwd).name if cwd else "unknown",
+                project_id=inferred_pid,
                 status=new_status or "idle",
-                source="hook",
+                source="managed" if is_managed else "hook",
+                transcript_path=transcript_path,
+                model=model,
             ))
             db.commit()
 
@@ -1431,9 +1601,20 @@ async def claude_hook(request: Request):
     if len(_hook_events) > _MAX_HOOK_EVENTS:
         del _hook_events[:-_MAX_HOOK_EVENTS]
 
-    # Return empty dict for most events.
-    # UserPromptSubmit could return {"additionalContext": "..."} here in a future PR
-    # to inject context into the agent's next turn (e.g., cronban task reminders).
+    # Push new JSONL entries to any live-streaming browser clients
+    if transcript_path and session_id in _live_stream_queues:
+        asyncio.create_task(_push_new_jsonl_entries(session_id, transcript_path))
+
+    # Notify live stream clients of status change
+    _push_status_to_live(session_id, new_status or "idle", event)
+
+    # Context injection: return queued messages on UserPromptSubmit
+    if event == "UserPromptSubmit" and session_id in _injection_queues:
+        pending = _injection_queues.pop(session_id, [])
+        if pending:
+            context = "\n\n".join(pending)
+            return {"additionalContext": context}
+
     return {}
 
 
@@ -1441,6 +1622,34 @@ async def claude_hook(request: Request):
 async def list_hook_events(limit: int = 100):
     """Return the most recent Claude Code hook events (in-memory, resets on restart)."""
     return {"events": _hook_events[-limit:]}
+
+
+# =============================================================================
+# Session Management — Dismiss / force-cull stale sessions
+# =============================================================================
+
+@app.delete("/api/sessions/{session_id}")
+async def dismiss_session(session_id: str):
+    """Mark a session as dead so it disappears from active listings."""
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+    from sqlmodel import Session as DBSession
+    with DBSession(engine) as db:
+        session = db.get(AgentSession, session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        session.status = "dead"
+        db.add(session)
+        db.commit()
+    # Also clean up in-memory relay state and persisted scrollback
+    _session_streams.pop(session_id, None)
+    _session_inject_queues.pop(session_id, None)
+    _session_scrollback.pop(session_id, None)
+    try:
+        _scrollback_path(session_id).unlink(missing_ok=True)
+    except Exception:
+        pass
+    return {"ok": True}
 
 
 # =============================================================================
@@ -1461,16 +1670,13 @@ async def get_transcript(session_id: str, types: str = "user,assistant,system"):
     from vlt.db import engine
     from vlt.core.models import AgentSession
 
-    # Look up session to get cwd
+    # Look up session to get cwd / transcript_path
     with Session(engine) as db:
         session = db.get(AgentSession, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Derive JSONL path
-    cwd = session.cwd or ""
-    slug = cwd.replace("/", "-")
-    jsonl_path = Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl"
+    jsonl_path = Path(_resolve_transcript_path(session))
 
     if not jsonl_path.exists():
         raise HTTPException(status_code=404, detail=f"Transcript not found: {jsonl_path}")
@@ -1529,9 +1735,7 @@ async def save_transcript(session_id: str, request: Request):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    cwd = session.cwd or ""
-    slug = cwd.replace("/", "-")
-    jsonl_path = Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl"
+    jsonl_path = Path(_resolve_transcript_path(session))
 
     payload = await request.json()
     raw_entries = payload.get("entries", [])
@@ -1547,6 +1751,469 @@ async def save_transcript(session_id: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to write transcript: {e}")
 
     return {"ok": True, "lines_written": len(raw_entries)}
+
+
+# =============================================================================
+# Live Session Streaming + Context Injection
+# =============================================================================
+
+# Per-session live streaming: browser WebSocket clients receive JSONL entries
+_live_stream_queues: Dict[str, Set[asyncio.Queue]] = {}
+
+# Per-session byte offset for incremental JSONL reads
+_live_file_offsets: Dict[str, int] = {}
+
+# Per-session context injection queue: messages from browser → Claude via hooks
+_injection_queues: Dict[str, list] = {}
+
+
+def _find_managed_by_session_id(sid: str) -> Optional[Dict]:
+    """Look up a managed session entry by session_id (not CWD)."""
+    for managed in _managed_sessions.values():
+        if managed.get("session_id") == sid:
+            return managed
+    return None
+
+
+def _push_status_to_live(session_id: str, status: str, event: str) -> None:
+    """Push a status update message to all live stream clients for a session."""
+    clients = _live_stream_queues.get(session_id)
+    if not clients:
+        return
+    msg = {"type": "status", "status": status, "event": event}
+    for q in list(clients):
+        try:
+            q.put_nowait(msg)
+        except asyncio.QueueFull:
+            pass
+
+
+async def _push_new_jsonl_entries(session_id: str, transcript_path: str) -> None:
+    """Read new JSONL entries since last offset and push to live stream clients."""
+    clients = _live_stream_queues.get(session_id)
+    if not clients:
+        return
+
+    path = Path(transcript_path)
+    if not path.exists():
+        return
+
+    offset = _live_file_offsets.get(session_id, 0)
+
+    try:
+        def _read_new():
+            with open(path, "r", encoding="utf-8") as f:
+                f.seek(offset)
+                entries = []
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        entries.append(json.loads(stripped))
+                    except json.JSONDecodeError:
+                        continue
+                return entries, f.tell()
+
+        new_entries, new_offset = await asyncio.to_thread(_read_new)
+        _live_file_offsets[session_id] = new_offset
+    except Exception:
+        return
+
+    _STREAM_TYPES = {"user", "assistant", "system"}
+    for entry in new_entries:
+        if entry.get("type") not in _STREAM_TYPES:
+            continue
+        msg = {"type": "entry", "entry": entry}
+        for q in list(clients):
+            try:
+                q.put_nowait(msg)
+            except asyncio.QueueFull:
+                pass
+
+
+def _resolve_transcript_path(session) -> str:
+    """Resolve JSONL transcript path from session (prefers stored, falls back to slug)."""
+    if session.transcript_path:
+        return session.transcript_path
+    cwd = session.cwd or ""
+    slug = cwd.replace("/", "-")
+    return str(Path.home() / ".claude" / "projects" / slug / f"{session.id}.jsonl")
+
+
+@app.websocket("/ws/session/{session_id}/live")
+async def session_live_ws(websocket: WebSocket, session_id: str):
+    """
+    Live JSONL transcript streaming to browser clients.
+
+    On connect: sends all existing entries as {"type": "initial", "entries": [...]}.
+    Then streams new entries as {"type": "entry", "entry": {...}} triggered by hooks
+    and a 1-second polling fallback.
+
+    Also sends {"type": "status", "status": "thinking"|"idle"|...} on hook events.
+    """
+    from vlt.db import engine
+    from vlt.core.models import AgentSession
+
+    await websocket.accept()
+
+    with Session(engine) as db:
+        session = db.get(AgentSession, session_id)
+    if not session:
+        await websocket.close(1008, "Session not found")
+        return
+
+    transcript_path = _resolve_transcript_path(session)
+
+    # Register client queue
+    client_queue: asyncio.Queue = asyncio.Queue(maxsize=2048)
+    if session_id not in _live_stream_queues:
+        _live_stream_queues[session_id] = set()
+    _live_stream_queues[session_id].add(client_queue)
+
+    # Only include conversation-relevant entry types in initial + streaming
+    _LIVE_TYPES = {"user", "assistant", "system"}
+
+    try:
+        # Send initial batch (last 200 conversation entries, filtered)
+        path = Path(transcript_path)
+        initial_entries = []
+        if path.exists():
+            def _read_initial():
+                entries = []
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        try:
+                            obj = json.loads(stripped)
+                        except json.JSONDecodeError:
+                            continue
+                        if obj.get("type") in _LIVE_TYPES:
+                            entries.append(obj)
+                    return entries[-200:], f.tell()
+
+            initial_entries, offset = await asyncio.to_thread(_read_initial)
+            _live_file_offsets[session_id] = offset
+
+        await websocket.send_json({
+            "type": "initial",
+            "entries": initial_entries,
+            "session": {
+                "id": session.id,
+                "cwd": session.cwd,
+                "status": session.status,
+                "model": session.model,
+                "name": session.name,
+            },
+        })
+
+        # Poll for new entries between hook events (1-second fallback)
+        async def poll_loop():
+            while True:
+                await asyncio.sleep(1.0)
+                await _push_new_jsonl_entries(session_id, transcript_path)
+
+        poll_task = asyncio.create_task(poll_loop())
+
+        # Dual loop: forward queued messages to browser + receive browser input
+        async def send_loop():
+            while True:
+                try:
+                    msg = await asyncio.wait_for(client_queue.get(), timeout=30.0)
+                    await websocket.send_json(msg)
+                except asyncio.TimeoutError:
+                    await websocket.send_json({"type": "ping"})
+
+        async def recv_loop():
+            """Route browser input based on session type:
+            - relay → direct PTY write via inject queue
+            - managed (web-spawned) → queue for --resume worker
+            - hook (terminal CLI) → additionalContext via hook response
+            """
+            async for raw in websocket.iter_text():
+                try:
+                    msg = json.loads(raw)
+                    msg_type = msg.get("type")
+                    text = msg.get("text", "")
+                    if not text or msg_type not in ("inject", "input"):
+                        continue
+
+                    # 1. Relay session — direct PTY stdin write
+                    if session_id in _session_inject_queues:
+                        await _session_inject_queues[session_id].put(text + "\n")
+                        await websocket.send_json({
+                            "type": "input_sent",
+                            "text": text,
+                        })
+
+                    # 2. Web-spawned managed session — queue for --resume worker
+                    elif (managed := _find_managed_by_session_id(session_id)) is not None:
+                        managed["queue"].append({"text": text})
+                        if not managed["processing"]:
+                            asyncio.create_task(
+                                _managed_message_worker(managed["cwd"])
+                            )
+                        await websocket.send_json({
+                            "type": "input_sent",
+                            "text": text,
+                        })
+
+                    # 3. Hook-discovered session (CLI in terminal) —
+                    #    queue as additionalContext, delivered on next
+                    #    UserPromptSubmit hook.
+                    else:
+                        _injection_queues.setdefault(session_id, []).append(text)
+                        await websocket.send_json({
+                            "type": "injected",
+                            "text": text,
+                            "queued": len(_injection_queues[session_id]),
+                        })
+                except (json.JSONDecodeError, Exception):
+                    pass
+
+        try:
+            await asyncio.gather(send_loop(), recv_loop(), return_exceptions=True)
+        finally:
+            poll_task.cancel()
+            try:
+                await poll_task
+            except asyncio.CancelledError:
+                pass
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.debug(f"Live stream error for {session_id}: {e}")
+    finally:
+        _live_stream_queues.get(session_id, set()).discard(client_queue)
+        if not _live_stream_queues.get(session_id):
+            _live_stream_queues.pop(session_id, None)
+            _live_file_offsets.pop(session_id, None)
+
+
+@app.post("/api/sessions/{session_id}/context")
+async def inject_context(session_id: str, request: Request):
+    """
+    Queue a context message to be injected into the agent's next turn.
+
+    When the agent's next UserPromptSubmit hook fires, the daemon returns
+    the queued message as additionalContext, which Claude Code injects into
+    the conversation. This enables remote interaction without a PTY relay.
+    """
+    body = await request.json()
+    message = body.get("message", "")
+    if not message:
+        raise HTTPException(status_code=400, detail="message required")
+
+    if session_id not in _injection_queues:
+        _injection_queues[session_id] = []
+    _injection_queues[session_id].append(message)
+
+    return {"ok": True, "queued": len(_injection_queues[session_id])}
+
+
+# =============================================================================
+# Daemon-Managed Sessions (Message Queue)
+# =============================================================================
+#
+# Instead of maintaining a long-running interactive PTY (Claude's TUI doesn't
+# accept raw PTY input reliably), we use a message-queue approach:
+#
+#   1. New session:      claude -p "msg" --session-id <uuid> --dangerously-skip-permissions
+#   2. Resume existing:  claude -p "msg" --resume <session_id> --dangerously-skip-permissions
+#
+# The session_id is pre-assigned (uuid4) for new sessions so we know the JSONL
+# file path before the process starts. For existing sessions (user clicked in UI),
+# we use --resume to append to that conversation. Hooks fire normally.
+
+# Per-cwd managed session state
+_managed_sessions: Dict[str, dict] = {}  # cwd → {session_id, processing, queue}
+
+
+async def _run_claude_message(
+    cwd: str,
+    message: str,
+    session_id: Optional[str] = None,
+    is_first: bool = True,
+    model: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Run a single claude -p message in a PTY and wait for completion.
+
+    For the first message: uses --session-id to pre-assign the session UUID.
+    For subsequent messages: uses --resume to target that specific session.
+    Returns the session_id used, or None on failure.
+    """
+    claude_bin = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
+    cmd = [claude_bin, "-p", message, "--dangerously-skip-permissions"]
+    if session_id:
+        if is_first:
+            cmd.extend(["--session-id", session_id])
+        else:
+            cmd.extend(["--resume", session_id])
+    if model:
+        cmd.extend(["--model", model])
+
+    # Clean env: remove Claude nesting detection vars
+    _STRIP_VARS = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}
+    spawn_env = {k: v for k, v in os.environ.items() if k not in _STRIP_VARS}
+    spawn_env["TERM"] = "xterm-256color"
+
+    master_fd, slave_fd = pty.openpty()
+    winsize = struct.pack("HHHH", 50, 120, 0, 0)
+    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+    if not os.path.isdir(cwd):
+        os.close(master_fd)
+        os.close(slave_fd)
+        logger.error(f"CWD does not exist: {cwd}")
+        return None
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=cwd,
+            env=spawn_env,
+            preexec_fn=os.setsid,
+        )
+    except FileNotFoundError:
+        os.close(master_fd)
+        os.close(slave_fd)
+        logger.error(f"'claude' not found at {claude_bin}")
+        return None
+
+    os.close(slave_fd)
+    logger.info(f"Managed message PID={proc.pid} cwd={cwd} session={session_id} first={is_first}")
+
+    # Drain PTY output in background thread
+    loop = asyncio.get_event_loop()
+
+    async def drain():
+        while proc.poll() is None:
+            try:
+                await loop.run_in_executor(
+                    None, lambda: os.read(master_fd, 16384)
+                )
+            except OSError:
+                break
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    drain_task = asyncio.create_task(drain())
+
+    # Wait for process to complete (timeout 5 minutes)
+    try:
+        exit_code = await asyncio.wait_for(
+            loop.run_in_executor(None, proc.wait),
+            timeout=300.0,
+        )
+        logger.info(f"Managed message PID={proc.pid} exited code={exit_code}")
+    except asyncio.TimeoutError:
+        proc.kill()
+        logger.warning(f"Managed message PID={proc.pid} timed out, killed")
+
+    drain_task.cancel()
+    try:
+        await drain_task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+    return session_id
+
+
+async def _managed_message_worker(cwd: str):
+    """
+    Process queued messages for a managed session one at a time.
+    Each message spawns claude -p, waits for completion, then processes next.
+    """
+    managed = _managed_sessions.get(cwd)
+    if not managed:
+        return
+
+    managed["processing"] = True
+
+    # Pre-generate session_id if not already set
+    if not managed["session_id"]:
+        managed["session_id"] = str(uuid.uuid4())
+        managed["is_new"] = True
+        logger.info(f"Pre-assigned session_id={managed['session_id']} for cwd={cwd}")
+
+    sid = managed["session_id"]
+    is_new_session = managed.get("is_new", True)
+
+    try:
+        while managed["queue"]:
+            msg = managed["queue"].pop(0)
+            text = msg["text"]
+            model = msg.get("model")
+
+            _push_status_to_live(sid, "thinking", "ManagedMessage")
+
+            await _run_claude_message(
+                cwd=cwd,
+                message=text,
+                session_id=sid,
+                is_first=is_new_session,  # True = --session-id, False = --resume
+                model=model,
+            )
+
+            # After first message, always resume
+            is_new_session = False
+            managed["is_new"] = False
+            _push_status_to_live(sid, "idle", "ManagedMessageDone")
+    finally:
+        managed["processing"] = False
+
+
+@app.post("/api/sessions/spawn")
+async def spawn_managed_session(request: Request):
+    """
+    Send a message to a daemon-managed Claude Code session.
+
+    First message creates a new session. Subsequent messages use --resume
+    to target the specific session by ID. Each message runs as a discrete
+    process with hooks firing normally.
+    """
+    body = await request.json()
+    cwd = body.get("cwd", os.path.expanduser("~"))
+    message = body.get("prompt", body.get("message", "Hello! Ready for instructions."))
+    model = body.get("model")
+
+    cwd_path = str(Path(cwd).expanduser().resolve())
+    if not Path(cwd_path).is_dir():
+        raise HTTPException(status_code=400, detail=f"Invalid cwd: {cwd}")
+
+    # Initialize managed session state for this cwd
+    if cwd_path not in _managed_sessions:
+        _managed_sessions[cwd_path] = {
+            "session_id": str(uuid.uuid4()),  # Pre-assigned, used with --session-id
+            "processing": False,
+            "queue": [],
+            "cwd": cwd_path,
+            "is_new": True,  # brand new session → first msg uses --session-id
+        }
+
+    managed = _managed_sessions[cwd_path]
+    managed["queue"].append({"text": message, "model": model})
+
+    # Start worker if not already running
+    if not managed["processing"]:
+        asyncio.create_task(_managed_message_worker(cwd_path))
+
+    return {
+        "ok": True,
+        "cwd": cwd_path,
+        "queued": len(managed["queue"]),
+        "session_id": managed.get("session_id"),
+    }
+
 
 
 # =============================================================================

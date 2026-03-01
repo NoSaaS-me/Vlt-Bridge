@@ -169,6 +169,13 @@ def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
     import queue as _relay_queue
     ws_write_queue: _relay_queue.Queue = _relay_queue.Queue(maxsize=8192)
 
+    # Relay-side scrollback: captures all PTY output so we can replay it on daemon
+    # reconnect. The daemon's in-memory scrollback is lost on restart; the relay's
+    # buffer (in this process) survives, so we resend it whenever we reconnect.
+    _MAX_RELAY_SCROLLBACK = 2 * 1024 * 1024  # 2 MiB cap
+    relay_scrollback: bytearray = bytearray()
+    relay_scrollback_lock: threading.Lock = threading.Lock()
+
     _relay_active = threading.Event()
     _relay_active.set()
 
@@ -188,16 +195,19 @@ def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
         ws_url = f"{daemon_base}/ws/relay/{session_id}"
         backoff = 1.0
         first_connection = True
+        is_reconnect = False
 
         while _relay_active.is_set():
             if first_connection:
                 # Reuse the pre-initialized queue so we drain buffered initial output
                 q = ws_write_queue
                 first_connection = False
+                is_reconnect = False
             else:
                 # On reconnect, start fresh (stale data from a dead WS is irrelevant)
                 q = _queue.Queue(maxsize=8192)
                 ws_write_queue = q
+                is_reconnect = True
 
             def on_message(ws, message):
                 try:
@@ -230,6 +240,16 @@ def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
                     backoff = 1.0  # reset backoff on successful connect
                     # Re-register session each time we reconnect (daemon may have restarted)
                     register_session(session_id, os.getcwd(), proc.pid, args)
+                    # On reconnect: replay our scrollback so the daemon can restore the
+                    # browser's terminal view. First connect uses the pre-buffered queue.
+                    if is_reconnect:
+                        with relay_scrollback_lock:
+                            snapshot = bytes(relay_scrollback) if relay_scrollback else None
+                        if snapshot:
+                            try:
+                                ws.send_bytes(snapshot)
+                            except Exception:
+                                pass
                     # Start send thread AFTER socket is open so ws.send_binary() succeeds
                     send_thread = threading.Thread(target=ws_send_loop, args=(ws,), daemon=True)
                     send_thread.start()
@@ -286,6 +306,11 @@ def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
                     if not data:
                         break
                     os.write(sys.stdout.fileno(), data)
+                    # Maintain relay-side scrollback (survives daemon restarts)
+                    with relay_scrollback_lock:
+                        relay_scrollback.extend(data)
+                        if len(relay_scrollback) > _MAX_RELAY_SCROLLBACK:
+                            del relay_scrollback[:len(relay_scrollback) - _MAX_RELAY_SCROLLBACK]
                     # Forward to WebSocket stream
                     if ws_write_queue is not None:
                         try:

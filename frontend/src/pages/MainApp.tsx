@@ -747,6 +747,7 @@ export function MainApp() {
               title={isAgentsView ? "Close Agents" : "Open Agents Dashboard"}
             >
               <Bot className="h-4 w-4" />
+              <span className="text-xs">Agents</span>
             </Button>
           </div>
           <h1

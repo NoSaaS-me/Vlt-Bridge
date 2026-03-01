@@ -36,7 +36,6 @@ export function useTerminalSession({
   const wsRef = useRef<WebSocket | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [connectAttempt, setConnectAttempt] = useState(0);
   const isFocusedRef = useRef(isFocused);
 
   // Keep focus ref current without triggering effects
@@ -131,14 +130,23 @@ export function useTerminalSession({
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
 
+    // Show a hint if no data arrives within 6 seconds of connecting
+    let noDataTimer: ReturnType<typeof setTimeout> | undefined;
+    let receivedData = false;
+
     ws.onopen = () => {
       setIsConnected(true);
       term.writeln(`\x1b[2m\x1b[32m── connected ──\x1b[0m`);
-      // Do NOT send resize — the relay's PTY size is owned by the user's real terminal.
-      // The browser xterm adapts to whatever output the relay produces.
+      noDataTimer = setTimeout(() => {
+        if (!receivedData) {
+          term.writeln(`\x1b[2m\x1b[33m── no terminal history ──\x1b[0m`);
+          term.writeln(`\x1b[2m\x1b[33m── run: vlt session-relay ──\x1b[0m`);
+        }
+      }, 6000);
     };
 
     ws.onmessage = (ev) => {
+      receivedData = true;
       if (ev.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(ev.data));
       } else if (typeof ev.data === 'string') {
@@ -158,22 +166,21 @@ export function useTerminalSession({
     ws.onclose = (ev) => {
       setIsConnected(false);
       wsRef.current = null;
-      term.writeln(`\x1b[2m── disconnected (${ev.code}) ──\x1b[0m`);
-      // Schedule a reconnect attempt after a short delay (unless component unmounts)
-      const timer = setTimeout(() => setConnectAttempt((n) => n + 1), 2000);
-      // Store timer so cleanup can cancel it
-      (ws as WebSocket & { _reconnectTimer?: ReturnType<typeof setTimeout> })._reconnectTimer = timer;
+      if (ev.code === 1008) {
+        term.writeln(`\x1b[31m── session not found on daemon ──\x1b[0m`);
+        term.writeln(`\x1b[2m\x1b[33m── dismiss this session from the sidebar ──\x1b[0m`);
+      } else {
+        term.writeln(`\x1b[2m── disconnected (${ev.code}) ──\x1b[0m`);
+      }
     };
 
     return () => {
-      // Cancel any pending reconnect timer from this ws instance
-      const timer = (ws as WebSocket & { _reconnectTimer?: ReturnType<typeof setTimeout> })._reconnectTimer;
-      if (timer !== undefined) clearTimeout(timer);
+      clearTimeout(noDataTimer);
       ws.close();
       wsRef.current = null;
       setIsConnected(false);
     };
-  }, [isReady, isVisible, sessionId, connectAttempt]);
+  }, [isReady, isVisible, sessionId]);
 
   // ── Cleanup on unmount ─────────────────────────────────────────────────
   useEffect(() => {

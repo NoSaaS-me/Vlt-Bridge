@@ -493,13 +493,13 @@ export function Settings() {
         )}
 
         <Tabs defaultValue="account" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
-            <TabsTrigger value="account">Account</TabsTrigger>
-            <TabsTrigger value="models">Models</TabsTrigger>
+          <TabsList data-tour="settings-tabs" className="grid w-full grid-cols-6">
+            <TabsTrigger data-tour="settings-account-tab" value="account">Account</TabsTrigger>
+            <TabsTrigger data-tour="settings-models-tab" value="models">Models</TabsTrigger>
             <TabsTrigger value="context">Context</TabsTrigger>
             <TabsTrigger value="rules">Rules</TabsTrigger>
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
-            <TabsTrigger value="oracle">Oracle</TabsTrigger>
+            <TabsTrigger data-tour="settings-oracle-tab" value="oracle">Oracle</TabsTrigger>
           </TabsList>
 
           <TabsContent value="account" className="space-y-6 mt-6">

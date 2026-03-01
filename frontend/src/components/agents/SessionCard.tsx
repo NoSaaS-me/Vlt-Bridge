@@ -1,7 +1,7 @@
 /**
  * SessionCard — Compact session display for sidebar list.
  */
-import { Bot, Folder } from 'lucide-react';
+import { Bot, Folder, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type AgentSession } from '@/services/daemon-api';
 import { statusColor, isPulsing, shortPath, timeAgo } from './utils';
@@ -10,37 +10,50 @@ export function SessionCard({
   session,
   selected,
   onSelect,
+  onDismiss,
   compact = false,
 }: {
   session: AgentSession;
   selected: boolean;
   onSelect: () => void;
+  onDismiss?: () => void;
   compact?: boolean;
 }) {
   if (compact) {
     return (
-      <button
-        onClick={onSelect}
-        className={cn(
-          'w-full text-left rounded px-2.5 py-1.5 flex items-center gap-2 transition-all duration-150',
-          selected
-            ? 'bg-blue-500/15 text-blue-300 border border-blue-500/40'
-            : 'hover:bg-muted/40 border border-transparent',
-          session.status === 'dead' && 'opacity-40',
+      <div className="group relative">
+        <button
+          onClick={onSelect}
+          className={cn(
+            'w-full text-left rounded px-2.5 py-1.5 flex items-center gap-2 transition-all duration-150',
+            selected
+              ? 'bg-blue-500/15 text-blue-300 border border-blue-500/40'
+              : 'hover:bg-muted/40 border border-transparent',
+            session.status === 'dead' && 'opacity-40',
+          )}
+        >
+          <span className={cn(
+            'h-2 w-2 rounded-full shrink-0',
+            isPulsing(session.status) ? 'bg-amber-400 animate-pulse' :
+            session.status === 'idle' ? 'bg-emerald-400' : 'bg-muted-foreground/40',
+          )} />
+          <span className="text-xs font-mono truncate flex-1">
+            {session.name || `pid:${session.pid}`}
+          </span>
+          <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">
+            {timeAgo(session.last_activity)}
+          </span>
+        </button>
+        {onDismiss && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+            className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-destructive/20 hover:text-destructive text-muted-foreground"
+            title="Dismiss session"
+          >
+            <X className="h-3 w-3" />
+          </button>
         )}
-      >
-        <span className={cn(
-          'h-2 w-2 rounded-full shrink-0',
-          isPulsing(session.status) ? 'bg-amber-400 animate-pulse' :
-          session.status === 'idle' ? 'bg-emerald-400' : 'bg-muted-foreground/40',
-        )} />
-        <span className="text-xs font-mono truncate flex-1">
-          {session.name || `pid:${session.pid}`}
-        </span>
-        <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">
-          {timeAgo(session.last_activity)}
-        </span>
-      </button>
+      </div>
     );
   }
 

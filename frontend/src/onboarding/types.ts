@@ -15,7 +15,13 @@ export interface OnboardingStep {
   position?: TooltipPosition;
   /** Optional custom render function for the tooltip body (overrides description) */
   render?: (controls: StepControls) => ReactNode;
-  /** Called before this step is shown — use to open panels, navigate, etc. */
+  /**
+   * Route to navigate to before showing this step.
+   * The overlay handles navigation; element measurement waits for the new route to render.
+   * Example: '/settings'
+   */
+  route?: string;
+  /** Called before this step is shown — use to open panels, etc. */
   beforeEnter?: () => void;
   /** Padding (px) around the spotlight cutout. Default: 8 */
   spotlightPadding?: number;

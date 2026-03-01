@@ -21,7 +21,7 @@ export interface SessionPollingState {
   refresh: () => void;
 }
 
-export function useSessionPolling(): SessionPollingState {
+export function useSessionPolling(projectId?: string | null): SessionPollingState {
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [events, setEvents] = useState<HookEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -32,7 +32,7 @@ export function useSessionPolling(): SessionPollingState {
 
   const fetchSessions = useCallback(async () => {
     try {
-      const data = await listSessions();
+      const data = await listSessions(projectId ?? undefined);
       setSessions(data);
       setDaemonOnline(true);
       setLastRefresh(new Date());
@@ -42,7 +42,7 @@ export function useSessionPolling(): SessionPollingState {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [projectId]);
 
   const fetchEvents = useCallback(async () => {
     try {

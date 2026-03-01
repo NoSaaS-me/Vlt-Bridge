@@ -1,4 +1,4 @@
-import React, {
+import {
   useEffect,
   useLayoutEffect,
   useRef,
@@ -6,6 +6,7 @@ import React, {
   useCallback,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useOnboarding } from './useOnboarding';
 import { OnboardingTooltip } from './OnboardingTooltip';
 import type { TooltipPosition, StepControls } from './types';
@@ -147,6 +148,8 @@ function computeTooltipPosition(
 
 export function OnboardingOverlay() {
   const { state, steps, next, back, skip } = useOnboarding();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const [targetRect, setTargetRect] = useState<Rect | null>(null);
   const [viewport, setViewport] = useState({
@@ -182,6 +185,22 @@ export function OnboardingOverlay() {
     if (!state.isActive) return;
     measureTarget();
   }, [state.isActive, measureTarget]);
+
+  // Navigate to the step's required route if we're on the wrong page
+  useEffect(() => {
+    if (!state.isActive || !currentStepDef?.route) return;
+    if (location.pathname !== currentStepDef.route) {
+      navigate(currentStepDef.route);
+    }
+  }, [state.isActive, currentStepDef, location.pathname, navigate]);
+
+  // Re-measure whenever the pathname changes (route navigation settled)
+  useEffect(() => {
+    if (!state.isActive) return;
+    // Small delay lets the new route's DOM fully render
+    const timer = setTimeout(() => measureTarget(), 80);
+    return () => clearTimeout(timer);
+  }, [location.pathname, state.isActive, measureTarget]);
 
   // Resize listener
   useEffect(() => {

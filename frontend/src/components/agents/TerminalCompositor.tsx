@@ -4,12 +4,39 @@
  * Niri-style: terminals laid out horizontally with scroll-snap.
  * Vertical scroll = terminal scrollback. Horizontal scroll/swipe = navigate between terminals.
  */
-import { useEffect, useRef, useMemo } from 'react';
-import { Terminal } from 'lucide-react';
+import { useEffect, useRef, useMemo, Component } from 'react';
+import type { ReactNode } from 'react';
+import { Terminal, AlertTriangle } from 'lucide-react';
 import { type AgentSession } from '@/services/daemon-api';
 import { useCompositorScroll } from '@/hooks/useCompositorScroll';
 import { TerminalPane } from './TerminalPane';
 import { CompositorNav } from './CompositorNav';
+
+// ── Error boundary — keeps one bad pane from crashing the whole compositor ──
+class TerminalPaneBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="h-full flex flex-col items-center justify-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 text-destructive/80 text-xs p-4 text-center">
+          <AlertTriangle className="h-5 w-5" />
+          <span>Terminal error</span>
+          <span className="font-mono text-[10px] text-muted-foreground">{this.state.error.message}</span>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export function TerminalCompositor({
   sessions,
@@ -64,13 +91,15 @@ export function TerminalCompositor({
     return (
       <div className="h-full flex flex-col items-center justify-center text-center p-8">
         <Terminal className="h-12 w-12 text-muted-foreground/20 mb-4" />
-        <p className="text-sm text-muted-foreground mb-2">No relay sessions</p>
-        <p className="text-xs text-muted-foreground/60 max-w-[280px]">
-          Start a session with{' '}
-          <code className="font-mono bg-muted px-1 py-0.5 rounded text-foreground/70">
+        <p className="text-sm text-muted-foreground mb-2">No live terminal streams</p>
+        <p className="text-xs text-muted-foreground/60 max-w-[320px]">
+          Sessions detected via hooks appear in the sidebar. Click one to view its transcript.
+        </p>
+        <p className="text-xs text-muted-foreground/40 max-w-[320px] mt-2">
+          For live terminal streaming, start a session with{' '}
+          <code className="font-mono bg-muted px-1 py-0.5 rounded text-foreground/50">
             vlt session-relay
-          </code>{' '}
-          to stream live Claude Code terminal output here.
+          </code>
         </p>
       </div>
     );
@@ -96,12 +125,14 @@ export function TerminalCompositor({
               width: 'clamp(480px, 45vw, 900px)',
             }}
           >
-            <TerminalPane
-              session={session}
-              isVisible={visibleIndices.has(idx)}
-              isFocused={focusedIndex === idx}
-              onFocus={() => setFocusedIndex(idx)}
-            />
+            <TerminalPaneBoundary>
+              <TerminalPane
+                session={session}
+                isVisible={visibleIndices.has(idx)}
+                isFocused={focusedIndex === idx}
+                onFocus={() => setFocusedIndex(idx)}
+              />
+            </TerminalPaneBoundary>
           </div>
         ))}
       </div>
