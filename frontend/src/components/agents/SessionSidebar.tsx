@@ -31,6 +31,7 @@ export function SessionSidebar({
   onDismissSession,
   onStartFresh,
   onResumeSession,
+  onRenameSession,
   onRefresh,
 }: {
   sessions: AgentSession[];
@@ -44,6 +45,7 @@ export function SessionSidebar({
   onDismissSession?: (id: string) => void;
   onStartFresh?: (prompt: string) => void;
   onResumeSession?: (session: AgentSession) => void;
+  onRenameSession?: (id: string, name: string) => void;
   onRefresh?: () => void;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -159,6 +161,7 @@ export function SessionSidebar({
                       : onSelectSession(s.id)
                 }
                 onDismiss={onDismissSession ? () => onDismissSession(s.id) : undefined}
+                onRename={onRenameSession}
                 compact
               />
             ))}

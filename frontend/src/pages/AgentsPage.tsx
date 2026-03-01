@@ -10,7 +10,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { Bot, Clock, Plug, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { type AgentSession, dismissSession, spawnSession } from '@/services/daemon-api';
+import { type AgentSession, dismissSession, spawnSession, renameSession } from '@/services/daemon-api';
 import { useSessionPolling } from '@/hooks/useSessionPolling';
 import { useProjectContext } from '@/contexts/ProjectContext';
 import { SessionSidebar } from '@/components/agents/SessionSidebar';
@@ -97,6 +97,7 @@ function AgentsCompositorView({
   onCloseLiveSession,
   onStartFresh,
   onResumeSession,
+  onRenameSession,
 }: {
   polling: ReturnType<typeof useSessionPolling>;
   focusedSessionId: string | null;
@@ -109,6 +110,8 @@ function AgentsCompositorView({
   onCloseLiveSession: () => void;
   onStartFresh: (prompt: string) => void;
   onResumeSession: (session: AgentSession) => void;
+  onRenameSession: (id: string, name: string) => void;
+  onRenameSession: (id: string, name: string) => void;
 }) {
   const hasRelaySessions = useMemo(
     () => polling.sessions.some((s) => s.source === 'relay' && s.status !== 'dead'),
@@ -131,6 +134,7 @@ function AgentsCompositorView({
           onDismissSession={onDismissSession}
           onStartFresh={onStartFresh}
           onResumeSession={onResumeSession}
+          onRenameSession={onRenameSession}
           onRefresh={polling.refresh}
         />
       </div>
@@ -225,6 +229,10 @@ export function AgentsPage() {
     setLiveSession(session);
   }, []);
 
+  const handleRenameSession = useCallback((id: string, name: string) => {
+    renameSession(id, name).then(() => polling.refresh()).catch(console.error);
+  }, [polling]);
+
   return (
     <div className="h-full flex">
       {/* Left nav sidebar */}
@@ -272,6 +280,7 @@ export function AgentsPage() {
             onCloseLiveSession={() => setLiveSession(null)}
             onStartFresh={handleStartFresh}
             onResumeSession={handleResumeSession}
+            onRenameSession={handleRenameSession}
           />
         )}
         {activeSection === 'cronban' && <CronbanView />}

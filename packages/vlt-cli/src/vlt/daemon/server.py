@@ -1292,6 +1292,8 @@ async def update_session(session_id: str, request: Request):
             raise HTTPException(status_code=404, detail="Session not found")
         if "project_id" in body:
             session.project_id = body["project_id"]
+        if "name" in body and body["name"]:
+            session.name = body["name"].strip()
         db.commit()
     return {"ok": True}
 
@@ -1643,7 +1645,7 @@ async def dismiss_session(session_id: str):
         session.status = "dead"
         db.add(session)
         db.commit()
-    # Also clean up in-memory relay state and persisted scrollback
+    # Clean up in-memory relay state and persisted scrollback
     _session_streams.pop(session_id, None)
     _session_inject_queues.pop(session_id, None)
     _session_scrollback.pop(session_id, None)
@@ -1651,6 +1653,10 @@ async def dismiss_session(session_id: str):
         _scrollback_path(session_id).unlink(missing_ok=True)
     except Exception:
         pass
+    # Clean up managed session state so the worker doesn't run any queued msgs
+    _managed_sessions.pop(session_id, None)
+    # Push dead status to any open live stream clients
+    _push_status_to_live(session_id, "dead", "Killed")
     return {"ok": True}
 
 
@@ -2349,6 +2355,25 @@ async def spawn_managed_session(request: Request):
         "cwd": cwd_path,
         "is_new": is_new,
     }
+
+    # Pre-create the DB record so the WebSocket handler can find the session
+    # immediately (before the claude -p process fires its first hook).
+    from vlt.db import engine as _engine
+    from vlt.core.models import AgentSession as _AgentSession
+    proj_id = _infer_project_id(cwd_path)
+    with Session(_engine) as db:
+        if not db.get(_AgentSession, sid):
+            db.add(_AgentSession(
+                id=sid,
+                cwd=cwd_path,
+                name=Path(cwd_path).name,
+                project_id=proj_id,
+                status="idle",
+                source="managed",
+                transcript_path=None,
+                model=model,
+            ))
+            db.commit()
 
     managed = _managed_sessions[sid]
     managed["queue"].append({"text": message, "model": model})

@@ -156,6 +156,19 @@ export async function fetchTranscript(
 }
 
 /**
+ * Rename a session. Persists to DB so it survives page refreshes.
+ */
+export async function renameSession(sessionId: string, name: string): Promise<void> {
+  const response = await fetch(`/vlt/api/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!response.ok) throw new Error(`Rename failed: ${response.status}`);
+}
+
+/**
  * Mark a session as dead so it disappears from active listings.
  */
 export async function dismissSession(sessionId: string): Promise<void> {
