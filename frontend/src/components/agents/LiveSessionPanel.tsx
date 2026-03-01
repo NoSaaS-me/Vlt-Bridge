@@ -57,7 +57,7 @@ function parseEntry(raw: RawEntry): ParsedMessage | null {
   const msg = raw.message;
   if (!msg) return null;
 
-  const role = (msg.role || type) as ParsedMessage['role'];
+  let role = (msg.role || type) as ParsedMessage['role'];
   const parts: ContentPart[] = [];
 
   if (typeof msg.content === 'string') {
@@ -93,12 +93,65 @@ function parseEntry(raw: RawEntry): ParsedMessage | null {
 
   if (parts.length === 0) return null;
 
+  // Claude Code wraps tool results in "user" type entries. If every content
+  // block is a tool_result, this is really part of the assistant's tool flow,
+  // not an actual user message.
+  if (role === 'user' && parts.length > 0 && parts.every((p) => p.type === 'tool_result')) {
+    role = 'tool';
+  }
+
   return {
     id: raw.uuid || `${raw.timestamp || ''}-${Math.random()}`,
     role,
     content: parts,
     timestamp: raw.timestamp,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Thinking indicator — animated color bars (à la Claude)
+// ---------------------------------------------------------------------------
+
+const THINKING_COLORS = [
+  'bg-blue-400', 'bg-violet-400', 'bg-amber-400', 'bg-emerald-400',
+  'bg-rose-400', 'bg-cyan-400', 'bg-orange-400', 'bg-indigo-400',
+];
+
+function ThinkingIndicator({ status }: { status: string }) {
+  const label = status === 'executing' ? 'Working' : 'Thinking';
+  return (
+    <div className="rounded-md border bg-muted/30 border-border px-3 py-2.5">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground/80">
+        Claude
+      </span>
+      <div className="mt-1.5 flex flex-col gap-[3px]">
+        {Array.from({ length: 4 }).map((_, row) => (
+          <div key={row} className="flex gap-[3px] h-[3px]">
+            {Array.from({ length: 3 + (row % 2) }).map((_, col) => {
+              const ci = (row * 3 + col) % THINKING_COLORS.length;
+              const widths = ['w-8', 'w-12', 'w-16', 'w-20', 'w-6', 'w-10', 'w-14'];
+              const wi = (row * 5 + col * 3) % widths.length;
+              // Each bar gets a different animation delay for the shimmer effect
+              const delay = `${(row * 150 + col * 200) % 1000}ms`;
+              return (
+                <div
+                  key={col}
+                  className={cn(
+                    'rounded-full opacity-40',
+                    THINKING_COLORS[ci],
+                    widths[wi],
+                    'animate-pulse',
+                  )}
+                  style={{ animationDelay: delay, animationDuration: '1.2s' }}
+                />
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <span className="text-[9px] text-muted-foreground/60 mt-1.5 block">{label}...</span>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -109,17 +162,18 @@ function MessageBubble({ msg }: { msg: ParsedMessage }) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const [toolOpen, setToolOpen] = useState(false);
 
-  const roleLabel = msg.role === 'user' ? 'You' : msg.role === 'assistant' ? 'Claude' : 'System';
+  const isAssistantLike = msg.role === 'assistant' || msg.role === 'tool';
+  const roleLabel = msg.role === 'user' ? 'You' : isAssistantLike ? 'Claude' : 'System';
   const roleBg =
     msg.role === 'user'
       ? 'bg-blue-500/10 border-blue-500/20'
-      : msg.role === 'assistant'
+      : isAssistantLike
         ? 'bg-muted/30 border-border'
         : 'bg-amber-500/10 border-amber-500/20';
   const roleColor =
     msg.role === 'user'
       ? 'text-blue-400'
-      : msg.role === 'assistant'
+      : isAssistantLike
         ? 'text-foreground/80'
         : 'text-amber-400';
 
@@ -226,6 +280,10 @@ export function LiveSessionPanel({
   const [autoScroll, setAutoScroll] = useState(true);
   // 'unknown' = haven't sent yet, 'direct' = PTY control, 'queued' = additionalContext fallback
   const [inputMode, setInputMode] = useState<'unknown' | 'direct' | 'queued'>('unknown');
+  // Show thinking indicator immediately after sending, before hook fires
+  const [waitingForResponse, setWaitingForResponse] = useState(false);
+  // Live ctx_pct from WS (overrides session prop when available)
+  const [liveCtxPct, setLiveCtxPct] = useState<number | null>(session.ctx_pct);
 
   const wsRef = useRef<WebSocket | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -274,6 +332,10 @@ export function LiveSessionPanel({
           }
         } else if (msg.type === 'status') {
           setStatus(msg.status);
+          // Once we get a real status update, clear the optimistic waiting state
+          if (msg.status === 'thinking' || msg.status === 'executing' || msg.status === 'idle') {
+            setWaitingForResponse(false);
+          }
         } else if (msg.type === 'injected') {
           setInjectionPending(msg.queued);
           setInputMode('queued');
@@ -281,6 +343,8 @@ export function LiveSessionPanel({
           // PTY direct input succeeded — clear pending since it was sent immediately
           setInjectionPending(0);
           setInputMode('direct');
+        } else if (msg.type === 'ctx_pct') {
+          setLiveCtxPct(msg.ctx_pct);
         }
       } catch {
         // ignore parse errors
@@ -301,6 +365,7 @@ export function LiveSessionPanel({
     wsRef.current.send(JSON.stringify({ type: 'inject', text }));
     setInputText('');
     setInjectionPending((prev) => prev + 1);
+    setWaitingForResponse(true);
     inputRef.current?.focus();
   }, [inputText]);
 
@@ -341,6 +406,20 @@ export function LiveSessionPanel({
           {session.model && (
             <span className="text-[10px] text-muted-foreground/60">{session.model}</span>
           )}
+          {liveCtxPct != null && liveCtxPct > 0 && (
+            <span
+              className={cn(
+                'text-[10px] font-mono px-1.5 py-0.5 rounded border',
+                liveCtxPct > 80
+                  ? 'text-red-400 bg-red-500/10 border-red-500/20'
+                  : liveCtxPct > 50
+                    ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                    : 'text-muted-foreground bg-muted/30 border-border',
+              )}
+            >
+              ctx {liveCtxPct}%
+            </span>
+          )}
           {!connected && (
             <span className="flex items-center gap-1 text-[10px] text-red-400">
               <WifiOff className="h-3 w-3" /> disconnected
@@ -373,6 +452,9 @@ export function LiveSessionPanel({
           {messages.map((msg) => (
             <MessageBubble key={msg.id} msg={msg} />
           ))}
+          {(status === 'thinking' || status === 'executing' || waitingForResponse) && (
+            <ThinkingIndicator status={status === 'executing' ? 'executing' : 'thinking'} />
+          )}
           <div ref={bottomRef} />
         </div>
       </div>

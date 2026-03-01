@@ -40,8 +40,10 @@ export async function listSessions(projectId?: string): Promise<AgentSession[]> 
 /**
  * List ALL sessions (including dead) for the find dialog.
  */
-export async function listAllSessions(): Promise<AgentSession[]> {
-  const response = await fetch('/vlt/api/sessions?include_all=true', { signal: AbortSignal.timeout(4000) });
+export async function listAllSessions(projectId?: string): Promise<AgentSession[]> {
+  const params = new URLSearchParams({ include_all: 'true' });
+  if (projectId) params.set('project_id', projectId);
+  const response = await fetch(`/vlt/api/sessions?${params}`, { signal: AbortSignal.timeout(4000) });
   if (!response.ok) throw new Error(`Daemon error: ${response.status} ${response.statusText}`);
   const data = await response.json();
   return Array.isArray(data) ? data : (data.sessions ?? []);
@@ -230,7 +232,7 @@ export async function injectContext(
  */
 export async function spawnSession(
   cwd: string,
-  options?: { model?: string; prompt?: string },
+  options?: { model?: string; prompt?: string; resume_session_id?: string },
 ): Promise<{ ok: boolean; cwd: string; queued: number; session_id?: string }> {
   const response = await fetch('/vlt/api/sessions/spawn', {
     method: 'POST',

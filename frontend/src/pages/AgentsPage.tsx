@@ -90,21 +90,25 @@ function AgentsCompositorView({
   focusedSessionId,
   liveSession,
   selectedProjectId,
+  spawnCwd,
   onSelectSession,
   onSelectDiscoveredSession,
   onDismissSession,
   onCloseLiveSession,
-  onSpawnSession,
+  onStartFresh,
+  onResumeSession,
 }: {
   polling: ReturnType<typeof useSessionPolling>;
   focusedSessionId: string | null;
   liveSession: AgentSession | null;
   selectedProjectId: string | null;
+  spawnCwd: string;
   onSelectSession: (id: string) => void;
   onSelectDiscoveredSession: (session: AgentSession) => void;
   onDismissSession: (id: string) => void;
   onCloseLiveSession: () => void;
-  onSpawnSession: () => void;
+  onStartFresh: (prompt: string) => void;
+  onResumeSession: (session: AgentSession) => void;
 }) {
   const hasRelaySessions = useMemo(
     () => polling.sessions.some((s) => s.source === 'relay' && s.status !== 'dead'),
@@ -121,10 +125,12 @@ function AgentsCompositorView({
           daemonOnline={polling.daemonOnline}
           focusedSessionId={liveSession?.id ?? focusedSessionId}
           currentProjectId={selectedProjectId}
+          spawnCwd={spawnCwd}
           onSelectSession={onSelectSession}
           onSelectDiscoveredSession={onSelectDiscoveredSession}
           onDismissSession={onDismissSession}
-          onSpawnSession={onSpawnSession}
+          onStartFresh={onStartFresh}
+          onResumeSession={onResumeSession}
           onRefresh={polling.refresh}
         />
       </div>
@@ -188,29 +194,36 @@ export function AgentsPage() {
     dismissSession(id).then(() => polling.refresh()).catch(console.error);
   }, [polling]);
 
-  const handleSpawnSession = useCallback(() => {
-    spawnSession(spawnCwd, { prompt: 'Hello! Ready for instructions.' })
-      .then((result) => {
-        setTimeout(() => polling.refresh(), 2000);
-        if (result.session_id) {
-          setLiveSession({
-            id: result.session_id,
-            project_id: selectedProjectId,
-            name: 'New Session',
-            cwd: result.cwd,
-            status: 'thinking',
-            model: null,
-            ctx_pct: null,
-            pid: 0,
-            bypass_perms: true,
-            source: 'managed',
-            created_at: new Date().toISOString(),
-            last_activity: new Date().toISOString(),
-          });
-        }
-      })
-      .catch((err) => console.error('Spawn failed:', err));
-  }, [polling, spawnCwd, selectedProjectId]);
+  const handleStartFresh = useCallback(
+    (prompt: string) => {
+      spawnSession(spawnCwd, { prompt })
+        .then((result) => {
+          setTimeout(() => polling.refresh(), 2000);
+          if (result.session_id) {
+            setLiveSession({
+              id: result.session_id,
+              project_id: selectedProjectId,
+              name: 'New Session',
+              cwd: result.cwd,
+              status: 'thinking',
+              model: null,
+              ctx_pct: null,
+              pid: 0,
+              bypass_perms: true,
+              source: 'managed',
+              created_at: new Date().toISOString(),
+              last_activity: new Date().toISOString(),
+            });
+          }
+        })
+        .catch((err) => console.error('Spawn failed:', err));
+    },
+    [polling, spawnCwd, selectedProjectId],
+  );
+
+  const handleResumeSession = useCallback((session: AgentSession) => {
+    setLiveSession(session);
+  }, []);
 
   return (
     <div className="h-full flex">
@@ -252,11 +265,13 @@ export function AgentsPage() {
             focusedSessionId={focusedSessionId}
             liveSession={liveSession}
             selectedProjectId={selectedProjectId}
+            spawnCwd={spawnCwd}
             onSelectSession={handleSelectSession}
             onSelectDiscoveredSession={handleSelectDiscoveredSession}
             onDismissSession={handleDismissSession}
             onCloseLiveSession={() => setLiveSession(null)}
-            onSpawnSession={handleSpawnSession}
+            onStartFresh={handleStartFresh}
+            onResumeSession={handleResumeSession}
           />
         )}
         {activeSection === 'cronban' && <CronbanView />}

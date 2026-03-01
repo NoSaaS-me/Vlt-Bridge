@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/popover';
 import { SessionCard } from './SessionCard';
 import { FindSessionDialog } from './FindSessionDialog';
+import { NewSessionDialog } from './NewSessionDialog';
 
 export function SessionSidebar({
   sessions,
@@ -24,10 +25,12 @@ export function SessionSidebar({
   daemonOnline,
   focusedSessionId,
   currentProjectId,
+  spawnCwd,
   onSelectSession,
   onSelectDiscoveredSession,
   onDismissSession,
-  onSpawnSession,
+  onStartFresh,
+  onResumeSession,
   onRefresh,
 }: {
   sessions: AgentSession[];
@@ -35,14 +38,17 @@ export function SessionSidebar({
   daemonOnline: boolean;
   focusedSessionId: string | null;
   currentProjectId: string | null;
+  spawnCwd: string;
   onSelectSession: (id: string) => void;
   onSelectDiscoveredSession?: (session: AgentSession) => void;
   onDismissSession?: (id: string) => void;
-  onSpawnSession?: () => void;
+  onStartFresh?: (prompt: string) => void;
+  onResumeSession?: (session: AgentSession) => void;
   onRefresh?: () => void;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [findDialogOpen, setFindDialogOpen] = useState(false);
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
 
   // All non-dead sessions in one list, sorted by activity.
   const liveSessions = sessions
@@ -60,7 +66,7 @@ export function SessionSidebar({
           </span>
         </div>
         <div className="flex items-center gap-1.5">
-          {onSpawnSession && daemonOnline && currentProjectId && (
+          {onStartFresh && daemonOnline && currentProjectId && (
             <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
               <PopoverTrigger asChild>
                 <Button
@@ -81,21 +87,21 @@ export function SessionSidebar({
                   className="w-full flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/80 transition-colors"
                   onClick={() => {
                     setPopoverOpen(false);
-                    setFindDialogOpen(true);
+                    setNewSessionOpen(true);
                   }}
                 >
-                  <Search className="h-3 w-3 text-muted-foreground" />
-                  Find existing session
+                  <Sparkles className="h-3 w-3 text-muted-foreground" />
+                  New session
                 </button>
                 <button
                   className="w-full flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/80 transition-colors"
                   onClick={() => {
                     setPopoverOpen(false);
-                    onSpawnSession();
+                    setFindDialogOpen(true);
                   }}
                 >
-                  <Sparkles className="h-3 w-3 text-muted-foreground" />
-                  Start new session
+                  <Search className="h-3 w-3 text-muted-foreground" />
+                  Find & add session
                 </button>
               </PopoverContent>
             </Popover>
@@ -167,6 +173,18 @@ export function SessionSidebar({
           onOpenChange={setFindDialogOpen}
           currentProjectId={currentProjectId}
           onAssigned={() => onRefresh?.()}
+        />
+      )}
+
+      {/* New session dialog */}
+      {currentProjectId && onStartFresh && onResumeSession && (
+        <NewSessionDialog
+          open={newSessionOpen}
+          onOpenChange={setNewSessionOpen}
+          projectId={currentProjectId}
+          spawnCwd={spawnCwd}
+          onStartFresh={onStartFresh}
+          onResume={onResumeSession}
         />
       )}
     </div>
