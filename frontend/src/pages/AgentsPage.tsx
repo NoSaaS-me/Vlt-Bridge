@@ -17,6 +17,7 @@ import { SessionSidebar } from '@/components/agents/SessionSidebar';
 import { TerminalCompositor } from '@/components/agents/TerminalCompositor';
 import { EventsTicker } from '@/components/agents/EventsTicker';
 import { LiveSessionPanel } from '@/components/agents/LiveSessionPanel';
+import { CronbanView as CronbanViewReal } from '@/components/cronban/CronbanView';
 
 // ---------------------------------------------------------------------------
 // Nav
@@ -34,16 +35,8 @@ const NAV_ITEMS: { id: NavSection; icon: React.ElementType; label: string }[] = 
 // Placeholder sections (unchanged from original)
 // ---------------------------------------------------------------------------
 
-function CronbanView() {
-  return (
-    <div className="h-full flex flex-col items-center justify-center p-8 text-center">
-      <Clock className="h-14 w-14 text-muted-foreground/30 mb-5" />
-      <h2 className="text-base font-semibold mb-2">Cronban</h2>
-      <p className="text-sm text-muted-foreground max-w-sm">
-        Schedule AI agents on a cron schedule — daily reviews, tests, doc generation. Coming soon.
-      </p>
-    </div>
-  );
+function CronbanView({ projectId }: { projectId?: string }) {
+  return <CronbanViewReal projectId={projectId} />;
 }
 
 function ConnectorsView() {
@@ -283,7 +276,7 @@ export function AgentsPage() {
             onRenameSession={handleRenameSession}
           />
         )}
-        {activeSection === 'cronban' && <CronbanView />}
+        {activeSection === 'cronban' && <CronbanView projectId={selectedProjectId ?? undefined} />}
         {activeSection === 'connectors' && <ConnectorsView />}
       </div>
     </div>

@@ -72,6 +72,12 @@ def create_server():
     except ImportError:
         logger.debug("oracle_tools not available")
 
+    try:
+        from vlt.mcp.cronban_tools import register_cronban_tools
+        register_cronban_tools(mcp)
+    except ImportError:
+        logger.debug("cronban_tools not available")
+
     return mcp
 
 

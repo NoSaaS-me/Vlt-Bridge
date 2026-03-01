@@ -402,3 +402,143 @@ class AgentSession(Base):
     transcript_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # path from hook payload
     created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
     last_activity: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
+# ============================================================================
+# Cronban — Cron + Kanban + Calendar job scheduling
+# ============================================================================
+
+class CronbanEntryType(enum.Enum):
+    CRON    = "cron"     # Time-based: fires at scheduled time
+    GATE    = "gate"     # Kanban: fires when hidden eval passes
+    WEBHOOK = "webhook"  # Fires when triggered by external HTTP call
+
+
+class CronbanEntryStatus(enum.Enum):
+    ACTIVE    = "active"
+    PAUSED    = "paused"
+    COMPLETED = "completed"  # One-shot that fired successfully
+    FAILED    = "failed"
+
+
+class CronbanSkill(Base):
+    """Reusable prompt template library — the 'skill' a Claude session is given."""
+    __tablename__ = "cronban_skills"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)           # UUID
+    project_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # None = global
+    name: Mapped[str] = mapped_column(String)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    prompt_markdown: Mapped[str] = mapped_column(Text)                  # What Claude sees
+    tags_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON string[]
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
+class KanbanColumn(Base):
+    """Kanban board column definition, per-project."""
+    __tablename__ = "cronban_kanban_columns"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String)
+    name: Mapped[str] = mapped_column(String)
+    col_order: Mapped[int] = mapped_column(Integer, default=0)
+    color: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # hex
+    is_terminal: Mapped[bool] = mapped_column(Boolean, default=False)   # "Done"-type
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
+class CronbanEntry(Base):
+    """
+    A cronban entry — one of: calendar event (CRON), kanban card (GATE), or webhook trigger.
+
+    Three-part structure:
+      1. Schedule (target_time / cron / rrule)
+      2. Skill    — prompt Claude sees (prompt_text or skill_id)
+      3. Eval     — hidden criterion Claude NEVER sees; used by verifier only
+    """
+    __tablename__ = "cronban_entries"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    title: Mapped[str] = mapped_column(String)
+    entry_type: Mapped[str] = mapped_column(String, default="cron")   # CronbanEntryType value
+    status: Mapped[str] = mapped_column(String, default="active")     # CronbanEntryStatus value
+    color: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # ── SKILL (what Claude is told to do) ──────────────────────────────────
+    skill_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)   # FK cronban_skills.id
+    prompt_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Inline fallback
+
+    # ── EVAL (hidden from Claude — verifier only) ──────────────────────────
+    eval_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # eval_text is NEVER injected into the Claude session.
+    # The verifier receives it; Claude only ever gets a generic "summarize" prompt.
+
+    # ── WHERE TO FIRE ──────────────────────────────────────────────────────
+    target_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    target_cwd: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    create_new_session: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # ── SCHEDULE (CRON type) ───────────────────────────────────────────────
+    cron_expression: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "0 9 * * 1-5"
+    rrule_str: Mapped[Optional[str]] = mapped_column(Text, nullable=True)          # RFC 5545 RRULE
+    next_fire_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)     # ISO UTC
+    timezone: Mapped[str] = mapped_column(String, default="UTC")
+
+    # ── GATE / KANBAN (GATE type) ──────────────────────────────────────────
+    kanban_column_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    kanban_order: Mapped[int] = mapped_column(Integer, default=0)
+    gate_check_interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    gate_last_checked_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    gate_last_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # JSON {met,reasoning}
+    gate_consecutive_not_met: Mapped[int] = mapped_column(Integer, default=0)
+    gate_question_injected_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # ── WEBHOOK type ───────────────────────────────────────────────────────
+    webhook_secret: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # ── STATS ──────────────────────────────────────────────────────────────
+    fire_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_fired_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
+class CronbanFireLog(Base):
+    """Audit log of every time a cronban entry fired."""
+    __tablename__ = "cronban_fire_logs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    entry_id: Mapped[str] = mapped_column(String)
+    fired_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    trigger_type: Mapped[str] = mapped_column(String)    # "cron"|"gate"|"webhook"|"manual"
+    target_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    prompt_sent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result: Mapped[str] = mapped_column(String, default="success")  # "success"|"failed"|"session_dead"
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class CronbanGateLog(Base):
+    """Audit log of each gate evaluation run (verifier model call)."""
+    __tablename__ = "cronban_gate_logs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    entry_id: Mapped[str] = mapped_column(String)
+    checked_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    gate_met: Mapped[bool] = mapped_column(Boolean)
+    reasoning: Mapped[str] = mapped_column(Text)
+    model_used: Mapped[str] = mapped_column(String)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class CronbanSettings(Base):
+    """Per-profile gate verifier model settings."""
+    __tablename__ = "cronban_settings"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default="default")
+    gate_provider: Mapped[str] = mapped_column(String, default="openrouter")  # "openrouter"|"gemini"
+    gate_model: Mapped[str] = mapped_column(String, default="x-ai/grok-4.1-fast")
+    gate_api_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # encrypted at rest
+    updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())

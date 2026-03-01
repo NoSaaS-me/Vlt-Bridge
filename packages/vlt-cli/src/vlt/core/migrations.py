@@ -8,6 +8,7 @@ def init_db():
 
     # Apply additional migrations not covered by SQLAlchemy ORM
     apply_oracle_migrations()
+    apply_cronban_migrations()
 
 
 def apply_oracle_migrations():
@@ -221,6 +222,43 @@ def apply_oracle_migrations():
         except Exception:
             pass  # Column already exists
 
+        conn.commit()
+
+
+def apply_cronban_migrations():
+    """
+    Apply Cronban feature migrations (idempotent).
+    Tables are created by SQLAlchemy ORM; this adds indexes only.
+    """
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_cronban_entries_project_type
+            ON cronban_entries(project_id, entry_type, status)
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_cronban_entries_next_fire
+            ON cronban_entries(next_fire_at, status)
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_cronban_entries_gate
+            ON cronban_entries(entry_type, status, gate_last_checked_at)
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_cronban_skills_project
+            ON cronban_skills(project_id)
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_cronban_columns_project
+            ON cronban_kanban_columns(project_id, col_order)
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_cronban_fire_logs_entry
+            ON cronban_fire_logs(entry_id, fired_at)
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_cronban_gate_logs_entry
+            ON cronban_gate_logs(entry_id, checked_at)
+        """))
         conn.commit()
 
 

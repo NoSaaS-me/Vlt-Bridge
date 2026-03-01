@@ -33,6 +33,7 @@ import type { GitHubStatus } from '@/types/github';
 import { getCodeRAGStatus, initCodeRAG } from '@/services/coderag';
 import { getGitHubStatus, getGitHubConnectUrl } from '@/services/github';
 import { SystemLogs } from '@/components/SystemLogs';
+import { CronbanSettings } from '@/components/cronban/CronbanSettings';
 import { useProjectContext } from '@/contexts/ProjectContext';
 
 export function Settings() {
@@ -493,13 +494,14 @@ export function Settings() {
         )}
 
         <Tabs defaultValue="account" className="w-full">
-          <TabsList data-tour="settings-tabs" className="grid w-full grid-cols-6">
+          <TabsList data-tour="settings-tabs" className="grid w-full grid-cols-7">
             <TabsTrigger data-tour="settings-account-tab" value="account">Account</TabsTrigger>
             <TabsTrigger data-tour="settings-models-tab" value="models">Models</TabsTrigger>
             <TabsTrigger value="context">Context</TabsTrigger>
             <TabsTrigger value="rules">Rules</TabsTrigger>
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
             <TabsTrigger data-tour="settings-oracle-tab" value="oracle">Oracle</TabsTrigger>
+            <TabsTrigger value="cronban">Cronban</TabsTrigger>
           </TabsList>
 
           <TabsContent value="account" className="space-y-6 mt-6">
@@ -1433,6 +1435,10 @@ export function Settings() {
                 </p>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="cronban" className="space-y-6 mt-6">
+            <CronbanSettings />
           </TabsContent>
         </Tabs>
       </div>

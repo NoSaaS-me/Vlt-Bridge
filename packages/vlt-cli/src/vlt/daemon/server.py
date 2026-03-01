@@ -878,6 +878,13 @@ async def lifespan(app: FastAPI):
     # Start background ~/.claude/history.jsonl session discovery watcher
     history_task = asyncio.create_task(watch_claude_history())
 
+    # Start Cronban background scheduler (cron ticks + gate checks)
+    try:
+        from vlt.daemon.cronban_scheduler import start_scheduler
+        start_scheduler()
+    except Exception as _e:
+        logger.warning(f"Cronban scheduler not available: {_e}")
+
     logger.info(f"VLT Daemon started (backend: {state.vault_url}, connected: {state.backend_connected})")
 
     yield
@@ -885,6 +892,13 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("VLT Daemon shutting down...")
     state._shutdown_event.set()
+
+    # Stop Cronban scheduler
+    try:
+        from vlt.daemon.cronban_scheduler import stop_scheduler
+        stop_scheduler()
+    except Exception:
+        pass
 
     # Wait for background tasks to finish
     for task in [queue_task, summarize_task, coderag_task, history_task]:
@@ -910,6 +924,14 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Mount Cronban router
+try:
+    from vlt.daemon.cronban_routes import router as _cronban_router
+    app.include_router(_cronban_router)
+except Exception as _e:
+    import logging as _l
+    _l.getLogger(__name__).warning(f"Cronban routes unavailable: {_e}")
 
 
 # =============================================================================
