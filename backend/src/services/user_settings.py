@@ -915,6 +915,88 @@ class UserSettingsService:
         finally:
             conn.close()
 
+    def get_tts_settings(self, user_id: str) -> dict:
+        """Get user's TTS voice and model settings.
+
+        Returns:
+            dict with 'voice_id' (str|None) and 'model' (str)
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT tts_voice_id, tts_model FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                voice_id = row["tts_voice_id"] if "tts_voice_id" in row.keys() else None
+                model = row["tts_model"] if "tts_model" in row.keys() and row["tts_model"] else "eleven_multilingual_v2"
+                return {"voice_id": voice_id, "model": model}
+            return {"voice_id": None, "model": "eleven_multilingual_v2"}
+        except Exception as e:
+            logger.error(f"Failed to get TTS settings for user {user_id}: {e}")
+            return {"voice_id": None, "model": "eleven_multilingual_v2"}
+        finally:
+            conn.close()
+
+    def set_tts_settings(self, user_id: str, voice_id: str | None, model: str | None) -> None:
+        """Set user's TTS voice and model preferences.
+
+        Args:
+            user_id: User identifier
+            voice_id: ElevenLabs voice ID (or None to clear)
+            model: ElevenLabs model name (or None to keep current)
+        """
+        conn = self.db.connect()
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            with conn:
+                cursor = conn.execute(
+                    "SELECT user_id FROM user_settings WHERE user_id = ?",
+                    (user_id,)
+                )
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    updates = ["updated = ?"]
+                    params: list = [now]
+                    if voice_id is not None:
+                        updates.append("tts_voice_id = ?")
+                        params.append(voice_id)
+                    if model is not None:
+                        updates.append("tts_model = ?")
+                        params.append(model)
+                    params.append(user_id)
+                    conn.execute(
+                        f"UPDATE user_settings SET {', '.join(updates)} WHERE user_id = ?",
+                        params,
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO user_settings (
+                            user_id, oracle_model, oracle_provider,
+                            subagent_model, subagent_provider, thinking_enabled,
+                            chat_center_mode, librarian_timeout, max_context_nodes,
+                            tts_voice_id, tts_model, created, updated
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            "gemini-2.0-flash-exp", "google",
+                            "gemini-2.0-flash-exp", "google",
+                            0, 0, 1200, 30,
+                            voice_id, model or "eleven_multilingual_v2",
+                            now, now,
+                        ),
+                    )
+            logger.info(f"Set TTS settings for user {user_id}: voice={voice_id}, model={model}")
+        except Exception as e:
+            logger.error(f"Failed to set TTS settings for user {user_id}: {e}")
+            raise
+        finally:
+            conn.close()
+
 
 def get_user_settings_service() -> UserSettingsService:
     """Get instance of UserSettingsService."""
