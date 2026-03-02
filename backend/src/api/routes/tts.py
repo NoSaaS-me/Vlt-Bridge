@@ -10,6 +10,8 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..middleware import AuthContext, require_auth_context
+from ...models.settings import TtsSettings, TtsSettingsUpdate, VoiceInfo, VoiceListResponse
+from ...services.user_settings import UserSettingsService, get_user_settings_service
 
 router = APIRouter()
 
@@ -17,6 +19,7 @@ ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 DEFAULT_MODEL = "eleven_multilingual_v2"
 # ElevenLabs docs mention a hard limit; keep a conservative cap for safety.
 MAX_TEXT_LENGTH = 4800
+ELEVENLABS_VOICES_URL = "https://api.elevenlabs.io/v1/voices"
 
 
 class TtsRequest(BaseModel):
@@ -139,3 +142,79 @@ async def synthesize_tts(
         media_type="audio/mpeg",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.get("/api/voices", response_model=VoiceListResponse)
+async def list_voices(
+    auth: AuthContext = Depends(require_auth_context),
+):
+    """List available ElevenLabs voices (proxied to keep API key server-side)."""
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "tts_not_configured",
+                "message": "ELEVENLABS_API_KEY is not set on the server.",
+            },
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                ELEVENLABS_VOICES_URL,
+                headers={"xi-api-key": api_key},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "voices_fetch_failed",
+                "message": f"Failed to fetch voices: {exc}",
+            },
+        ) from exc
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail={
+                "error": "voices_api_error",
+                "message": resp.text[:200],
+            },
+        )
+
+    data = resp.json()
+    voices = []
+    for v in data.get("voices", []):
+        voices.append(
+            VoiceInfo(
+                voice_id=v["voice_id"],
+                name=v.get("name", "Unknown"),
+                category=v.get("category", "unknown"),
+                labels=v.get("labels", {}),
+                preview_url=v.get("preview_url", ""),
+            )
+        )
+    return VoiceListResponse(voices=voices)
+
+
+@router.get("/api/settings/tts", response_model=TtsSettings)
+async def get_tts_settings(
+    auth: AuthContext = Depends(require_auth_context),
+    settings_service: UserSettingsService = Depends(get_user_settings_service),
+) -> TtsSettings:
+    """Get the user's TTS voice and model preferences."""
+    data = settings_service.get_tts_settings(auth.user_id)
+    return TtsSettings(voice_id=data["voice_id"], model=data["model"])
+
+
+@router.put("/api/settings/tts", response_model=TtsSettings)
+async def update_tts_settings(
+    body: TtsSettingsUpdate,
+    auth: AuthContext = Depends(require_auth_context),
+    settings_service: UserSettingsService = Depends(get_user_settings_service),
+) -> TtsSettings:
+    """Update the user's TTS voice and model preferences."""
+    settings_service.set_tts_settings(auth.user_id, body.voice_id, body.model)
+    data = settings_service.get_tts_settings(auth.user_id)
+    return TtsSettings(voice_id=data["voice_id"], model=data["model"])
