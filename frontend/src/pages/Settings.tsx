@@ -34,6 +34,7 @@ import { getCodeRAGStatus, initCodeRAG } from '@/services/coderag';
 import { getGitHubStatus, getGitHubConnectUrl } from '@/services/github';
 import { SystemLogs } from '@/components/SystemLogs';
 import { CronbanSettings } from '@/components/cronban/CronbanSettings';
+import { TtsSettings } from '@/components/TtsSettings';
 import { useProjectContext } from '@/contexts/ProjectContext';
 
 export function Settings() {
@@ -494,7 +495,7 @@ export function Settings() {
         )}
 
         <Tabs defaultValue="account" className="w-full">
-          <TabsList data-tour="settings-tabs" className="grid w-full grid-cols-7">
+          <TabsList data-tour="settings-tabs" className="grid w-full grid-cols-8">
             <TabsTrigger data-tour="settings-account-tab" value="account">Account</TabsTrigger>
             <TabsTrigger data-tour="settings-models-tab" value="models">Models</TabsTrigger>
             <TabsTrigger value="context">Context</TabsTrigger>
@@ -502,6 +503,7 @@ export function Settings() {
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
             <TabsTrigger data-tour="settings-oracle-tab" value="oracle">Oracle</TabsTrigger>
             <TabsTrigger value="cronban">Cronban</TabsTrigger>
+            <TabsTrigger value="tts">TTS</TabsTrigger>
           </TabsList>
 
           <TabsContent value="account" className="space-y-6 mt-6">
@@ -1439,6 +1441,10 @@ export function Settings() {
 
           <TabsContent value="cronban" className="space-y-6 mt-6">
             <CronbanSettings />
+          </TabsContent>
+
+          <TabsContent value="tts" className="space-y-6 mt-6">
+            <TtsSettings />
           </TabsContent>
         </Tabs>
       </div>
