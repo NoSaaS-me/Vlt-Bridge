@@ -53,6 +53,7 @@ import { normalizeSlug } from '@/lib/wikilink';
 import { Network } from 'lucide-react';
 import { AUTH_TOKEN_CHANGED_EVENT, isDemoSession, login } from '@/services/auth';
 import { synthesizeTts } from '@/services/tts';
+import { getTtsSettings, type TtsSettingsResponse } from '@/services/tts-settings';
 import { markdownToPlainText } from '@/lib/markdownToText';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { getModelSettings } from '@/services/models';
@@ -103,6 +104,7 @@ export function MainApp() {
   const [chatCenterMode, setChatCenterMode] = useState(false);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
   const [isSynthesizingTts, setIsSynthesizingTts] = useState(false);
+  const [ttsSettings, setTtsSettings] = useState<TtsSettingsResponse | null>(null);
 
   // Multi-project flyout state
   const [isThreadsOpen, setIsThreadsOpen] = useState(false);
@@ -209,6 +211,9 @@ export function MainApp() {
         if (notesList.length > 0 && !selectedPath) {
           setSelectedPath(notesList[0].note_path);
         }
+
+        // Load TTS settings
+        getTtsSettings().then(setTtsSettings).catch(() => {});
       } catch (err) {
         if (err instanceof APIException) {
           setError(err.error);
@@ -377,7 +382,11 @@ export function MainApp() {
     ttsAbortRef.current = controller;
     setIsSynthesizingTts(true);
     try {
-      const blob = await synthesizeTts(plainText, { signal: controller.signal });
+      const blob = await synthesizeTts(plainText, {
+        signal: controller.signal,
+        voiceId: ttsSettings?.voice_id ?? undefined,
+        model: ttsSettings?.model ?? undefined,
+      });
       if (ttsUrlRef.current) {
         URL.revokeObjectURL(ttsUrlRef.current);
       }
