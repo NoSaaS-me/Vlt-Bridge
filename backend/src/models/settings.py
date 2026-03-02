@@ -27,6 +27,44 @@ class OracleSettingsUpdate(BaseModel):
     )
 
 
+class TtsSettings(BaseModel):
+    """User's TTS voice and model preferences."""
+    voice_id: Optional[str] = Field(
+        default=None,
+        description="Selected ElevenLabs voice ID"
+    )
+    model: str = Field(
+        default="eleven_multilingual_v2",
+        description="ElevenLabs model to use for synthesis"
+    )
+
+
+class TtsSettingsUpdate(BaseModel):
+    """Request to update TTS settings."""
+    voice_id: Optional[str] = Field(
+        default=None,
+        description="ElevenLabs voice ID to use"
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="ElevenLabs model to use"
+    )
+
+
+class VoiceInfo(BaseModel):
+    """Trimmed voice info from ElevenLabs."""
+    voice_id: str
+    name: str
+    category: str
+    labels: dict[str, str] = Field(default_factory=dict)
+    preview_url: str
+
+
+class VoiceListResponse(BaseModel):
+    """Response containing available voices."""
+    voices: list[VoiceInfo] = Field(default_factory=list)
+
+
 class ModelSettings(BaseModel):
     """User's model preferences for oracle and subagent."""
     oracle_model: str = Field(
