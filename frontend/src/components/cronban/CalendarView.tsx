@@ -1,364 +1,192 @@
 /**
- * CalendarView — month/week calendar grid for cron-type entries.
+ * CalendarView — Full calendar for cron-type entries using FullCalendar.
  *
- * Month view: 7-column CSS grid, each cell = one day, up to 3 chips + "+N more".
- * Week view:  7 columns × 24 rows time grid (Google Calendar style).
- * Unscheduled entries: shown in a right sidebar panel.
- *
- * Data: listEntries({ entry_type: 'cron', project_id })
- * Opens EntryWizard on "New Entry" button.
+ * Views: month, week (timeGrid), day, agenda list.
+ * Click a day/time slot → opens EntryWizard pre-filled with a sensible cron.
+ * Click an event → shows detail popover (title, cron, next fire, last fire).
  */
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, Plus, Clock, CalendarDays } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import FullCalendar from '@fullcalendar/react';
+import dayGridPlugin from '@fullcalendar/daygrid';
+import timeGridPlugin from '@fullcalendar/timegrid';
+import interactionPlugin from '@fullcalendar/interaction';
+import listPlugin from '@fullcalendar/list';
+import type { EventClickArg, DateSelectArg, EventContentArg } from '@fullcalendar/core';
+import { Plus, X, Clock, Zap, RotateCcw, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { type CronbanEntry, listEntries } from '@/services/cronban-api';
+import { type CronbanEntry, listEntries, deleteEntry } from '@/services/cronban-api';
 import { EntryWizard } from './EntryWizard';
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Color map → FullCalendar eventColor
 // ---------------------------------------------------------------------------
+const COLOR_MAP: Record<string, string> = {
+  blue:    '#3b82f6',
+  emerald: '#10b981',
+  amber:   '#f59e0b',
+  rose:    '#f43f5e',
+  purple:  '#a855f7',
+  slate:   '#64748b',
+};
 
-function parseDate(iso: string | null): Date | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-/** Returns YYYY-MM-DD for a Date in local time */
-function toDateKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-/** Returns the Date for the first day of a month view grid (Sunday) */
-function getGridStart(year: number, month: number): Date {
-  const first = new Date(year, month, 1);
-  const dow = first.getDay(); // 0=Sun
-  const start = new Date(year, month, 1 - dow);
-  return start;
-}
-
-/** Adds `days` days to a date (returns new Date) */
-function addDays(date: Date, days: number): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-/** Returns the Monday of the week containing `date` */
-function getWeekStart(date: Date): Date {
-  const d = new Date(date);
-  const dow = d.getDay(); // 0=Sun
-  d.setDate(d.getDate() - dow);
-  return d;
-}
-
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
-
-// ---------------------------------------------------------------------------
-// Color helpers
-// ---------------------------------------------------------------------------
-
-function colorChipClasses(color: string | null) {
-  switch (color) {
-    case 'emerald': return 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300';
-    case 'amber':   return 'bg-amber-500/15 border-amber-500/40 text-amber-300';
-    case 'rose':    return 'bg-rose-500/15 border-rose-500/40 text-rose-300';
-    case 'purple':  return 'bg-purple-500/15 border-purple-500/40 text-purple-300';
-    case 'slate':   return 'bg-slate-500/15 border-slate-500/40 text-slate-300';
-    default:        return 'bg-blue-500/15 border-blue-500/40 text-blue-300';
-  }
-}
-
-function colorDotClass(color: string | null) {
-  switch (color) {
-    case 'emerald': return 'bg-emerald-400';
-    case 'amber':   return 'bg-amber-400';
-    case 'rose':    return 'bg-rose-400';
-    case 'purple':  return 'bg-purple-400';
-    case 'slate':   return 'bg-slate-400';
-    default:        return 'bg-blue-400';
-  }
+function entryColor(color: string | null) {
+  return COLOR_MAP[color ?? 'blue'] ?? COLOR_MAP.blue;
 }
 
 // ---------------------------------------------------------------------------
-// Tooltip
+// Event detail popover
 // ---------------------------------------------------------------------------
+interface PopoverEntry {
+  entry: CronbanEntry;
+  x: number;
+  y: number;
+}
 
-function EntryTooltip({ entry }: { entry: CronbanEntry }) {
-  const fired = entry.last_fired_at ? new Date(entry.last_fired_at).toLocaleString() : 'Never';
-  const next = entry.next_fire_at ? new Date(entry.next_fire_at).toLocaleString() : '—';
+function EventPopover({
+  data,
+  onClose,
+  onEdit,
+  onDelete,
+}: {
+  data: PopoverEntry;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const { entry, x, y } = data;
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  const fmt = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+
   return (
-    <div className="absolute bottom-full left-0 mb-1.5 z-50 min-w-[200px] max-w-[280px] rounded-md border border-border bg-popover p-2.5 shadow-xl text-xs space-y-1 pointer-events-none">
-      <p className="font-semibold text-foreground truncate">{entry.title}</p>
+    <div
+      ref={ref}
+      style={{ position: 'fixed', left: x, top: y, zIndex: 9999 }}
+      className="w-72 rounded-lg border border-border bg-popover shadow-xl p-4 space-y-3"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            className="h-3 w-3 rounded-full shrink-0 mt-0.5"
+            style={{ background: entryColor(entry.color) }}
+          />
+          <span className="font-semibold text-sm text-foreground leading-tight">{entry.title}</span>
+        </div>
+        <div className="flex items-center gap-0.5 shrink-0">
+          <button
+            onClick={onEdit}
+            title="Edit entry"
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+          <button
+            onClick={onDelete}
+            title="Delete entry"
+            className="p-1 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+          <button
+            onClick={onClose}
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
       {entry.cron_expression && (
-        <p className="font-mono text-muted-foreground">{entry.cron_expression}</p>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono bg-muted/30 rounded px-2 py-1">
+          <Clock className="h-3 w-3 shrink-0" />
+          {entry.cron_expression}
+        </div>
       )}
-      <div className="text-muted-foreground space-y-0.5 pt-0.5">
-        <p>Next: {next}</p>
-        <p>Last fired: {fired}</p>
-        {entry.fire_count > 0 && <p>Total fires: {entry.fire_count}</p>}
-      </div>
-    </div>
-  );
-}
 
-// ---------------------------------------------------------------------------
-// Entry chip (used in month + unscheduled)
-// ---------------------------------------------------------------------------
-
-function EntryChip({ entry }: { entry: CronbanEntry }) {
-  const [hovered, setHovered] = useState(false);
-  return (
-    <div className="relative">
-      <div
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        className={cn(
-          'flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium truncate cursor-default',
-          colorChipClasses(entry.color),
-        )}
-      >
-        <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', colorDotClass(entry.color))} />
-        <span className="truncate">{entry.title}</span>
-      </div>
-      {hovered && <EntryTooltip entry={entry} />}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Month view
-// ---------------------------------------------------------------------------
-
-interface MonthViewProps {
-  year: number;
-  month: number;
-  entriesByDate: Map<string, CronbanEntry[]>;
-  today: string;
-}
-
-function MonthView({ year, month, entriesByDate, today }: MonthViewProps) {
-  const gridStart = getGridStart(year, month);
-  const cells: Date[] = [];
-  for (let i = 0; i < 42; i++) {
-    cells.push(addDays(gridStart, i));
-  }
-
-  // Trim trailing blank weeks
-  const lastWithContent = cells.reduce((last, cell, idx) => {
-    const key = toDateKey(cell);
-    if (cell.getMonth() === month || (entriesByDate.get(key)?.length ?? 0) > 0) {
-      return idx;
-    }
-    return last;
-  }, 0);
-  const rowsNeeded = Math.ceil((lastWithContent + 1) / 7);
-  const visibleCells = cells.slice(0, rowsNeeded * 7);
-
-  return (
-    <div className="flex-1 overflow-auto">
-      {/* Day labels */}
-      <div className="grid grid-cols-7 border-b border-border">
-        {WEEKDAY_LABELS.map((d) => (
-          <div key={d} className="px-2 py-1.5 text-[10px] font-medium text-muted-foreground text-center">
-            {d}
-          </div>
-        ))}
-      </div>
-
-      {/* Grid */}
-      <div
-        className="grid grid-cols-7"
-        style={{ gridTemplateRows: `repeat(${rowsNeeded}, minmax(80px, 1fr))` }}
-      >
-        {visibleCells.map((cell) => {
-          const key = toDateKey(cell);
-          const isCurrentMonth = cell.getMonth() === month;
-          const isToday = key === today;
-          const entries = entriesByDate.get(key) ?? [];
-          const visible = entries.slice(0, 3);
-          const overflow = entries.length - 3;
-
-          return (
-            <div
-              key={key}
-              className={cn(
-                'border-r border-b border-border p-1.5 min-h-[80px] flex flex-col gap-0.5',
-                !isCurrentMonth && 'opacity-30',
-              )}
-            >
-              {/* Day number */}
-              <div className="flex items-center justify-end mb-0.5">
-                <span
-                  className={cn(
-                    'text-xs font-medium w-5 h-5 flex items-center justify-center rounded-full',
-                    isToday
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground',
-                  )}
-                >
-                  {cell.getDate()}
-                </span>
-              </div>
-
-              {/* Entry chips */}
-              <div className="flex flex-col gap-0.5 overflow-hidden">
-                {visible.map((e) => (
-                  <EntryChip key={e.id} entry={e} />
-                ))}
-                {overflow > 0 && (
-                  <span className="text-[9px] text-muted-foreground px-1">
-                    +{overflow} more
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Week view
-// ---------------------------------------------------------------------------
-
-interface WeekViewProps {
-  weekStart: Date;
-  entriesByDate: Map<string, CronbanEntry[]>;
-  today: string;
-}
-
-function WeekView({ weekStart, entriesByDate, today }: WeekViewProps) {
-  const days: Date[] = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-  const hours = Array.from({ length: 24 }, (_, i) => i);
-
-  return (
-    <div className="flex-1 overflow-auto">
-      {/* Header row */}
-      <div className="sticky top-0 z-10 bg-background grid grid-cols-[48px_repeat(7,1fr)] border-b border-border">
-        <div className="h-10" />
-        {days.map((day) => {
-          const key = toDateKey(day);
-          const isToday = key === today;
-          return (
-            <div key={key} className="flex flex-col items-center justify-center py-1.5 border-l border-border first:border-0">
-              <span className="text-[10px] text-muted-foreground">{WEEKDAY_LABELS[day.getDay()]}</span>
-              <span
-                className={cn(
-                  'text-sm font-medium w-7 h-7 flex items-center justify-center rounded-full',
-                  isToday ? 'bg-primary text-primary-foreground' : 'text-foreground',
-                )}
-              >
-                {day.getDate()}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Hour rows */}
-      <div className="grid grid-cols-[48px_repeat(7,1fr)]">
-        {hours.map((h) => (
-          <>
-            {/* Time label */}
-            <div
-              key={`label-${h}`}
-              className="border-b border-border px-1.5 pt-0.5 text-[9px] text-muted-foreground text-right leading-none"
-              style={{ height: '3rem' }}
-            >
-              {h === 0 ? '' : `${h}:00`}
-            </div>
-
-            {/* Day cells */}
-            {days.map((day) => {
-              const key = toDateKey(day);
-              const entries = (entriesByDate.get(key) ?? []).filter((e) => {
-                const d = parseDate(e.next_fire_at);
-                return d ? d.getHours() === h : false;
-              });
-              return (
-                <div
-                  key={`${key}-${h}`}
-                  className="border-b border-l border-border relative"
-                  style={{ height: '3rem' }}
-                >
-                  {entries.map((e) => (
-                    <div key={e.id} className="absolute inset-x-0.5 top-0.5">
-                      <EntryChip entry={e} />
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
-          </>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Unscheduled sidebar
-// ---------------------------------------------------------------------------
-
-function UnscheduledSidebar({ entries }: { entries: CronbanEntry[] }) {
-  if (entries.length === 0) return null;
-
-  return (
-    <div className="w-52 shrink-0 border-l border-border flex flex-col overflow-hidden">
-      <div className="px-3 py-2 border-b border-border">
-        <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-          <Clock className="h-3 w-3" />
-          Unscheduled ({entries.length})
-        </p>
-      </div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-        {entries.map((e) => (
-          <div
-            key={e.id}
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="space-y-0.5">
+          <p className="text-muted-foreground">Next fire</p>
+          <p className="text-foreground font-medium">{fmt(entry.next_fire_at)}</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-muted-foreground">Last fired</p>
+          <p className="text-foreground font-medium">{fmt(entry.last_fired_at)}</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-muted-foreground">Total fires</p>
+          <p className="text-foreground font-medium flex items-center gap-1">
+            <Zap className="h-3 w-3" />
+            {entry.fire_count}
+          </p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-muted-foreground">Status</p>
+          <span
             className={cn(
-              'px-2 py-1.5 rounded border text-xs',
-              colorChipClasses(e.color),
+              'inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border',
+              entry.status === 'active'
+                ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
+                : 'text-muted-foreground bg-muted/50 border-border',
             )}
           >
-            <div className="flex items-center gap-1.5 mb-0.5">
-              <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', colorDotClass(e.color))} />
-              <span className="font-medium truncate">{e.title}</span>
-            </div>
-            {e.cron_expression && (
-              <p className="text-[9px] font-mono opacity-70 pl-3">{e.cron_expression}</p>
-            )}
-          </div>
-        ))}
+            {entry.status === 'active' && <RotateCcw className="h-2.5 w-2.5" />}
+            {entry.status}
+          </span>
+        </div>
       </div>
+
+      {entry.has_eval && (
+        <p className="text-[10px] text-amber-400/80 flex items-center gap-1">
+          🔒 Has hidden eval criterion
+        </p>
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Main CalendarView
+// Custom event pill renderer
 // ---------------------------------------------------------------------------
+function EventPill({ info }: { info: EventContentArg }) {
+  const { event } = info;
+  const isDayGrid = info.view.type.startsWith('dayGrid');
+  return (
+    <div
+      className={cn(
+        'flex items-center gap-1 w-full overflow-hidden',
+        isDayGrid ? 'px-1 py-0.5' : 'px-1.5 py-1',
+      )}
+    >
+      <span
+        className="h-1.5 w-1.5 rounded-full shrink-0"
+        style={{ background: event.borderColor ?? event.backgroundColor }}
+      />
+      <span className={cn('truncate leading-none', isDayGrid ? 'text-[11px]' : 'text-xs')}>
+        {event.title}
+      </span>
+    </div>
+  );
+}
 
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 export function CalendarView({ projectId }: { projectId?: string }) {
-  const [viewMode, setViewMode] = useState<'month' | 'week'>('month');
   const [entries, setEntries] = useState<CronbanEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
-
-  // Navigation state: for month = {year, month}, for week = weekStart Date
-  const now = new Date();
-  const [navYear, setNavYear] = useState(now.getFullYear());
-  const [navMonth, setNavMonth] = useState(now.getMonth());
-  const [navWeekStart, setNavWeekStart] = useState(() => getWeekStart(now));
-
-  const today = toDateKey(now);
+  const [editEntry, setEditEntry] = useState<CronbanEntry | null>(null);
+  const [popover, setPopover] = useState<PopoverEntry | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -372,179 +200,149 @@ export function CalendarView({ projectId }: { projectId?: string }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Build a map: YYYY-MM-DD → entries with next_fire_at on that day
-  const entriesByDate = useMemo(() => {
-    const map = new Map<string, CronbanEntry[]>();
-    for (const e of entries) {
-      const d = parseDate(e.next_fire_at);
-      if (!d) continue;
-      const key = toDateKey(d);
-      const bucket = map.get(key) ?? [];
-      bucket.push(e);
-      map.set(key, bucket);
-    }
-    return map;
-  }, [entries]);
+  // Build FullCalendar events array
+  const fcEvents = entries
+    .filter((e) => e.next_fire_at)
+    .map((e) => ({
+      id: e.id,
+      title: e.title,
+      start: e.next_fire_at!,
+      allDay: false,
+      backgroundColor: entryColor(e.color) + '22',
+      borderColor: entryColor(e.color),
+      textColor: entryColor(e.color),
+      extendedProps: { entry: e },
+    }));
 
-  const unscheduled = useMemo(
-    () => entries.filter((e) => !e.next_fire_at),
-    [entries],
-  );
+  // Also show last_fired_at as a dimmer "fired" event for context
+  const firedEvents = entries
+    .filter((e) => e.last_fired_at && e.fire_count > 0)
+    .map((e) => ({
+      id: `fired-${e.id}`,
+      title: `✓ ${e.title}`,
+      start: e.last_fired_at!,
+      allDay: false,
+      backgroundColor: 'transparent',
+      borderColor: entryColor(e.color) + '55',
+      textColor: entryColor(e.color) + '99',
+      extendedProps: { entry: e, isFired: true },
+    }));
 
-  // Navigation
-  const goToday = useCallback(() => {
-    const n = new Date();
-    setNavYear(n.getFullYear());
-    setNavMonth(n.getMonth());
-    setNavWeekStart(getWeekStart(n));
+  const handleEventClick = useCallback((arg: EventClickArg) => {
+    const entry: CronbanEntry = arg.event.extendedProps.entry;
+    const rect = arg.el.getBoundingClientRect();
+    // Position popover to the right of the event, or left if near right edge
+    const x = rect.right + 8 > window.innerWidth - 300
+      ? rect.left - 288
+      : rect.right + 8;
+    const y = Math.min(rect.top, window.innerHeight - 280);
+    setPopover({ entry, x, y });
   }, []);
 
-  const goBack = useCallback(() => {
-    if (viewMode === 'month') {
-      setNavMonth((m) => {
-        if (m === 0) { setNavYear((y) => y - 1); return 11; }
-        return m - 1;
-      });
-    } else {
-      setNavWeekStart((w) => addDays(w, -7));
-    }
-  }, [viewMode]);
-
-  const goForward = useCallback(() => {
-    if (viewMode === 'month') {
-      setNavMonth((m) => {
-        if (m === 11) { setNavYear((y) => y + 1); return 0; }
-        return m + 1;
-      });
-    } else {
-      setNavWeekStart((w) => addDays(w, 7));
-    }
-  }, [viewMode]);
-
-  const headerLabel = useMemo(() => {
-    if (viewMode === 'month') return `${MONTH_NAMES[navMonth]} ${navYear}`;
-    const end = addDays(navWeekStart, 6);
-    if (navWeekStart.getMonth() === end.getMonth()) {
-      return `${MONTH_NAMES[navWeekStart.getMonth()]} ${navWeekStart.getDate()}–${end.getDate()}, ${navWeekStart.getFullYear()}`;
-    }
-    return `${MONTH_NAMES[navWeekStart.getMonth()]} ${navWeekStart.getDate()} – ${MONTH_NAMES[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
-  }, [viewMode, navYear, navMonth, navWeekStart]);
+  const handleDateSelect = useCallback((_arg: DateSelectArg) => {
+    setWizardOpen(true);
+  }, []);
 
   const handleCreated = useCallback((entry: CronbanEntry) => {
-    setEntries((prev) => [entry, ...prev]);
+    setEntries((prev) => {
+      const exists = prev.some((e) => e.id === entry.id);
+      return exists ? prev.map((e) => (e.id === entry.id ? entry : e)) : [entry, ...prev];
+    });
   }, []);
+
+  const handleEdit = useCallback(() => {
+    if (popover) {
+      setEditEntry(popover.entry);
+      setPopover(null);
+    }
+  }, [popover]);
+
+  const handleDelete = useCallback(async () => {
+    if (!popover) return;
+    const id = popover.entry.id;
+    setPopover(null);
+    try {
+      await deleteEntry(id);
+      setEntries((prev) => prev.filter((e) => e.id !== id));
+    } catch (e) {
+      console.error('Delete entry failed:', e);
+    }
+  }, [popover]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Top bar */}
-      <div className="shrink-0 flex items-center gap-2 px-4 py-2.5 border-b border-border">
-        {/* View toggle */}
-        <div className="flex rounded-md border border-border overflow-hidden">
-          <button
-            onClick={() => setViewMode('month')}
-            className={cn(
-              'flex items-center gap-1 px-2.5 py-1 text-xs font-medium transition-colors',
-              viewMode === 'month'
-                ? 'bg-muted text-foreground'
-                : 'text-muted-foreground hover:bg-muted/40',
-            )}
-          >
-            <CalendarDays className="h-3 w-3" />
-            Month
-          </button>
-          <button
-            onClick={() => setViewMode('week')}
-            className={cn(
-              'flex items-center gap-1 px-2.5 py-1 text-xs font-medium border-l border-border transition-colors',
-              viewMode === 'week'
-                ? 'bg-muted text-foreground'
-                : 'text-muted-foreground hover:bg-muted/40',
-            )}
-          >
-            <Clock className="h-3 w-3" />
-            Week
-          </button>
-        </div>
-
-        {/* Navigation */}
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={goBack} className="h-7 w-7 p-0">
-            <ChevronLeft className="h-3.5 w-3.5" />
-          </Button>
-          <span className="text-sm font-medium min-w-[180px] text-center">{headerLabel}</span>
-          <Button variant="ghost" size="sm" onClick={goForward} className="h-7 w-7 p-0">
-            <ChevronRight className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-
-        <Button variant="outline" size="sm" onClick={goToday} className="h-7 text-xs">
-          Today
-        </Button>
-
-        <div className="flex-1" />
-
-        {/* Loading indicator */}
-        {loading && (
-          <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>
-        )}
-
-        {/* New Entry */}
-        <Button
-          size="sm"
-          onClick={() => setWizardOpen(true)}
-          className="h-7 gap-1 text-xs"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New Entry
-        </Button>
-      </div>
-
-      {/* Main content + unscheduled sidebar */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Calendar body */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {!loading && entries.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center text-muted-foreground">
-              <div className="text-center space-y-2">
-                <CalendarDays className="h-8 w-8 mx-auto opacity-30" />
-                <p className="text-sm">No scheduled cron entries yet.</p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setWizardOpen(true)}
-                  className="gap-1"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Create your first entry
-                </Button>
-              </div>
-            </div>
-          ) : viewMode === 'month' ? (
-            <MonthView
-              year={navYear}
-              month={navMonth}
-              entriesByDate={entriesByDate}
-              today={today}
-            />
-          ) : (
-            <WeekView
-              weekStart={navWeekStart}
-              entriesByDate={entriesByDate}
-              today={today}
-            />
+      {/* Toolbar */}
+      <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-border">
+        <span className="text-sm font-semibold text-foreground">Scheduled Jobs</span>
+        <div className="flex items-center gap-2">
+          {loading && (
+            <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>
           )}
+          <Button size="sm" onClick={() => setWizardOpen(true)} className="h-7 gap-1 text-xs">
+            <Plus className="h-3.5 w-3.5" />
+            New Entry
+          </Button>
         </div>
-
-        {/* Unscheduled sidebar */}
-        <UnscheduledSidebar entries={unscheduled} />
       </div>
 
-      {/* Entry wizard */}
+      {/* FullCalendar */}
+      <div className="flex-1 overflow-hidden [&_.fc]:h-full [&_.fc-view-harness]:flex-1 fc-dark">
+        <FullCalendar
+          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin]}
+          initialView="dayGridMonth"
+          headerToolbar={{
+            left: 'prev,next today',
+            center: 'title',
+            right: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek',
+          }}
+          buttonText={{
+            today: 'Today',
+            month: 'Month',
+            week: 'Week',
+            day: 'Day',
+            list: 'Agenda',
+          }}
+          height="100%"
+          events={[...fcEvents, ...firedEvents]}
+          selectable
+          selectMirror
+          select={handleDateSelect}
+          eventClick={handleEventClick}
+          eventContent={(info) => <EventPill info={info} />}
+          eventDisplay="block"
+          dayMaxEvents={4}
+          nowIndicator
+          weekends
+          slotMinTime="06:00:00"
+          slotMaxTime="22:00:00"
+        />
+      </div>
+
+      {/* Event detail popover */}
+      {popover && (
+        <EventPopover
+          data={popover}
+          onClose={() => setPopover(null)}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+        />
+      )}
+
+      {/* Create wizard */}
       <EntryWizard
         open={wizardOpen}
         onOpenChange={setWizardOpen}
         projectId={projectId}
         initialType="cron"
+        onCreated={handleCreated}
+      />
+
+      {/* Edit wizard */}
+      <EntryWizard
+        open={editEntry !== null}
+        onOpenChange={(open) => { if (!open) setEditEntry(null); }}
+        projectId={projectId}
+        initialEntry={editEntry ?? undefined}
         onCreated={handleCreated}
       />
     </div>

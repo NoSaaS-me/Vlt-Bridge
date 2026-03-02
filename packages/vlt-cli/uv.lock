@@ -464,6 +464,19 @@ wheels = [
 ]
 
 [[package]]
+name = "croniter"
+version = "6.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+    { name = "pytz" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/2f/44d1ae153a0e27be56be43465e5cb39b9650c781e001e7864389deb25090/croniter-6.0.0.tar.gz", hash = "sha256:37c504b313956114a983ece2c2b07790b1f1094fe9d81cc94739214748255577", size = 64481, upload-time = "2024-12-17T17:17:47.32Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/4b/290b4c3efd6417a8b0c284896de19b1d5855e6dbdb97d2a35e68fa42de85/croniter-6.0.0-py2.py3-none-any.whl", hash = "sha256:2f878c3856f17896979b2a4379ba1f09c83e374931ea15cc835c5dd2eee9b368", size = 25468, upload-time = "2024-12-17T17:17:45.359Z" },
+]
+
+[[package]]
 name = "cryptography"
 version = "46.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -2779,6 +2792,19 @@ asyncio = [
 ]
 
 [[package]]
+name = "sqlmodel"
+version = "0.0.37"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "sqlalchemy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fb/26/1d2faa0fd5a765267f49751de533adac6b9ff9366c7c6e7692df4f32230f/sqlmodel-0.0.37.tar.gz", hash = "sha256:d2c19327175794faf50b1ee31cc966764f55b1dedefc046450bc5741a3d68352", size = 85527, upload-time = "2026-02-21T16:39:47.038Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/e1/7c8d18e737433f3b5bbe27b56a9072a9fcb36342b48f1bef34b6da1d61f2/sqlmodel-0.0.37-py3-none-any.whl", hash = "sha256:2137a4045ef3fd66a917a7717ada959a1ceb3630d95e1f6aaab39dd2c0aef278", size = 27224, upload-time = "2026-02-21T16:39:47.781Z" },
+]
+
+[[package]]
 name = "sse-starlette"
 version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3085,6 +3111,7 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "croniter" },
     { name = "fastapi" },
     { name = "fastmcp" },
     { name = "httpx" },
@@ -3092,8 +3119,10 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-dateutil" },
     { name = "rich" },
     { name = "sqlalchemy" },
+    { name = "sqlmodel" },
     { name = "tomli-w" },
     { name = "typer" },
     { name = "uvicorn" },
@@ -3114,6 +3143,7 @@ windows = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.13.0" },
+    { name = "croniter", specifier = ">=6.0.0" },
     { name = "fastapi", specifier = ">=0.109.0" },
     { name = "fastmcp", specifier = ">=2.13.1" },
     { name = "httpx", specifier = ">=0.25.0" },
@@ -3123,9 +3153,11 @@ requires-dist = [
     { name = "openai", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
+    { name = "python-dateutil", specifier = ">=2.9.0.post0" },
     { name = "pywinpty", marker = "extra == 'windows'", specifier = ">=2.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
+    { name = "sqlmodel", specifier = ">=0.0.37" },
     { name = "tomli-w", specifier = ">=1.0.0" },
     { name = "tree-sitter", marker = "extra == 'oracle'", specifier = ">=0.21.0" },
     { name = "tree-sitter-language-pack", marker = "extra == 'oracle'", specifier = ">=0.13.0" },

@@ -11,10 +11,11 @@
  *   2. Skill     — what Claude sees
  *   3. Eval      — hidden criterion Claude never sees
  */
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Calendar, Kanban, BookOpen } from 'lucide-react';
+import { Calendar, Kanban, BookOpen, ShieldCheck } from 'lucide-react';
 import { SkillsPanel } from './SkillsPanel';
+import { GatesPanel } from './GatesPanel';
 import { CalendarView } from './CalendarView';
 import { KanbanBoard } from './KanbanBoard';
 import { EntryWizard } from './EntryWizard';
@@ -22,11 +23,12 @@ import { EntryWizard } from './EntryWizard';
 export function CronbanView({ projectId }: { projectId?: string }) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardColumnId, setWizardColumnId] = useState<string | undefined>(undefined);
+  const [boardRefreshKey, setBoardRefreshKey] = useState(0);
 
-  const handleNewEntry = (columnId: string) => {
+  const handleNewEntry = useCallback((columnId: string) => {
     setWizardColumnId(columnId);
     setWizardOpen(true);
-  };
+  }, []);
 
   return (
     <>
@@ -53,6 +55,13 @@ export function CronbanView({ projectId }: { projectId?: string }) {
             <BookOpen className="h-3.5 w-3.5" />
             Skills
           </TabsTrigger>
+          <TabsTrigger
+            value="gates"
+            className="h-8 gap-1.5 text-xs data-[state=active]:bg-muted"
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
+            Gates
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="calendar" className="flex-1 overflow-hidden mt-0">
@@ -60,11 +69,15 @@ export function CronbanView({ projectId }: { projectId?: string }) {
         </TabsContent>
 
         <TabsContent value="kanban" className="flex-1 overflow-hidden mt-0">
-          <KanbanBoard projectId={projectId} onNewEntry={handleNewEntry} />
+          <KanbanBoard projectId={projectId} onNewEntry={handleNewEntry} refreshKey={boardRefreshKey} />
         </TabsContent>
 
         <TabsContent value="skills" className="flex-1 overflow-hidden mt-0">
           <SkillsPanel projectId={projectId} />
+        </TabsContent>
+
+        <TabsContent value="gates" className="flex-1 overflow-hidden mt-0">
+          <GatesPanel projectId={projectId} />
         </TabsContent>
       </Tabs>
 
@@ -80,6 +93,7 @@ export function CronbanView({ projectId }: { projectId?: string }) {
         onCreated={() => {
           setWizardOpen(false);
           setWizardColumnId(undefined);
+          setBoardRefreshKey((k) => k + 1);
         }}
       />
     </>

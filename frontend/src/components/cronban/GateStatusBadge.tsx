@@ -10,7 +10,7 @@
  * Shows gate_last_result.reasoning as a tooltip on hover.
  * Clicking the badge triggers onRunCheck (if provided).
  */
-import { Clock, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, RefreshCw, Brain } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { CronbanEntry } from '@/services/cronban-api';
 
@@ -33,6 +33,19 @@ export function GateStatusBadge({ entry, onRunCheck, isChecking = false }: GateS
 
   const baseClass =
     'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors select-none';
+
+  // Helper Claude is evaluating (triggered automatically after agent turn ends)
+  if (entry.gate_eval_pending) {
+    return (
+      <span
+        title={`Helper ${entry.eval_model} is evaluating…`}
+        className={cn(baseClass, 'bg-violet-500/15 border-violet-500/30 text-violet-400 cursor-not-allowed')}
+      >
+        <Brain className="h-3 w-3 animate-pulse" />
+        Evaluating…
+      </span>
+    );
+  }
 
   if (isChecking) {
     return (

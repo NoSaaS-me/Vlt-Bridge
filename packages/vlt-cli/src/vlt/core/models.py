@@ -400,6 +400,7 @@ class AgentSession(Base):
     bypass_perms: Mapped[bool] = mapped_column(Boolean, default=False)
     source: Mapped[str] = mapped_column(String, default="relay")  # relay/discovery/hook
     transcript_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # path from hook payload
+    is_cronban_helper: Mapped[bool] = mapped_column(Boolean, default=False)  # project-level helper evaluator session
     created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
     last_activity: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
 
@@ -435,6 +436,29 @@ class CronbanSkill(Base):
     updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
 
 
+class CronbanGate(Base):
+    """
+    Reusable gate definition — the eval criterion a helper Claude runs after the
+    working agent's turn ends. Gates are like skills but for the verifier side.
+
+    The gate's prompt_markdown is what the helper Claude receives, alongside:
+      - The original task that was given to the working agent
+      - The working agent's most recent output
+
+    The helper evaluates and responds with GATE_RESULT: PASS or GATE_RESULT: FAIL.
+    """
+    __tablename__ = "cronban_gates"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)           # UUID
+    project_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # None = global
+    name: Mapped[str] = mapped_column(String)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    prompt_markdown: Mapped[str] = mapped_column(Text)                  # Helper sees this
+    tags_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON string[]
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
 class KanbanColumn(Base):
     """Kanban board column definition, per-project."""
     __tablename__ = "cronban_kanban_columns"
@@ -445,6 +469,10 @@ class KanbanColumn(Base):
     col_order: Mapped[int] = mapped_column(Integer, default=0)
     color: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # hex
     is_terminal: Mapped[bool] = mapped_column(Boolean, default=False)   # "Done"-type
+    # Graduation: when a gate check passes, auto-move the card to graduation_column_id
+    # (or the next column by col_order if graduation_column_id is NULL)
+    auto_graduate: Mapped[bool] = mapped_column(Boolean, default=True)
+    graduation_column_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
 
 
@@ -470,10 +498,12 @@ class CronbanEntry(Base):
     skill_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)   # FK cronban_skills.id
     prompt_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Inline fallback
 
-    # ── EVAL (hidden from Claude — verifier only) ──────────────────────────
+    # ── GATE (helper Claude runs this after working agent's turn ends) ────
+    gate_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # FK cronban_gates.id
+    # Legacy inline eval_text — kept for backwards compat; gate_id takes priority
     eval_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # eval_text is NEVER injected into the Claude session.
-    # The verifier receives it; Claude only ever gets a generic "summarize" prompt.
+    eval_model: Mapped[str] = mapped_column(String, default="haiku")  # haiku|sonnet|opus — helper model
+    gate_eval_pending: Mapped[bool] = mapped_column(Boolean, default=False)  # True while helper is evaluating
 
     # ── WHERE TO FIRE ──────────────────────────────────────────────────────
     target_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)

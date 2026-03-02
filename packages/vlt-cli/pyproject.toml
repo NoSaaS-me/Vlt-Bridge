@@ -19,6 +19,9 @@ dependencies = [
     "tomli-w>=1.0.0",  # TOML writing for profile config
     "fastmcp>=2.13.1",  # MCP server for vlt-mcp command
     "websocket-client>=1.7.0",  # WebSocket relay for vlt session-relay
+    "croniter>=6.0.0",
+    "python-dateutil>=2.9.0.post0",
+    "sqlmodel>=0.0.37",
 ]
 
 [project.optional-dependencies]

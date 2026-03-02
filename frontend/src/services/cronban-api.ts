@@ -3,6 +3,17 @@
  * All routes go through /vlt proxy → daemon localhost:8765
  */
 
+export interface CronbanGate {
+  id: string;
+  project_id: string | null;
+  name: string;
+  description: string | null;
+  prompt_markdown: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CronbanSkill {
   id: string;
   project_id: string | null;
@@ -21,6 +32,8 @@ export interface KanbanColumn {
   col_order: number;
   color: string | null;
   is_terminal: boolean;
+  auto_graduate: boolean;
+  graduation_column_id: string | null;
   created_at: string;
 }
 
@@ -36,6 +49,9 @@ export interface CronbanEntry {
   prompt_text: string | null;
   // Eval is never returned in full — just has_eval flag
   has_eval: boolean;
+  gate_id: string | null;
+  eval_model: 'haiku' | 'sonnet' | 'opus';
+  gate_eval_pending: boolean;
   // Target
   target_session_id: string | null;
   target_cwd: string | null;
@@ -75,10 +91,9 @@ export interface CronbanGateSettings {
 }
 
 const BASE = '/vlt/api/cronban';
-const sig = AbortSignal.timeout(8000);
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${BASE}${path}`, { signal: sig, ...init });
+  const r = await fetch(`${BASE}${path}`, { signal: AbortSignal.timeout(8000), ...init });
   if (!r.ok) throw new Error(`Cronban API ${r.status}: ${await r.text()}`);
   return r.json();
 }
@@ -107,6 +122,31 @@ export const updateSkill = (id: string, data: Partial<CronbanSkill>) =>
 
 export const deleteSkill = (id: string) =>
   req<{ ok: boolean }>(`/skills/${id}`, { method: 'DELETE' });
+
+// ---------------------------------------------------------------------------
+// Gates
+// ---------------------------------------------------------------------------
+export const listGates = (projectId?: string) =>
+  req<CronbanGate[]>(`/gates${projectId ? `?project_id=${projectId}` : ''}`);
+
+export const getGate = (id: string) => req<CronbanGate>(`/gates/${id}`);
+
+export const createGate = (data: Partial<CronbanGate>) =>
+  req<CronbanGate>('/gates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const updateGate = (id: string, data: Partial<CronbanGate>) =>
+  req<CronbanGate>(`/gates/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const deleteGate = (id: string) =>
+  req<{ ok: boolean }>(`/gates/${id}`, { method: 'DELETE' });
 
 // ---------------------------------------------------------------------------
 // Columns
@@ -144,14 +184,14 @@ export const listEntries = (params?: { project_id?: string; entry_type?: string;
 
 export const getEntry = (id: string) => req<CronbanEntry>(`/entries/${id}`);
 
-export const createEntry = (data: Partial<CronbanEntry> & { eval_text?: string }) =>
+export const createEntry = (data: Partial<CronbanEntry> & { eval_text?: string; gate_id?: string }) =>
   req<CronbanEntry>('/entries', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
 
-export const updateEntry = (id: string, data: Partial<CronbanEntry> & { eval_text?: string }) =>
+export const updateEntry = (id: string, data: Partial<CronbanEntry> & { eval_text?: string; gate_id?: string }) =>
   req<CronbanEntry>(`/entries/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

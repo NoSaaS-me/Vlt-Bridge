@@ -36,6 +36,7 @@ from vlt.core.models import (
     AgentSession,
     CronbanEntry,
     CronbanFireLog,
+    CronbanGate,
     CronbanGateLog,
     CronbanSettings,
     CronbanSkill,
@@ -73,8 +74,11 @@ def _entry_to_dict(e: CronbanEntry) -> dict:
         "color": e.color,
         "skill_id": e.skill_id,
         "prompt_text": e.prompt_text,
-        # eval_text intentionally omitted from public responses — it's hidden from Claude
-        "has_eval": bool(e.eval_text),
+        # eval_text and gate prompt intentionally omitted — hidden from Claude
+        "gate_id": e.gate_id,
+        "has_eval": bool(e.gate_id or e.eval_text),  # True if any eval is configured
+        "eval_model": e.eval_model or "haiku",
+        "gate_eval_pending": bool(e.gate_eval_pending),
         "target_session_id": e.target_session_id,
         "target_cwd": e.target_cwd,
         "create_new_session": e.create_new_session,
@@ -118,6 +122,8 @@ def _column_to_dict(c: KanbanColumn) -> dict:
         "col_order": c.col_order,
         "color": c.color,
         "is_terminal": c.is_terminal,
+        "auto_graduate": c.auto_graduate,
+        "graduation_column_id": c.graduation_column_id,
         "created_at": c.created_at,
     }
 
@@ -220,6 +226,97 @@ async def delete_skill(skill_id: str):
 
 
 # =============================================================================
+# Gates CRUD — reusable helper-Claude evaluation definitions
+# =============================================================================
+
+def _gate_to_dict(g: CronbanGate) -> dict:
+    return {
+        "id": g.id,
+        "project_id": g.project_id,
+        "name": g.name,
+        "description": g.description,
+        "prompt_markdown": g.prompt_markdown,
+        "tags": json.loads(g.tags_json) if g.tags_json else [],
+        "created_at": g.created_at,
+        "updated_at": g.updated_at,
+    }
+
+
+@router.get("/gates")
+async def list_gates(project_id: Optional[str] = None):
+    with Session(engine) as db:
+        q = select(CronbanGate)
+        if project_id:
+            q = q.where(
+                (CronbanGate.project_id == project_id) | (CronbanGate.project_id == None)  # noqa: E711
+            )
+        gates = db.exec(q).all()
+        return [_gate_to_dict(g) for g in gates]
+
+
+@router.post("/gates")
+async def create_gate(request: Request):
+    body = await request.json()
+    if not body.get("name") or not body.get("prompt_markdown"):
+        raise HTTPException(400, "name and prompt_markdown required")
+    with Session(engine) as db:
+        gate = CronbanGate(
+            id=str(uuid.uuid4()),
+            project_id=body.get("project_id"),
+            name=body["name"],
+            description=body.get("description"),
+            prompt_markdown=body["prompt_markdown"],
+            tags_json=json.dumps(body.get("tags", [])),
+        )
+        db.add(gate)
+        db.commit()
+        db.refresh(gate)
+        return _gate_to_dict(gate)
+
+
+@router.get("/gates/{gate_id}")
+async def get_gate(gate_id: str):
+    with Session(engine) as db:
+        gate = db.get(CronbanGate, gate_id)
+        if not gate:
+            raise HTTPException(404, "Gate not found")
+        return _gate_to_dict(gate)
+
+
+@router.patch("/gates/{gate_id}")
+async def update_gate(gate_id: str, request: Request):
+    body = await request.json()
+    with Session(engine) as db:
+        gate = db.get(CronbanGate, gate_id)
+        if not gate:
+            raise HTTPException(404, "Gate not found")
+        if "name" in body:
+            gate.name = body["name"]
+        if "description" in body:
+            gate.description = body["description"]
+        if "prompt_markdown" in body:
+            gate.prompt_markdown = body["prompt_markdown"]
+        if "tags" in body:
+            gate.tags_json = json.dumps(body["tags"])
+        gate.updated_at = _now()
+        db.add(gate)
+        db.commit()
+        db.refresh(gate)
+        return _gate_to_dict(gate)
+
+
+@router.delete("/gates/{gate_id}")
+async def delete_gate(gate_id: str):
+    with Session(engine) as db:
+        gate = db.get(CronbanGate, gate_id)
+        if not gate:
+            raise HTTPException(404, "Gate not found")
+        db.delete(gate)
+        db.commit()
+    return {"ok": True}
+
+
+# =============================================================================
 # Kanban Columns CRUD
 # =============================================================================
 
@@ -246,6 +343,8 @@ async def create_column(request: Request):
             col_order=body.get("col_order", 0),
             color=body.get("color"),
             is_terminal=body.get("is_terminal", False),
+            auto_graduate=body.get("auto_graduate", True),
+            graduation_column_id=body.get("graduation_column_id"),
         )
         db.add(col)
         db.commit()
@@ -260,7 +359,7 @@ async def update_column(col_id: str, request: Request):
         col = db.get(KanbanColumn, col_id)
         if not col:
             raise HTTPException(404, "Column not found")
-        for field in ("name", "col_order", "color", "is_terminal"):
+        for field in ("name", "col_order", "color", "is_terminal", "auto_graduate", "graduation_column_id"):
             if field in body:
                 setattr(col, field, body[field])
         db.add(col)
@@ -339,7 +438,8 @@ async def create_entry(request: Request):
             color=body.get("color"),
             skill_id=body.get("skill_id"),
             prompt_text=body.get("prompt_text"),
-            eval_text=body.get("eval_text"),           # Stored but NEVER returned to Claude
+            gate_id=body.get("gate_id"),               # Preferred: gate library reference
+            eval_text=body.get("eval_text"),           # Legacy inline eval — gate_id takes priority
             target_session_id=body.get("target_session_id"),
             target_cwd=body.get("target_cwd"),
             create_new_session=body.get("create_new_session", False),
@@ -351,6 +451,7 @@ async def create_entry(request: Request):
             kanban_order=body.get("kanban_order", 0),
             gate_check_interval_minutes=body.get("gate_check_interval_minutes", 30),
             webhook_secret=body.get("webhook_secret"),
+            eval_model=body.get("eval_model", "haiku"),
         )
         db.add(entry)
         db.commit()
@@ -376,6 +477,7 @@ async def update_entry(entry_id: str, request: Request):
             raise HTTPException(404, "Entry not found")
         updatable = (
             "title", "status", "color", "skill_id", "prompt_text", "eval_text",
+            "gate_id", "eval_model",
             "target_session_id", "target_cwd", "create_new_session",
             "cron_expression", "rrule_str", "timezone",
             "kanban_column_id", "kanban_order", "gate_check_interval_minutes",

@@ -251,6 +251,66 @@ def apply_cronban_migrations():
             CREATE INDEX IF NOT EXISTS ix_cronban_columns_project
             ON cronban_kanban_columns(project_id, col_order)
         """))
+
+        # Graduation columns (idempotent)
+        try:
+            conn.execute(text(
+                "ALTER TABLE cronban_kanban_columns ADD COLUMN auto_graduate INTEGER NOT NULL DEFAULT 1"
+            ))
+        except Exception:
+            pass  # Already exists
+        try:
+            conn.execute(text(
+                "ALTER TABLE cronban_kanban_columns ADD COLUMN graduation_column_id TEXT"
+            ))
+        except Exception:
+            pass  # Already exists
+
+        # Helper evaluator columns (idempotent)
+        try:
+            conn.execute(text(
+                "ALTER TABLE agent_sessions ADD COLUMN is_cronban_helper INTEGER NOT NULL DEFAULT 0"
+            ))
+        except Exception:
+            pass  # Already exists
+        try:
+            conn.execute(text(
+                "ALTER TABLE cronban_entries ADD COLUMN eval_model TEXT NOT NULL DEFAULT 'haiku'"
+            ))
+        except Exception:
+            pass  # Already exists
+        try:
+            conn.execute(text(
+                "ALTER TABLE cronban_entries ADD COLUMN gate_eval_pending INTEGER NOT NULL DEFAULT 0"
+            ))
+        except Exception:
+            pass  # Already exists
+
+        # Gates library table
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS cronban_gates (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                name TEXT NOT NULL,
+                description TEXT,
+                prompt_markdown TEXT NOT NULL,
+                tags_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_cronban_gates_project
+            ON cronban_gates(project_id)
+        """))
+
+        # gate_id column on entries (idempotent)
+        try:
+            conn.execute(text(
+                "ALTER TABLE cronban_entries ADD COLUMN gate_id TEXT"
+            ))
+        except Exception:
+            pass  # Already exists
         conn.execute(text("""
             CREATE INDEX IF NOT EXISTS ix_cronban_fire_logs_entry
             ON cronban_fire_logs(entry_id, fired_at)

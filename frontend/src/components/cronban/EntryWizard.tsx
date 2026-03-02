@@ -38,11 +38,15 @@ import {
 import {
   type CronbanEntry,
   type CronbanSkill,
+  type CronbanGate,
   type KanbanColumn,
   listSkills,
   listColumns,
+  listGates,
   createEntry,
+  updateEntry,
 } from '@/services/cronban-api';
+import { type AgentSession, listAllSessions } from '@/services/daemon-api';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +57,7 @@ export interface EntryWizardProps {
   onOpenChange: (open: boolean) => void;
   projectId?: string;
   initialType?: 'cron' | 'gate' | 'webhook';
+  initialEntry?: CronbanEntry;
   onCreated: (entry: CronbanEntry) => void;
 }
 
@@ -66,6 +71,7 @@ interface WizardState {
   timezone: string;
   kanban_column_id: string;
   gate_check_interval_minutes: number;
+  target_session_id: string;
   target_cwd: string;
   create_new_session: boolean;
   // Step 2
@@ -73,7 +79,11 @@ interface WizardState {
   skill_id: string;
   prompt_text: string;
   // Step 3
+  skip_eval: boolean;
+  gate_mode: 'saved' | 'inline';
+  gate_id: string;
   eval_text: string;
+  eval_model: 'haiku' | 'sonnet' | 'opus';
   color: string;
 }
 
@@ -96,12 +106,69 @@ const TIMEZONES = [
 ];
 
 const CRON_PRESETS = [
-  { label: 'Daily 9am', value: '0 9 * * *' },
-  { label: 'Weekdays 9am', value: '0 9 * * 1-5' },
-  { label: 'Weekly Monday', value: '0 9 * * 1' },
-  { label: 'Hourly', value: '0 * * * *' },
+  { label: 'Every hour', value: '0 * * * *' },
+  { label: 'Daily at 9am', value: '0 9 * * *' },
+  { label: 'Weekdays at 9am', value: '0 9 * * 1-5' },
+  { label: 'Weekly (Mon 9am)', value: '0 9 * * 1' },
+  { label: 'Monthly (1st 9am)', value: '0 9 1 * *' },
   { label: 'Every 30 min', value: '*/30 * * * *' },
 ];
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) => ({
+  value: i,
+  label: `${i === 0 ? '12' : i > 12 ? i - 12 : i}:00 ${i < 12 ? 'AM' : 'PM'}`,
+}));
+
+const WEEKDAY_OPTIONS = [
+  { value: '0', label: 'Sunday' },
+  { value: '1', label: 'Monday' },
+  { value: '2', label: 'Tuesday' },
+  { value: '3', label: 'Wednesday' },
+  { value: '4', label: 'Thursday' },
+  { value: '5', label: 'Friday' },
+  { value: '6', label: 'Saturday' },
+];
+
+function describeCron(expr: string): string {
+  if (!expr.trim()) return '';
+  try {
+    const parts = expr.trim().split(/\s+/);
+    if (parts.length !== 5) return expr;
+    const [min, hour, dom, , dow] = parts;
+    const isEveryMinute = min === '*';
+    const isEveryHour = hour === '*';
+    const isEveryDay = dom === '*' && dow === '*';
+
+    if (isEveryMinute && isEveryHour) return 'Runs every minute';
+    if (min.startsWith('*/') && isEveryHour) return `Runs every ${min.slice(2)} minutes`;
+    if (min === '0' && isEveryHour) return 'Runs every hour (on the hour)';
+    if (min.startsWith('*/') && !isEveryHour) {
+      const h = parseInt(hour);
+      return `Runs every ${min.slice(2)} minutes at hour ${h}`;
+    }
+
+    const hourLabel = !isEveryHour && !hour.includes('/')
+      ? (() => { const h = parseInt(hour); return h === 0 ? '12:00 AM' : h < 12 ? `${h}:00 AM` : h === 12 ? '12:00 PM' : `${h - 12}:00 PM`; })()
+      : null;
+
+    if (dow !== '*' && dow !== '0-6') {
+      const days = dow.split(',').map(d => {
+        const map: Record<string, string> = { '0': 'Sun', '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat' };
+        if (d.includes('-')) {
+          const [s, e] = d.split('-');
+          return `${map[s] ?? s}–${map[e] ?? e}`;
+        }
+        return map[d] ?? d;
+      });
+      return `Every ${days.join(', ')}${hourLabel ? ` at ${hourLabel}` : ''}`;
+    }
+    if (dom !== '*') return `Monthly on day ${dom}${hourLabel ? ` at ${hourLabel}` : ''}`;
+    if (isEveryDay && hourLabel) return `Daily at ${hourLabel}`;
+    return expr;
+  } catch {
+    return expr;
+  }
+}
 
 const COLOR_SWATCHES = [
   { name: 'blue', bg: 'bg-blue-500', ring: 'ring-blue-500' },
@@ -158,10 +225,12 @@ function Step1Schedule({
   state,
   onChange,
   columns,
+  sessions,
 }: {
   state: WizardState;
   onChange: (patch: Partial<WizardState>) => void;
   columns: KanbanColumn[];
+  sessions: AgentSession[];
 }) {
   return (
     <div className="space-y-4">
@@ -209,24 +278,16 @@ function Step1Schedule({
       {/* Cron-specific fields */}
       {state.entry_type === 'cron' && (
         <>
+          {/* Quick presets */}
           <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground font-medium">
-              Cron Expression <span className="text-destructive">*</span>
-            </label>
-            <Input
-              value={state.cron_expression}
-              onChange={(e) => onChange({ cron_expression: e.target.value })}
-              placeholder="0 9 * * 1-5"
-              className="h-8 text-sm font-mono"
-            />
-            {/* Presets */}
-            <div className="flex flex-wrap gap-1.5">
+            <label className="text-xs text-muted-foreground font-medium">Quick Schedule</label>
+            <div className="grid grid-cols-3 gap-1.5">
               {CRON_PRESETS.map((p) => (
                 <button
                   key={p.value}
                   onClick={() => onChange({ cron_expression: p.value })}
                   className={cn(
-                    'text-[10px] px-2 py-0.5 rounded border transition-colors',
+                    'px-2 py-1.5 rounded-md border text-xs font-medium transition-colors text-left',
                     state.cron_expression === p.value
                       ? 'border-primary/60 bg-primary/10 text-primary'
                       : 'border-border hover:bg-muted/50 text-muted-foreground',
@@ -235,6 +296,83 @@ function Step1Schedule({
                   {p.label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Hour + Weekday pickers for common cases */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground font-medium">Time of day</label>
+              <Select
+                value={String(
+                  state.cron_expression.split(' ')[1] !== '*'
+                    ? state.cron_expression.split(' ')[1]
+                    : '9'
+                )}
+                onValueChange={(v) => {
+                  const parts = (state.cron_expression || '0 9 * * *').split(' ');
+                  parts[0] = '0';
+                  parts[1] = v;
+                  onChange({ cron_expression: parts.join(' ') });
+                }}
+              >
+                <SelectTrigger className="h-8 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {HOUR_OPTIONS.map((h) => (
+                    <SelectItem key={h.value} value={String(h.value)} className="text-sm">
+                      {h.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground font-medium">Day of week</label>
+              <Select
+                value={state.cron_expression.split(' ')[4] ?? '*'}
+                onValueChange={(v) => {
+                  const parts = (state.cron_expression || '0 9 * * *').split(' ');
+                  parts[4] = v;
+                  if (v === '*') {
+                    parts[2] = '*'; // clear dom too
+                  }
+                  onChange({ cron_expression: parts.join(' ') });
+                }}
+              >
+                <SelectTrigger className="h-8 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="*" className="text-sm">Every day</SelectItem>
+                  <SelectItem value="1-5" className="text-sm">Weekdays (Mon–Fri)</SelectItem>
+                  {WEEKDAY_OPTIONS.map((d) => (
+                    <SelectItem key={d.value} value={d.value} className="text-sm">
+                      {d.label} only
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Human-readable preview + raw expression */}
+          <div className="rounded-md border border-border bg-muted/20 px-3 py-2 space-y-1.5">
+            {state.cron_expression && (
+              <p className="text-xs font-medium text-foreground">
+                {describeCron(state.cron_expression)}
+              </p>
+            )}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground shrink-0">Raw cron:</span>
+              <Input
+                value={state.cron_expression}
+                onChange={(e) => onChange({ cron_expression: e.target.value })}
+                placeholder="0 9 * * 1-5"
+                className="h-6 text-xs font-mono border-0 bg-transparent p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
             </div>
           </div>
 
@@ -317,28 +455,72 @@ function Step1Schedule({
         </div>
       )}
 
-      {/* Target CWD + new session (always) */}
+      {/* Target session picker */}
       <div className="space-y-1.5">
-        <label className="text-xs text-muted-foreground font-medium">
-          Target Working Directory
-        </label>
-        <Input
-          value={state.target_cwd}
-          onChange={(e) => onChange({ target_cwd: e.target.value })}
-          placeholder="/home/user/my-project"
-          className="h-8 text-sm font-mono"
-        />
+        <label className="text-xs text-muted-foreground font-medium">Target Session</label>
+        <Select
+          value={state.target_session_id || '__fresh'}
+          onValueChange={(v) => {
+            if (v === '__fresh') {
+              onChange({ target_session_id: '', create_new_session: true });
+            } else {
+              const sess = sessions.find((s) => s.id === v);
+              onChange({
+                target_session_id: v,
+                target_cwd: sess?.cwd ?? state.target_cwd,
+                create_new_session: false,
+              });
+            }
+          }}
+        >
+          <SelectTrigger className="h-8 text-sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__fresh" className="text-sm">
+              ✦ Fresh session (spawn new)
+            </SelectItem>
+            {sessions.map((s) => (
+              <SelectItem key={s.id} value={s.id} className="text-sm font-mono">
+                {s.name || 'Session'} · {s.status} · {s.cwd.split('/').slice(-2).join('/')}
+              </SelectItem>
+            ))}
+            {sessions.length === 0 && (
+              <SelectItem value="__none_sess" disabled className="text-sm text-muted-foreground">
+                No active sessions found
+              </SelectItem>
+            )}
+          </SelectContent>
+        </Select>
       </div>
 
-      <label className="flex items-center gap-2 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={state.create_new_session}
-          onChange={(e) => onChange({ create_new_session: e.target.checked })}
-          className="h-3.5 w-3.5 rounded border-border accent-primary"
-        />
-        <span className="text-xs text-muted-foreground">Always create a new Claude session</span>
-      </label>
+      {/* CWD (only for fresh session) */}
+      {!state.target_session_id && (
+        <div className="space-y-1.5">
+          <label className="text-xs text-muted-foreground font-medium">
+            Working Directory
+          </label>
+          <Input
+            value={state.target_cwd}
+            onChange={(e) => onChange({ target_cwd: e.target.value })}
+            placeholder="/home/user/my-project"
+            className="h-8 text-sm font-mono"
+          />
+        </div>
+      )}
+
+      {/* New session toggle (only for fresh) */}
+      {!state.target_session_id && (
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={state.create_new_session}
+            onChange={(e) => onChange({ create_new_session: e.target.checked })}
+            className="h-3.5 w-3.5 rounded border-border accent-primary"
+          />
+          <span className="text-xs text-muted-foreground">Always create a new Claude session</span>
+        </label>
+      )}
     </div>
   );
 }
@@ -462,44 +644,159 @@ function Step2Skill({
 function Step3Eval({
   state,
   onChange,
+  gates,
 }: {
   state: WizardState;
   onChange: (patch: Partial<WizardState>) => void;
+  gates: CronbanGate[];
 }) {
+  const selectedGate = gates.find((g) => g.id === state.gate_id) ?? null;
+
   return (
     <div className="space-y-4">
-      {/* Warning banner */}
-      <div className="rounded-md border border-amber-500/40 bg-amber-500/8 px-3 py-2.5 flex gap-2.5">
-        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
-        <div className="space-y-0.5">
-          <p className="text-xs font-semibold text-amber-300">
-            This eval is NEVER shown to Claude.
-          </p>
-          <p className="text-xs text-amber-400/80">
-            It is used by the verifier model only. Claude cannot see or game it.
-            Write the criterion the verifier should check against Claude's summary.
-          </p>
-        </div>
-      </div>
-
-      {/* Eval textarea */}
-      <div className="space-y-1.5">
-        <label className="text-xs text-muted-foreground font-medium">
-          Completion criterion{' '}
-          <span className="text-[9px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-1 py-0.5 rounded ml-1">
-            verifier only
-          </span>
-        </label>
-        <Textarea
-          value={state.eval_text}
-          onChange={(e) => onChange({ eval_text: e.target.value })}
-          placeholder="e.g. All critical test failures are resolved or have a linked issue with a mitigation plan."
-          className="min-h-32 text-sm resize-none"
+      {/* Skip eval toggle */}
+      <label className="flex items-center gap-2.5 cursor-pointer select-none p-2.5 rounded-md border border-border hover:bg-muted/30 transition-colors">
+        <input
+          type="checkbox"
+          checked={state.skip_eval}
+          onChange={(e) => onChange({ skip_eval: e.target.checked })}
+          className="h-3.5 w-3.5 rounded border-border accent-primary"
         />
-        <p className="text-[10px] text-muted-foreground">
-          The verifier reads Claude's output and checks if this criterion is met.
-        </p>
-      </div>
+        <div>
+          <p className="text-xs font-medium text-foreground">Skip hidden eval</p>
+          <p className="text-[10px] text-muted-foreground">Gate always passes — no verifier check runs</p>
+        </div>
+      </label>
+
+      {!state.skip_eval && (
+        <>
+          {/* Warning banner */}
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/8 px-3 py-2.5 flex gap-2.5">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+            <div className="space-y-0.5">
+              <p className="text-xs font-semibold text-amber-300">
+                This eval is NEVER shown to the working agent.
+              </p>
+              <p className="text-xs text-amber-400/80">
+                A separate helper Claude reads the agent's output and evaluates it against
+                this criterion after each turn ends.
+              </p>
+            </div>
+          </div>
+
+          {/* Gate source toggle */}
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground font-medium">Eval Source</label>
+            <div className="flex gap-2">
+              {(
+                [
+                  { mode: 'saved' as const, label: 'Use a saved Gate' },
+                  { mode: 'inline' as const, label: 'Write inline eval' },
+                ] as const
+              ).map(({ mode, label }) => (
+                <button
+                  key={mode}
+                  onClick={() => onChange({ gate_mode: mode })}
+                  className={cn(
+                    'flex-1 px-3 py-2 rounded-md border text-sm font-medium transition-colors',
+                    state.gate_mode === mode
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border hover:bg-muted/50 text-muted-foreground',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {state.gate_mode === 'saved' && (
+            <>
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground font-medium">Gate</label>
+                <Select
+                  value={state.gate_id}
+                  onValueChange={(v) => onChange({ gate_id: v })}
+                >
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Select a gate…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {gates.map((g) => (
+                      <SelectItem key={g.id} value={g.id} className="text-sm">
+                        {g.name}
+                      </SelectItem>
+                    ))}
+                    {gates.length === 0 && (
+                      <SelectItem value="__none" disabled className="text-sm text-muted-foreground">
+                        No gates found — create one in the Gates tab
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {selectedGate && (
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
+                    Preview
+                    <span className="text-[9px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-1 py-0.5 rounded">
+                      helper only
+                    </span>
+                  </label>
+                  <pre className="rounded-md border border-border bg-muted/30 p-3 text-xs font-mono text-foreground overflow-y-auto max-h-40 whitespace-pre-wrap leading-relaxed">
+                    {selectedGate.prompt_markdown}
+                  </pre>
+                </div>
+              )}
+            </>
+          )}
+
+          {state.gate_mode === 'inline' && (
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground font-medium">
+                Inline eval instructions{' '}
+                <span className="text-[9px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-1 py-0.5 rounded ml-1">
+                  helper only
+                </span>
+              </label>
+              <Textarea
+                value={state.eval_text}
+                onChange={(e) => onChange({ eval_text: e.target.value })}
+                placeholder={"e.g. Run `npm test` and check that all tests pass. The PR description must reference the issue number."}
+                className="min-h-32 text-sm resize-none"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                The helper can execute scripts and read files. Be as specific as you need.
+              </p>
+            </div>
+          )}
+
+          {/* Helper model picker */}
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground font-medium">Helper model</label>
+            <div className="flex gap-2">
+              {([ 'haiku', 'sonnet', 'opus' ] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => onChange({ eval_model: m })}
+                  className={cn(
+                    'flex-1 py-1.5 rounded border text-xs font-medium transition-colors capitalize',
+                    state.eval_model === m
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:border-muted-foreground',
+                  )}
+                >
+                  {m === 'haiku' ? '⚡ Haiku' : m === 'sonnet' ? '🎯 Sonnet' : '🧠 Opus'}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Haiku is fast &amp; cheap. Use Sonnet or Opus for complex multi-step evals.
+            </p>
+          </div>
+        </>
+      )}
 
       {/* Color picker */}
       <div className="space-y-1.5">
@@ -534,11 +831,15 @@ export function EntryWizard({
   onOpenChange,
   projectId,
   initialType = 'cron',
+  initialEntry,
   onCreated,
 }: EntryWizardProps) {
+  const isEditMode = !!initialEntry;
   const [step, setStep] = useState(0);
   const [skills, setSkills] = useState<CronbanSkill[]>([]);
+  const [gates, setGates] = useState<CronbanGate[]>([]);
   const [columns, setColumns] = useState<KanbanColumn[]>([]);
+  const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -549,45 +850,85 @@ export function EntryWizard({
     timezone: 'UTC',
     kanban_column_id: '',
     gate_check_interval_minutes: 30,
+    target_session_id: '',
     target_cwd: '',
     create_new_session: false,
     skill_mode: 'inline',
     skill_id: '',
     prompt_text: '',
+    skip_eval: false,
+    gate_mode: 'saved',
+    gate_id: '',
     eval_text: '',
+    eval_model: 'haiku',
     color: 'blue',
   });
 
-  // Reset when dialog opens
+  // Reset / pre-fill when dialog opens
   useEffect(() => {
     if (open) {
       setStep(0);
       setError(null);
-      setState({
-        entry_type: initialType,
-        title: '',
-        cron_expression: '',
-        timezone: 'UTC',
-        kanban_column_id: '',
-        gate_check_interval_minutes: 30,
-        target_cwd: '',
-        create_new_session: false,
-        skill_mode: 'inline',
-        skill_id: '',
-        prompt_text: '',
-        eval_text: '',
-        color: 'blue',
-      });
+      if (initialEntry) {
+        setState({
+          entry_type: initialEntry.entry_type,
+          title: initialEntry.title,
+          cron_expression: initialEntry.cron_expression ?? '',
+          timezone: initialEntry.timezone,
+          kanban_column_id: initialEntry.kanban_column_id ?? '',
+          gate_check_interval_minutes: initialEntry.gate_check_interval_minutes,
+          target_session_id: initialEntry.target_session_id ?? '',
+          target_cwd: initialEntry.target_cwd ?? '',
+          create_new_session: initialEntry.create_new_session,
+          skill_mode: initialEntry.skill_id ? 'saved' : 'inline',
+          skill_id: initialEntry.skill_id ?? '',
+          prompt_text: initialEntry.prompt_text ?? '',
+          skip_eval: !initialEntry.has_eval,
+          gate_mode: initialEntry.gate_id ? 'saved' : 'inline',
+          gate_id: initialEntry.gate_id ?? '',
+          eval_text: '',
+          eval_model: (initialEntry.eval_model ?? 'haiku') as 'haiku' | 'sonnet' | 'opus',
+          color: initialEntry.color ?? 'blue',
+        });
+      } else {
+        setState({
+          entry_type: initialType,
+          title: '',
+          cron_expression: '',
+          timezone: 'UTC',
+          kanban_column_id: '',
+          gate_check_interval_minutes: 30,
+          target_session_id: '',
+          target_cwd: '',
+          create_new_session: false,
+          skill_mode: 'inline',
+          skill_id: '',
+          prompt_text: '',
+          skip_eval: false,
+          gate_mode: 'saved',
+          gate_id: '',
+          eval_text: '',
+          eval_model: 'haiku',
+          color: 'blue',
+        });
+      }
     }
-  }, [open, initialType]);
+  }, [open, initialType, initialEntry]);
 
-  // Load skills and columns on open
+  // Load skills, gates, columns, and sessions on open
   useEffect(() => {
     if (!open) return;
-    Promise.all([listSkills(projectId), listColumns(projectId)])
-      .then(([s, c]) => {
+    Promise.all([
+      listSkills(projectId),
+      listGates(projectId),
+      listColumns(projectId),
+      listAllSessions(projectId ?? undefined),
+    ])
+      .then(([s, g, c, sess]) => {
         setSkills(s);
+        setGates(g);
         setColumns(c);
+        setSessions(sess.filter((s) => s.status !== 'dead'));
       })
       .catch(() => {
         // Non-fatal: wizard still works, dropdowns will just be empty
@@ -630,10 +971,13 @@ export function EntryWizard({
         title: state.title.trim(),
         entry_type: state.entry_type,
         color: state.color,
+        target_session_id: state.target_session_id || null,
         target_cwd: state.target_cwd.trim() || null,
         create_new_session: state.create_new_session,
         timezone: state.timezone,
-        eval_text: state.eval_text.trim() || undefined,
+        gate_id: (!state.skip_eval && state.gate_mode === 'saved' && state.gate_id) ? state.gate_id : undefined,
+        eval_text: (!state.skip_eval && state.gate_mode === 'inline' && state.eval_text.trim()) ? state.eval_text.trim() : undefined,
+        eval_model: state.eval_model,
       };
 
       if (state.skill_mode === 'saved' && state.skill_id) {
@@ -649,15 +993,17 @@ export function EntryWizard({
         payload.gate_check_interval_minutes = state.gate_check_interval_minutes;
       }
 
-      const entry = await createEntry(payload);
+      const entry = isEditMode
+        ? await updateEntry(initialEntry!.id, payload)
+        : await createEntry(payload);
       onCreated(entry);
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create entry');
+      setError(err instanceof Error ? err.message : isEditMode ? 'Failed to save changes' : 'Failed to create entry');
     } finally {
       setLoading(false);
     }
-  }, [state, projectId, onCreated, onOpenChange]);
+  }, [state, projectId, onCreated, onOpenChange, isEditMode, initialEntry]);
 
   const isLastStep = step === STEPS.length - 1;
 
@@ -667,9 +1013,9 @@ export function EntryWizard({
         <DialogHeader>
           <div className="flex items-center justify-between">
             <DialogTitle className="text-base">
-              {step === 0 && 'New Entry — Schedule'}
-              {step === 1 && 'New Entry — Skill'}
-              {step === 2 && 'New Entry — Eval'}
+              {step === 0 && (isEditMode ? 'Edit Entry — Schedule' : 'New Entry — Schedule')}
+              {step === 1 && (isEditMode ? 'Edit Entry — Skill' : 'New Entry — Skill')}
+              {step === 2 && (isEditMode ? 'Edit Entry — Eval' : 'New Entry — Eval')}
             </DialogTitle>
             <StepIndicator current={step} total={STEPS.length} />
           </div>
@@ -678,13 +1024,13 @@ export function EntryWizard({
         {/* Step content */}
         <div className="py-2 overflow-y-auto max-h-[60vh]">
           {step === 0 && (
-            <Step1Schedule state={state} onChange={patch} columns={columns} />
+            <Step1Schedule state={state} onChange={patch} columns={columns} sessions={sessions} />
           )}
           {step === 1 && (
             <Step2Skill state={state} onChange={patch} skills={skills} />
           )}
           {step === 2 && (
-            <Step3Eval state={state} onChange={patch} />
+            <Step3Eval state={state} onChange={patch} gates={gates} />
           )}
         </div>
 
@@ -725,7 +1071,7 @@ export function EntryWizard({
               className="gap-1"
             >
               {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {loading ? 'Creating…' : 'Create Entry'}
+              {loading ? (isEditMode ? 'Saving…' : 'Creating…') : (isEditMode ? 'Save Changes' : 'Create Entry')}
             </Button>
           )}
         </DialogFooter>

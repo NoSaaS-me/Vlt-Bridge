@@ -2290,6 +2290,43 @@ async def _run_claude_message(
     return session_id
 
 
+async def _trigger_gate_evaluations(session_id: str) -> None:
+    """
+    After a managed session's turn ends, find any active GATE entries targeting
+    this session and run helper-Claude evaluations for each.
+
+    Skips helper sessions themselves to avoid infinite recursion.
+    """
+    try:
+        from vlt.db import engine
+        from vlt.core.models import AgentSession, CronbanEntry
+        from sqlmodel import Session, select
+
+        with Session(engine) as db:
+            # Skip helper sessions — they don't trigger evaluations
+            sess = db.get(AgentSession, session_id)
+            if sess and getattr(sess, "is_cronban_helper", False):
+                return
+
+            gate_entries = db.exec(
+                select(CronbanEntry).where(
+                    CronbanEntry.target_session_id == session_id,
+                    CronbanEntry.entry_type == "gate",
+                    CronbanEntry.status == "active",
+                    CronbanEntry.gate_eval_pending == False,  # noqa: E712
+                )
+            ).all()
+            entry_ids = [e.id for e in gate_entries]
+
+        for entry_id in entry_ids:
+            logger.info(f"Scheduling gate evaluation: entry={entry_id} session={session_id}")
+            from vlt.daemon.cronban_evaluator import run_gate_evaluation
+            asyncio.create_task(run_gate_evaluation(entry_id, session_id))
+
+    except Exception as e:
+        logger.error(f"_trigger_gate_evaluations error for session {session_id}: {e}")
+
+
 async def _managed_message_worker(session_id: str):
     """
     Process queued messages for a managed session one at a time.
@@ -2337,6 +2374,10 @@ async def _managed_message_worker(session_id: str):
             is_new_session = False
             managed["is_new"] = False
             _push_status_to_live(sid, "idle", "ManagedMessageDone")
+
+            # Trigger gate evaluations for any gate cards targeting this session
+            asyncio.create_task(_trigger_gate_evaluations(sid))
+
     except Exception as e:
         logger.error(f"Managed worker error: sid={sid} cwd={cwd} error={e}")
     finally:
