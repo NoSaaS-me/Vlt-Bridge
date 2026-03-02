@@ -5,6 +5,7 @@
 export interface TtsSettingsResponse {
   voice_id: string | null;
   model: string;
+  api_key_set: boolean;
 }
 
 export interface Voice {
@@ -32,7 +33,7 @@ export async function getTtsSettings(): Promise<TtsSettingsResponse> {
   return resp.json();
 }
 
-export async function saveTtsSettings(settings: { voice_id: string; model: string }): Promise<TtsSettingsResponse> {
+export async function saveTtsSettings(settings: { voice_id?: string; model?: string; api_key?: string }): Promise<TtsSettingsResponse> {
   const resp = await fetch('/api/settings/tts', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },

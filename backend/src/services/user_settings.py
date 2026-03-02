@@ -919,33 +919,57 @@ class UserSettingsService:
         """Get user's TTS voice and model settings.
 
         Returns:
-            dict with 'voice_id' (str|None) and 'model' (str)
+            dict with 'voice_id' (str|None), 'model' (str), 'api_key_set' (bool)
         """
         conn = self.db.connect()
         try:
             cursor = conn.execute(
-                "SELECT tts_voice_id, tts_model FROM user_settings WHERE user_id = ?",
+                "SELECT tts_voice_id, tts_model, elevenlabs_api_key FROM user_settings WHERE user_id = ?",
                 (user_id,)
             )
             row = cursor.fetchone()
             if row:
                 voice_id = row["tts_voice_id"] if "tts_voice_id" in row.keys() else None
                 model = row["tts_model"] if "tts_model" in row.keys() and row["tts_model"] else "eleven_multilingual_v2"
-                return {"voice_id": voice_id, "model": model}
-            return {"voice_id": None, "model": "eleven_multilingual_v2"}
+                api_key = row["elevenlabs_api_key"] if "elevenlabs_api_key" in row.keys() else None
+                return {"voice_id": voice_id, "model": model, "api_key_set": bool(api_key)}
+            return {"voice_id": None, "model": "eleven_multilingual_v2", "api_key_set": False}
         except Exception as e:
             logger.error(f"Failed to get TTS settings for user {user_id}: {e}")
-            return {"voice_id": None, "model": "eleven_multilingual_v2"}
+            return {"voice_id": None, "model": "eleven_multilingual_v2", "api_key_set": False}
         finally:
             conn.close()
 
-    def set_tts_settings(self, user_id: str, voice_id: str | None, model: str | None) -> None:
+    def get_elevenlabs_api_key(self, user_id: str) -> Optional[str]:
+        """Get user's ElevenLabs API key (for internal use only).
+
+        Returns:
+            The API key or None if not set
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT elevenlabs_api_key FROM user_settings WHERE user_id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row and "elevenlabs_api_key" in row.keys() and row["elevenlabs_api_key"]:
+                return row["elevenlabs_api_key"]
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get ElevenLabs API key for user {user_id}: {e}")
+            return None
+        finally:
+            conn.close()
+
+    def set_tts_settings(self, user_id: str, voice_id: str | None, model: str | None, api_key: str | None = None) -> None:
         """Set user's TTS voice and model preferences.
 
         Args:
             user_id: User identifier
-            voice_id: ElevenLabs voice ID (or None to clear)
+            voice_id: ElevenLabs voice ID (or None to keep current)
             model: ElevenLabs model name (or None to keep current)
+            api_key: ElevenLabs API key (empty string to clear, None to keep current)
         """
         conn = self.db.connect()
         try:
@@ -966,6 +990,9 @@ class UserSettingsService:
                     if model is not None:
                         updates.append("tts_model = ?")
                         params.append(model)
+                    if api_key is not None:
+                        updates.append("elevenlabs_api_key = ?")
+                        params.append(api_key if api_key else None)
                     params.append(user_id)
                     conn.execute(
                         f"UPDATE user_settings SET {', '.join(updates)} WHERE user_id = ?",
@@ -978,8 +1005,8 @@ class UserSettingsService:
                             user_id, oracle_model, oracle_provider,
                             subagent_model, subagent_provider, thinking_enabled,
                             chat_center_mode, librarian_timeout, max_context_nodes,
-                            tts_voice_id, tts_model, created, updated
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            tts_voice_id, tts_model, elevenlabs_api_key, created, updated
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             user_id,
@@ -987,6 +1014,7 @@ class UserSettingsService:
                             "gemini-2.0-flash-exp", "google",
                             0, 0, 1200, 30,
                             voice_id, model or "eleven_multilingual_v2",
+                            api_key if api_key else None,
                             now, now,
                         ),
                     )

@@ -56,12 +56,19 @@ async def _call_elevenlabs(
         )
 
 
+def _resolve_api_key(settings_service: UserSettingsService, user_id: str) -> str | None:
+    """Get ElevenLabs API key: user setting first, then env var fallback."""
+    return settings_service.get_elevenlabs_api_key(user_id) or os.getenv("ELEVENLABS_API_KEY")
+
+
 @router.post("/api/tts")
 async def synthesize_tts(
-    payload: TtsRequest, auth: AuthContext = Depends(require_auth_context)
+    payload: TtsRequest,
+    auth: AuthContext = Depends(require_auth_context),
+    settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """Synthesize speech for the provided text using ElevenLabs."""
-    api_key = os.getenv("ELEVENLABS_API_KEY")
+    api_key = _resolve_api_key(settings_service, auth.user_id)
     default_voice = os.getenv("ELEVENLABS_VOICE_ID")
     default_model = os.getenv("ELEVENLABS_MODEL") or DEFAULT_MODEL
 
@@ -70,7 +77,7 @@ async def synthesize_tts(
             status_code=500,
             detail={
                 "error": "tts_not_configured",
-                "message": "ELEVENLABS_API_KEY is not set on the server.",
+                "message": "ElevenLabs API key is not configured. Set it in Settings > TTS or via ELEVENLABS_API_KEY env var.",
             },
         )
 
@@ -147,15 +154,16 @@ async def synthesize_tts(
 @router.get("/api/voices", response_model=VoiceListResponse)
 async def list_voices(
     auth: AuthContext = Depends(require_auth_context),
+    settings_service: UserSettingsService = Depends(get_user_settings_service),
 ):
     """List available ElevenLabs voices (proxied to keep API key server-side)."""
-    api_key = os.getenv("ELEVENLABS_API_KEY")
+    api_key = _resolve_api_key(settings_service, auth.user_id)
     if not api_key:
         raise HTTPException(
             status_code=500,
             detail={
                 "error": "tts_not_configured",
-                "message": "ELEVENLABS_API_KEY is not set on the server.",
+                "message": "ElevenLabs API key is not configured. Set it in Settings > TTS or via ELEVENLABS_API_KEY env var.",
             },
         )
 
@@ -205,7 +213,7 @@ async def get_tts_settings(
 ) -> TtsSettings:
     """Get the user's TTS voice and model preferences."""
     data = settings_service.get_tts_settings(auth.user_id)
-    return TtsSettings(voice_id=data["voice_id"], model=data["model"])
+    return TtsSettings(voice_id=data["voice_id"], model=data["model"], api_key_set=data["api_key_set"])
 
 
 @router.put("/api/settings/tts", response_model=TtsSettings)
@@ -215,6 +223,6 @@ async def update_tts_settings(
     settings_service: UserSettingsService = Depends(get_user_settings_service),
 ) -> TtsSettings:
     """Update the user's TTS voice and model preferences."""
-    settings_service.set_tts_settings(auth.user_id, body.voice_id, body.model)
+    settings_service.set_tts_settings(auth.user_id, body.voice_id, body.model, body.api_key)
     data = settings_service.get_tts_settings(auth.user_id)
-    return TtsSettings(voice_id=data["voice_id"], model=data["model"])
+    return TtsSettings(voice_id=data["voice_id"], model=data["model"], api_key_set=data["api_key_set"])

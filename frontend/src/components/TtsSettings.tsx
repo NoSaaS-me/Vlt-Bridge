@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Save, Play, Square, Search, Volume2, RefreshCw } from 'lucide-react';
+import { Save, Play, Square, Search, Volume2, RefreshCw, Key } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -27,6 +27,8 @@ export function TtsSettings() {
   const [settings, setSettings] = useState<TtsSettingsResponse | null>(null);
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState('eleven_multilingual_v2');
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [isSavingKey, setIsSavingKey] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
@@ -36,21 +38,32 @@ export function TtsSettings() {
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  const loadVoices = useCallback(async () => {
+    try {
+      const voiceList = await getVoices();
+      setVoices(voiceList);
+    } catch {
+      // Voice loading may fail if no API key — that's OK, we show the key input
+      setVoices([]);
+    }
+  }, []);
+
   const loadData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [voiceList, ttsSettings] = await Promise.all([getVoices(), getTtsSettings()]);
-      setVoices(voiceList);
+      const ttsSettings = await getTtsSettings();
       setSettings(ttsSettings);
       setSelectedVoiceId(ttsSettings.voice_id);
       setSelectedModel(ttsSettings.model || 'eleven_multilingual_v2');
+      // Load voices separately — may fail if no key yet
+      await loadVoices();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load TTS data');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [loadVoices]);
 
   useEffect(() => {
     loadData();
@@ -62,13 +75,44 @@ export function TtsSettings() {
     };
   }, [loadData]);
 
+  const handleSaveApiKey = async () => {
+    if (!apiKeyInput.trim()) return;
+    setIsSavingKey(true);
+    setError(null);
+    try {
+      const updated = await saveTtsSettings({ api_key: apiKeyInput.trim() });
+      setSettings(updated);
+      setApiKeyInput('');
+      // Now that key is set, load voices
+      await loadVoices();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save API key');
+    } finally {
+      setIsSavingKey(false);
+    }
+  };
+
+  const handleClearApiKey = async () => {
+    setIsSavingKey(true);
+    setError(null);
+    try {
+      const updated = await saveTtsSettings({ api_key: '' });
+      setSettings(updated);
+      setVoices([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear API key');
+    } finally {
+      setIsSavingKey(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!selectedVoiceId) return;
     setIsSaving(true);
     setSaved(false);
     try {
-      await saveTtsSettings({ voice_id: selectedVoiceId, model: selectedModel });
-      setSettings({ voice_id: selectedVoiceId, model: selectedModel });
+      const updated = await saveTtsSettings({ voice_id: selectedVoiceId, model: selectedModel });
+      setSettings(updated);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -139,6 +183,61 @@ export function TtsSettings() {
         </Alert>
       )}
 
+      {/* API Key */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            ElevenLabs API Key
+          </CardTitle>
+          <CardDescription>
+            Required for TTS. Get your key at{' '}
+            <a
+              href="https://elevenlabs.io/app/settings/api-keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              elevenlabs.io/app/settings/api-keys
+            </a>
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2">
+            <Input
+              type="password"
+              placeholder={settings?.api_key_set ? '••••••••••••••••' : 'xi-...'}
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              className="font-mono text-xs max-w-sm"
+            />
+            <Button
+              size="sm"
+              onClick={handleSaveApiKey}
+              disabled={isSavingKey || !apiKeyInput.trim()}
+            >
+              {isSavingKey ? 'Saving...' : 'Save Key'}
+            </Button>
+            {settings?.api_key_set && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleClearApiKey}
+                disabled={isSavingKey}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+          {settings?.api_key_set && (
+            <p className="text-xs text-green-600 dark:text-green-400">
+              API key is configured
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Model Selection */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

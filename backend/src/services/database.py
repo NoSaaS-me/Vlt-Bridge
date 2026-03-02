@@ -362,6 +362,7 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     # Add TTS voice settings columns to user_settings
     "ALTER TABLE user_settings ADD COLUMN tts_voice_id TEXT",
     "ALTER TABLE user_settings ADD COLUMN tts_model TEXT DEFAULT 'eleven_multilingual_v2'",
+    "ALTER TABLE user_settings ADD COLUMN elevenlabs_api_key TEXT",
 )
 
 

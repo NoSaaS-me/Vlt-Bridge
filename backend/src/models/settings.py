@@ -37,6 +37,10 @@ class TtsSettings(BaseModel):
         default="eleven_multilingual_v2",
         description="ElevenLabs model to use for synthesis"
     )
+    api_key_set: bool = Field(
+        default=False,
+        description="Whether an ElevenLabs API key has been configured"
+    )
 
 
 class TtsSettingsUpdate(BaseModel):
@@ -48,6 +52,10 @@ class TtsSettingsUpdate(BaseModel):
     model: Optional[str] = Field(
         default=None,
         description="ElevenLabs model to use"
+    )
+    api_key: Optional[str] = Field(
+        default=None,
+        description="ElevenLabs API key (set to empty string to clear)"
     )
 
 
