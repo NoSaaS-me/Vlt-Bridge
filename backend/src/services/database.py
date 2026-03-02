@@ -359,6 +359,9 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE user_settings ADD COLUMN oracle_mcp_enabled INTEGER NOT NULL DEFAULT 1",
     # Add glm_api_key column to user_settings (022-rlm-oracle GLM provider)
     "ALTER TABLE user_settings ADD COLUMN glm_api_key TEXT",
+    # Add TTS voice settings columns to user_settings
+    "ALTER TABLE user_settings ADD COLUMN tts_voice_id TEXT",
+    "ALTER TABLE user_settings ADD COLUMN tts_model TEXT DEFAULT 'eleven_multilingual_v2'",
 )
 
 
