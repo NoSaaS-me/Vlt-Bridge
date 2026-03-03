@@ -19,6 +19,7 @@ export default defineConfig({
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' https: blob:",
         "style-src 'self' 'unsafe-inline' https:",
         "img-src 'self' data: blob: https:",
+        "media-src 'self' blob: https:",
         "connect-src 'self' ws: wss: https:",
         "font-src 'self' data: https:",
         "frame-src 'self' blob:",
