@@ -1,18 +1,11 @@
 /**
- * Cronban API — scheduling, kanban, and skills.
+ * Cronban API — Pipeline-based scheduling and workflow automation.
  * All routes go through /vlt proxy → daemon localhost:8765
  */
 
-export interface CronbanGate {
-  id: string;
-  project_id: string | null;
-  name: string;
-  description: string | null;
-  prompt_markdown: string;
-  tags: string[];
-  created_at: string;
-  updated_at: string;
-}
+// ---------------------------------------------------------------------------
+// Library entities
+// ---------------------------------------------------------------------------
 
 export interface CronbanSkill {
   id: string;
@@ -25,57 +18,119 @@ export interface CronbanSkill {
   updated_at: string;
 }
 
-export interface KanbanColumn {
-  id: string;
-  project_id: string;
-  name: string;
-  col_order: number;
-  color: string | null;
-  is_terminal: boolean;
-  auto_graduate: boolean;
-  graduation_column_id: string | null;
-  created_at: string;
-}
-
-export interface CronbanEntry {
+export interface CronbanGate {
   id: string;
   project_id: string | null;
-  title: string;
-  entry_type: 'cron' | 'gate' | 'webhook';
-  status: 'active' | 'paused' | 'completed' | 'failed';
-  color: string | null;
-  // Skill
+  name: string;
+  description: string | null;
+  prompt_markdown: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline entities
+// ---------------------------------------------------------------------------
+
+export interface PipelineStage {
+  id: string;
+  pipeline_id: string;
+  name: string;
+  stage_order: number;
   skill_id: string | null;
   prompt_text: string | null;
-  // Eval is never returned in full — just has_eval flag
-  has_eval: boolean;
   gate_id: string | null;
   eval_model: 'haiku' | 'sonnet' | 'opus';
-  gate_eval_pending: boolean;
-  // Target
+  auto_advance: boolean;
+  is_terminal: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Pipeline {
+  id: string;
+  project_id: string | null;
+  name: string;
+  description: string | null;
+  stages: PipelineStage[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PipelineCard {
+  id: string;
+  pipeline_id: string;
+  project_id: string | null;
+  title: string;
+  color: string | null;
+  current_stage_id: string;
+  status: 'active' | 'completed' | 'paused' | 'failed';
   target_session_id: string | null;
   target_cwd: string | null;
-  create_new_session: boolean;
-  // Schedule
-  cron_expression: string | null;
-  rrule_str: string | null;
-  next_fire_at: string | null;
-  timezone: string;
-  // Gate
-  kanban_column_id: string | null;
-  kanban_order: number;
-  gate_check_interval_minutes: number;
-  gate_last_checked_at: string | null;
+  gate_eval_pending: boolean;
   gate_last_result: { met: boolean; reasoning: string } | null;
+  gate_last_checked_at: string | null;
   gate_consecutive_not_met: number;
-  gate_question_injected_at: string | null;
-  // Webhook
-  has_webhook_secret: boolean;
-  // Stats
   fire_count: number;
   last_fired_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Trigger entities
+// ---------------------------------------------------------------------------
+
+export interface CronTrigger {
+  id: string;
+  project_id: string | null;
+  title: string;
+  status: 'active' | 'paused' | 'completed';
+  color: string | null;
+  pipeline_id: string | null;
+  skill_id: string | null;
+  has_prompt: boolean;
+  fire_once: boolean;
+  cron_expression: string | null;
+  rrule_str: string | null;
+  next_fire_at: string | null;
+  timezone: string;
+  target_session_id: string | null;
+  target_cwd: string | null;
+  create_new_session: boolean;
+  fire_count: number;
+  last_fired_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebhookListener {
+  id: string;
+  project_id: string | null;
+  name: string;
+  status: 'active' | 'paused';
+  pipeline_id: string | null;
+  skill_id: string | null;
+  has_prompt: boolean;
+  has_secret: boolean;
+  target_session_id: string | null;
+  target_cwd: string | null;
+  create_new_session: boolean;
+  fire_count: number;
+  last_fired_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Misc
+// ---------------------------------------------------------------------------
+
+export interface FireResult {
+  fired: boolean;
+  session_id: string | null;
+  log_id: string | null;
 }
 
 export interface GateCheckResult {
@@ -85,10 +140,15 @@ export interface GateCheckResult {
 }
 
 export interface CronbanGateSettings {
-  provider: 'openrouter' | 'gemini';
+  provider: 'claude_code' | 'zai' | 'openrouter' | 'gemini';
   model: string;
   has_api_key: boolean;
+  base_url?: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// HTTP helper
+// ---------------------------------------------------------------------------
 
 const BASE = '/vlt/api/cronban';
 
@@ -149,89 +209,177 @@ export const deleteGate = (id: string) =>
   req<{ ok: boolean }>(`/gates/${id}`, { method: 'DELETE' });
 
 // ---------------------------------------------------------------------------
-// Columns
+// Pipelines
 // ---------------------------------------------------------------------------
-export const listColumns = (projectId?: string) =>
-  req<KanbanColumn[]>(`/columns${projectId ? `?project_id=${projectId}` : ''}`);
+export const listPipelines = (projectId?: string) =>
+  req<Pipeline[]>(`/pipelines${projectId ? `?project_id=${projectId}` : ''}`);
 
-export const createColumn = (data: Partial<KanbanColumn>) =>
-  req<KanbanColumn>('/columns', {
+export const getPipeline = (id: string) => req<Pipeline>(`/pipelines/${id}`);
+
+export const createPipeline = (data: { project_id?: string; name: string; description?: string }) =>
+  req<Pipeline>('/pipelines', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
 
-export const updateColumn = (id: string, data: Partial<KanbanColumn>) =>
-  req<KanbanColumn>(`/columns/${id}`, {
+export const updatePipeline = (id: string, data: Partial<Pick<Pipeline, 'name' | 'description'>>) =>
+  req<Pipeline>(`/pipelines/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
 
-export const deleteColumn = (id: string, moveTo?: string) =>
-  req<{ ok: boolean }>(`/columns/${id}${moveTo ? `?move_to=${moveTo}` : ''}`, { method: 'DELETE' });
+export const deletePipeline = (id: string) =>
+  req<{ ok: boolean }>(`/pipelines/${id}`, { method: 'DELETE' });
 
 // ---------------------------------------------------------------------------
-// Entries
+// Pipeline Stages
 // ---------------------------------------------------------------------------
-export const listEntries = (params?: { project_id?: string; entry_type?: string; status?: string }) => {
+export const addStage = (pipelineId: string, data: Partial<PipelineStage>) =>
+  req<PipelineStage>(`/pipelines/${pipelineId}/stages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const updateStage = (id: string, data: Partial<PipelineStage>) =>
+  req<PipelineStage>(`/stages/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const deleteStage = (id: string) =>
+  req<{ ok: boolean }>(`/stages/${id}`, { method: 'DELETE' });
+
+export const reorderStages = (pipelineId: string, items: { id: string; stage_order: number }[]) =>
+  req<{ ok: boolean }>(`/pipelines/${pipelineId}/stages/reorder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(items),
+  });
+
+// ---------------------------------------------------------------------------
+// Pipeline Cards
+// ---------------------------------------------------------------------------
+export const listCards = (params?: { project_id?: string; pipeline_id?: string; status?: string }) => {
   const p = new URLSearchParams();
   if (params?.project_id) p.set('project_id', params.project_id);
-  if (params?.entry_type) p.set('entry_type', params.entry_type);
+  if (params?.pipeline_id) p.set('pipeline_id', params.pipeline_id);
   if (params?.status) p.set('status', params.status);
-  return req<CronbanEntry[]>(`/entries?${p}`);
+  return req<PipelineCard[]>(`/cards?${p}`);
 };
 
-export const getEntry = (id: string) => req<CronbanEntry>(`/entries/${id}`);
+export const getCard = (id: string) => req<PipelineCard>(`/cards/${id}`);
 
-export const createEntry = (data: Partial<CronbanEntry> & { eval_text?: string; gate_id?: string }) =>
-  req<CronbanEntry>('/entries', {
+export const createCard = (data: {
+  pipeline_id: string;
+  project_id?: string;
+  title: string;
+  color?: string;
+  stage_id?: string;
+  target_session_id?: string;
+  target_cwd?: string;
+}) =>
+  req<PipelineCard>('/cards', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
 
-export const updateEntry = (id: string, data: Partial<CronbanEntry> & { eval_text?: string; gate_id?: string }) =>
-  req<CronbanEntry>(`/entries/${id}`, {
+export const updateCard = (id: string, data: Partial<PipelineCard>) =>
+  req<PipelineCard>(`/cards/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
 
-export const deleteEntry = (id: string) =>
-  req<{ ok: boolean }>(`/entries/${id}`, { method: 'DELETE' });
+export const deleteCard = (id: string) =>
+  req<{ ok: boolean }>(`/cards/${id}`, { method: 'DELETE' });
 
-export const moveKanbanCard = (entryId: string, columnId: string, force = false) =>
-  req<{ moved: boolean; requires_gate_check?: boolean; message?: string }>(
-    `/entries/${entryId}/move`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ column_id: columnId, force }),
-    },
-  );
+export const advanceCard = (id: string, stageId?: string) =>
+  req<PipelineCard>(`/cards/${id}/advance`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(stageId ? { stage_id: stageId } : {}),
+  });
 
 // ---------------------------------------------------------------------------
-// Gate check
+// Cron Triggers
 // ---------------------------------------------------------------------------
-export const runGateCheck = (entryId: string) =>
-  req<GateCheckResult>(`/entries/${entryId}/gate-check`, { method: 'POST' });
+export const listCronTriggers = (projectId?: string) =>
+  req<CronTrigger[]>(`/crons${projectId ? `?project_id=${projectId}` : ''}`);
+
+export const getCronTrigger = (id: string) => req<CronTrigger>(`/crons/${id}`);
+
+export const createCronTrigger = (data: Partial<CronTrigger> & { prompt_text?: string; fire_at?: string; fire_in?: string }) =>
+  req<CronTrigger>('/crons', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const updateCronTrigger = (id: string, data: Partial<CronTrigger> & { prompt_text?: string; fire_at?: string; fire_in?: string }) =>
+  req<CronTrigger>(`/crons/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const deleteCronTrigger = (id: string) =>
+  req<{ ok: boolean }>(`/crons/${id}`, { method: 'DELETE' });
+
+export const fireCronTrigger = (id: string) =>
+  req<FireResult>(`/crons/${id}/fire`, { method: 'POST' });
+
+// ---------------------------------------------------------------------------
+// Webhook Listeners
+// ---------------------------------------------------------------------------
+export const listWebhooks = (projectId?: string) =>
+  req<WebhookListener[]>(`/webhooks${projectId ? `?project_id=${projectId}` : ''}`);
+
+export const getWebhook = (id: string) => req<WebhookListener>(`/webhooks/${id}`);
+
+export const createWebhook = (data: Partial<WebhookListener> & { prompt_text?: string; webhook_secret?: string }) =>
+  req<WebhookListener>('/webhooks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const updateWebhook = (id: string, data: Partial<WebhookListener> & { prompt_text?: string; webhook_secret?: string }) =>
+  req<WebhookListener>(`/webhooks/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const deleteWebhook = (id: string) =>
+  req<{ ok: boolean }>(`/webhooks/${id}`, { method: 'DELETE' });
+
+export const fireWebhook = (id: string, appendMessage?: string) =>
+  req<FireResult>(`/webhooks/${id}/fire`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(appendMessage ? { append_message: appendMessage } : {}),
+  });
 
 // ---------------------------------------------------------------------------
 // Logs
 // ---------------------------------------------------------------------------
-export const getFireLogs = (entryId: string, limit = 20) =>
-  req<object[]>(`/logs/${entryId}?limit=${limit}`);
+export const getFireLogs = (sourceId: string, limit = 20) =>
+  req<object[]>(`/logs/${sourceId}?limit=${limit}`);
 
-export const getGateLogs = (entryId: string, limit = 20) =>
-  req<object[]>(`/gate-logs/${entryId}?limit=${limit}`);
+export const getGateLogs = (cardId: string, limit = 20) =>
+  req<object[]>(`/gate-logs/${cardId}?limit=${limit}`);
 
 // ---------------------------------------------------------------------------
 // Gate model settings
 // ---------------------------------------------------------------------------
 export const getGateSettings = () => req<CronbanGateSettings>('/settings/gate-model');
 
-export const saveGateSettings = (data: { provider?: string; model?: string; api_key?: string }) =>
+export const saveGateSettings = (data: { provider?: string; model?: string; api_key?: string; base_url?: string }) =>
   req<{ ok: boolean }>('/settings/gate-model', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

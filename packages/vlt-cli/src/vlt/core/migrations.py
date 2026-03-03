@@ -9,6 +9,7 @@ def init_db():
     # Apply additional migrations not covered by SQLAlchemy ORM
     apply_oracle_migrations()
     apply_cronban_migrations()
+    apply_pipeline_migrations()
 
 
 def apply_oracle_migrations():
@@ -319,6 +320,294 @@ def apply_cronban_migrations():
             CREATE INDEX IF NOT EXISTS ix_cronban_gate_logs_entry
             ON cronban_gate_logs(entry_id, checked_at)
         """))
+        conn.commit()
+
+
+def apply_pipeline_migrations():
+    """
+    Create Pipeline system tables and migrate data from legacy Cronban tables.
+
+    New tables: pipelines, pipeline_stages, pipeline_cards, cron_triggers, webhook_listeners.
+    Legacy tables (cronban_entries, cronban_kanban_columns) are left intact — their data
+    is migrated to the new schema on first run (idempotent guard: skips if new tables have data).
+    """
+    import uuid
+    import json
+    from datetime import datetime
+
+    def now() -> str:
+        return datetime.utcnow().isoformat()
+
+    with engine.connect() as conn:
+        # ── Create new tables ─────────────────────────────────────────────
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS pipelines (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS pipeline_stages (
+                id TEXT PRIMARY KEY,
+                pipeline_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                stage_order INTEGER NOT NULL DEFAULT 0,
+                skill_id TEXT,
+                prompt_text TEXT,
+                gate_id TEXT,
+                eval_model TEXT NOT NULL DEFAULT 'haiku',
+                auto_advance INTEGER NOT NULL DEFAULT 1,
+                is_terminal INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS pipeline_cards (
+                id TEXT PRIMARY KEY,
+                pipeline_id TEXT NOT NULL,
+                project_id TEXT,
+                title TEXT NOT NULL,
+                color TEXT,
+                current_stage_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                target_session_id TEXT,
+                target_cwd TEXT,
+                gate_eval_pending INTEGER NOT NULL DEFAULT 0,
+                gate_last_result TEXT,
+                gate_last_checked_at TEXT,
+                gate_consecutive_not_met INTEGER NOT NULL DEFAULT 0,
+                fire_count INTEGER NOT NULL DEFAULT 0,
+                last_fired_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS cron_triggers (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                color TEXT,
+                pipeline_id TEXT,
+                skill_id TEXT,
+                prompt_text TEXT,
+                cron_expression TEXT,
+                rrule_str TEXT,
+                next_fire_at TEXT,
+                timezone TEXT NOT NULL DEFAULT 'UTC',
+                target_session_id TEXT,
+                target_cwd TEXT,
+                create_new_session INTEGER NOT NULL DEFAULT 0,
+                fire_count INTEGER NOT NULL DEFAULT 0,
+                last_fired_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS webhook_listeners (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                pipeline_id TEXT,
+                skill_id TEXT,
+                prompt_text TEXT,
+                webhook_secret TEXT,
+                target_session_id TEXT,
+                target_cwd TEXT,
+                create_new_session INTEGER NOT NULL DEFAULT 0,
+                fire_count INTEGER NOT NULL DEFAULT 0,
+                last_fired_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """))
+
+        # ── Indexes ───────────────────────────────────────────────────────
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_pipelines_project ON pipelines(project_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_pipeline_stages_pipeline ON pipeline_stages(pipeline_id, stage_order)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_pipeline_cards_pipeline ON pipeline_cards(pipeline_id, current_stage_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_pipeline_cards_project ON pipeline_cards(project_id, status)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cron_triggers_project ON cron_triggers(project_id, status)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cron_triggers_next_fire ON cron_triggers(next_fire_at, status)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_webhook_listeners_project ON webhook_listeners(project_id)"))
+
+        # ── Add source_type to fire logs (idempotent) ─────────────────────
+        try:
+            conn.execute(text("ALTER TABLE cronban_fire_logs ADD COLUMN source_type TEXT"))
+        except Exception:
+            pass
+
+        # One-shot triggers (idempotent)
+        try:
+            conn.execute(text(
+                "ALTER TABLE cron_triggers ADD COLUMN fire_once INTEGER NOT NULL DEFAULT 0"
+            ))
+        except Exception:
+            pass  # Already exists
+
+        # Gate settings: base_url for z.ai / self-hosted providers (idempotent)
+        try:
+            conn.execute(text("ALTER TABLE cronban_settings ADD COLUMN gate_base_url TEXT"))
+        except Exception:
+            pass  # Already exists
+
+        conn.commit()
+
+        # ── Data migration (only if new tables are empty) ─────────────────
+        # Guard: skip if we've already migrated
+        n_pipes = conn.execute(text("SELECT COUNT(*) FROM pipelines")).scalar()
+        if n_pipes and n_pipes > 0:
+            return  # Already migrated
+
+        # Check if there's legacy data to migrate
+        try:
+            n_cols = conn.execute(text("SELECT COUNT(*) FROM cronban_kanban_columns")).scalar() or 0
+            n_entries = conn.execute(text("SELECT COUNT(*) FROM cronban_entries")).scalar() or 0
+        except Exception:
+            return  # Legacy tables don't exist, nothing to migrate
+
+        if n_cols == 0 and n_entries == 0:
+            return  # Nothing to migrate
+
+        # ── Migrate columns → "Default Pipeline" + stages ─────────────────
+        # Group columns by project_id
+        cols = conn.execute(text(
+            "SELECT id, project_id, name, col_order, is_terminal, auto_graduate, "
+            "graduation_column_id, created_at FROM cronban_kanban_columns ORDER BY project_id, col_order"
+        )).fetchall()
+
+        # Build project → pipeline_id map
+        project_pipeline: dict = {}
+        col_to_stage: dict = {}  # old column_id → new stage_id
+
+        for col in cols:
+            col_id, proj_id, col_name, col_order, is_terminal, auto_advance, grad_col_id, col_created = col
+            proj_key = proj_id or "__global__"
+
+            if proj_key not in project_pipeline:
+                pipe_id = str(uuid.uuid4())
+                conn.execute(text(
+                    "INSERT INTO pipelines(id, project_id, name, description, created_at, updated_at) "
+                    "VALUES(:id, :proj, :name, :desc, :ca, :ua)"
+                ), {"id": pipe_id, "proj": proj_id, "name": "Default Pipeline",
+                    "desc": "Migrated from legacy Kanban columns", "ca": col_created or now(), "ua": now()})
+                project_pipeline[proj_key] = pipe_id
+
+            pipeline_id = project_pipeline[proj_key]
+            stage_id = str(uuid.uuid4())
+            col_to_stage[col_id] = stage_id
+
+            conn.execute(text(
+                "INSERT INTO pipeline_stages(id, pipeline_id, name, stage_order, "
+                "gate_id, eval_model, auto_advance, is_terminal, created_at, updated_at) "
+                "VALUES(:id, :pip, :name, :ord, NULL, 'haiku', :adv, :term, :ca, :ua)"
+            ), {"id": stage_id, "pip": pipeline_id, "name": col_name, "ord": col_order,
+                "adv": 1 if auto_advance else 0, "term": 1 if is_terminal else 0,
+                "ca": col_created or now(), "ua": now()})
+
+        # ── Migrate entries ────────────────────────────────────────────────
+        entries = conn.execute(text(
+            "SELECT id, project_id, title, entry_type, status, color, skill_id, prompt_text, "
+            "gate_id, eval_text, eval_model, gate_eval_pending, target_session_id, target_cwd, "
+            "create_new_session, cron_expression, rrule_str, next_fire_at, timezone, "
+            "kanban_column_id, gate_check_interval_minutes, gate_last_checked_at, "
+            "gate_last_result, gate_consecutive_not_met, webhook_secret, fire_count, "
+            "last_fired_at, created_at, updated_at FROM cronban_entries"
+        )).fetchall()
+
+        for e in entries:
+            (eid, proj_id, title, etype, estatus, color, skill_id, prompt_text,
+             gate_id, eval_text, eval_model, gate_eval_pending, target_sid, target_cwd,
+             create_new, cron_expr, rrule, next_fire, tz, col_id, gate_interval,
+             gate_last_checked, gate_last_result, gate_consec, webhook_secret,
+             fire_count, last_fired, created_at, updated_at) = e
+
+            ts = created_at or now()
+            ua = updated_at or now()
+
+            if etype == "cron":
+                conn.execute(text(
+                    "INSERT INTO cron_triggers(id, project_id, title, status, color, "
+                    "skill_id, prompt_text, cron_expression, rrule_str, next_fire_at, timezone, "
+                    "target_session_id, target_cwd, create_new_session, fire_count, last_fired_at, "
+                    "created_at, updated_at) VALUES("
+                    ":id,:proj,:title,:status,:color,:skill,:prompt,:cron,:rrule,:next,:tz,"
+                    ":tsid,:tcwd,:create,:fires,:last,:ca,:ua)"
+                ), {"id": eid, "proj": proj_id, "title": title, "status": estatus,
+                    "color": color, "skill": skill_id, "prompt": prompt_text,
+                    "cron": cron_expr, "rrule": rrule, "next": next_fire, "tz": tz or "UTC",
+                    "tsid": target_sid, "tcwd": target_cwd, "create": 1 if create_new else 0,
+                    "fires": fire_count or 0, "last": last_fired, "ca": ts, "ua": ua})
+
+            elif etype == "gate":
+                # Find the pipeline + stage for this card's column
+                stage_id = col_to_stage.get(col_id) if col_id else None
+                if not stage_id:
+                    # No matching column — place in first available pipeline
+                    proj_key = proj_id or "__global__"
+                    pipeline_id = project_pipeline.get(proj_key)
+                    if pipeline_id:
+                        first_stage = conn.execute(text(
+                            "SELECT id FROM pipeline_stages WHERE pipeline_id=:pid ORDER BY stage_order LIMIT 1"
+                        ), {"pid": pipeline_id}).scalar()
+                        stage_id = first_stage
+                    if not stage_id:
+                        continue  # Can't place this card
+
+                # Find pipeline from stage
+                pipeline_id = conn.execute(text(
+                    "SELECT pipeline_id FROM pipeline_stages WHERE id=:sid"
+                ), {"sid": stage_id}).scalar()
+                if not pipeline_id:
+                    continue
+
+                # If this entry had a gate_id on the stage, update the stage
+                if gate_id:
+                    conn.execute(text(
+                        "UPDATE pipeline_stages SET gate_id=:gid, eval_model=:em WHERE id=:sid "
+                        "AND gate_id IS NULL"
+                    ), {"gid": gate_id, "em": eval_model or "haiku", "sid": stage_id})
+                elif eval_text:
+                    # Legacy inline eval — store as gate prompt in a new gate entry
+                    # Just skip for now; eval_text is not migrated to gate library
+                    pass
+
+                conn.execute(text(
+                    "INSERT INTO pipeline_cards(id, pipeline_id, project_id, title, color, "
+                    "current_stage_id, status, target_session_id, target_cwd, gate_eval_pending, "
+                    "gate_last_result, gate_last_checked_at, gate_consecutive_not_met, "
+                    "fire_count, last_fired_at, created_at, updated_at) VALUES("
+                    ":id,:pip,:proj,:title,:color,:stage,:status,:tsid,:tcwd,:gep,"
+                    ":glr,:glc,:gcnm,:fires,:last,:ca,:ua)"
+                ), {"id": eid, "pip": pipeline_id, "proj": proj_id, "title": title,
+                    "color": color, "stage": stage_id, "status": estatus,
+                    "tsid": target_sid, "tcwd": target_cwd,
+                    "gep": 1 if gate_eval_pending else 0,
+                    "glr": gate_last_result, "glc": gate_last_checked,
+                    "gcnm": gate_consec or 0, "fires": fire_count or 0,
+                    "last": last_fired, "ca": ts, "ua": ua})
+
+            elif etype == "webhook":
+                conn.execute(text(
+                    "INSERT INTO webhook_listeners(id, project_id, name, status, "
+                    "skill_id, prompt_text, webhook_secret, target_session_id, target_cwd, "
+                    "create_new_session, fire_count, last_fired_at, created_at, updated_at) "
+                    "VALUES(:id,:proj,:name,:status,:skill,:prompt,:secret,:tsid,:tcwd,"
+                    ":create,:fires,:last,:ca,:ua)"
+                ), {"id": eid, "proj": proj_id, "name": title, "status": estatus,
+                    "skill": skill_id, "prompt": prompt_text, "secret": webhook_secret,
+                    "tsid": target_sid, "tcwd": target_cwd,
+                    "create": 1 if create_new else 0,
+                    "fires": fire_count or 0, "last": last_fired, "ca": ts, "ua": ua})
+
         conn.commit()
 
 

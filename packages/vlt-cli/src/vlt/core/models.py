@@ -410,15 +410,15 @@ class AgentSession(Base):
 # ============================================================================
 
 class CronbanEntryType(enum.Enum):
-    CRON    = "cron"     # Time-based: fires at scheduled time
-    GATE    = "gate"     # Kanban: fires when hidden eval passes
-    WEBHOOK = "webhook"  # Fires when triggered by external HTTP call
+    CRON    = "cron"     # DEPRECATED — use CronTrigger
+    GATE    = "gate"     # DEPRECATED — use PipelineCard
+    WEBHOOK = "webhook"  # DEPRECATED — use WebhookListener
 
 
 class CronbanEntryStatus(enum.Enum):
     ACTIVE    = "active"
     PAUSED    = "paused"
-    COMPLETED = "completed"  # One-shot that fired successfully
+    COMPLETED = "completed"
     FAILED    = "failed"
 
 
@@ -568,7 +568,159 @@ class CronbanSettings(Base):
     __tablename__ = "cronban_settings"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default="default")
-    gate_provider: Mapped[str] = mapped_column(String, default="openrouter")  # "openrouter"|"gemini"
-    gate_model: Mapped[str] = mapped_column(String, default="x-ai/grok-4.1-fast")
+    gate_provider: Mapped[str] = mapped_column(String, default="claude_code")  # "claude_code"|"zai"|"openrouter"|"gemini"
+    gate_model: Mapped[str] = mapped_column(String, default="sonnet")
     gate_api_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # encrypted at rest
+    gate_base_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # for z.ai / self-hosted
+    updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
+# ============================================================================
+# Pipeline system — replaces KanbanColumn + CronbanEntry (gate/cron/webhook)
+# ============================================================================
+
+class Pipeline(Base):
+    """
+    A workflow definition: an ordered sequence of stages a PipelineCard
+    progresses through as work completes and gates are satisfied.
+
+    Cron triggers and webhook listeners create PipelineCard instances;
+    the Kanban board displays those cards grouped by their current stage.
+    """
+    __tablename__ = "pipelines"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    name: Mapped[str] = mapped_column(String)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
+class PipelineStage(Base):
+    """
+    One stage within a Pipeline.
+
+    When a PipelineCard enters this stage:
+      - If skill_id / prompt_text is set, that prompt is fired at the target session.
+      - Helper Claude evaluates the agent output against gate_id after each turn.
+      - If gate passes and auto_advance=True, the card moves to the next stage.
+      - is_terminal stages mark completion.
+    """
+    __tablename__ = "pipeline_stages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    pipeline_id: Mapped[str] = mapped_column(String)                         # FK → pipelines.id
+    name: Mapped[str] = mapped_column(String)
+    stage_order: Mapped[int] = mapped_column(Integer, default=0)
+    # What Claude does when a card enters this stage
+    skill_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)   # FK → cronban_skills.id
+    prompt_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Inline fallback
+    # Gate: evaluated by helper Claude after each agent turn ends
+    gate_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)    # FK → cronban_gates.id
+    eval_model: Mapped[str] = mapped_column(String, default="haiku")         # haiku|sonnet|opus
+    auto_advance: Mapped[bool] = mapped_column(Boolean, default=True)        # Auto-move on gate pass
+    is_terminal: Mapped[bool] = mapped_column(Boolean, default=False)        # Final stage
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
+class PipelineCard(Base):
+    """
+    An instance of work moving through a Pipeline, one stage at a time.
+    Created by a CronTrigger, WebhookListener, or manually.
+
+    The card tracks which stage it's currently in, the gate evaluation state
+    for that stage, and the target session where the agent runs.
+    """
+    __tablename__ = "pipeline_cards"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    pipeline_id: Mapped[str] = mapped_column(String)                         # FK → pipelines.id
+    project_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    title: Mapped[str] = mapped_column(String)
+    color: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    current_stage_id: Mapped[str] = mapped_column(String)                    # FK → pipeline_stages.id
+    status: Mapped[str] = mapped_column(String, default="active")            # active/completed/paused/failed
+    # Agent target
+    target_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    target_cwd: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Gate evaluation state (for current stage)
+    gate_eval_pending: Mapped[bool] = mapped_column(Boolean, default=False)
+    gate_last_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)    # JSON {met, reasoning}
+    gate_last_checked_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    gate_consecutive_not_met: Mapped[int] = mapped_column(Integer, default=0)
+    # Stats
+    fire_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_fired_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
+class CronTrigger(Base):
+    """
+    Time-based trigger that fires on a cron schedule.
+
+    On fire, either:
+      - Creates a new PipelineCard in pipeline_id (placed at the first stage), OR
+      - Fires skill_id / prompt_text directly at a session (standalone, no pipeline).
+    """
+    __tablename__ = "cron_triggers"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    title: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="active")            # active/paused
+    color: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # What to create/fire
+    pipeline_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)   # FK → pipelines.id
+    skill_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)      # FK → cronban_skills.id
+    prompt_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)     # Inline fallback
+    # Schedule
+    cron_expression: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    rrule_str: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    next_fire_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    timezone: Mapped[str] = mapped_column(String, default="UTC")
+    # Target session (used for standalone skill fires; pipeline cards inherit from card)
+    target_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    target_cwd: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    create_new_session: Mapped[bool] = mapped_column(Boolean, default=False)
+    fire_once: Mapped[bool] = mapped_column(Boolean, default=False)   # one-shot: completed after first fire
+    # Stats
+    fire_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_fired_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+    updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
+class WebhookListener(Base):
+    """
+    External HTTP trigger — fires when a POST arrives at /api/cronban/webhooks/{id}/fire.
+    Authenticated via HMAC-SHA256 if webhook_secret is set.
+
+    The caller may append an extra message to the skill prompt via the POST body.
+    On fire, either:
+      - Creates a new PipelineCard in pipeline_id, OR
+      - Fires skill_id / prompt_text directly at a session.
+    """
+    __tablename__ = "webhook_listeners"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    name: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="active")            # active/paused
+    # What to create/fire
+    pipeline_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)   # FK → pipelines.id
+    skill_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)      # FK → cronban_skills.id
+    prompt_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)     # Inline fallback
+    # Auth
+    webhook_secret: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Target session (for standalone skill fires)
+    target_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    target_cwd: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    create_new_session: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Stats
+    fire_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_fired_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
     updated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())

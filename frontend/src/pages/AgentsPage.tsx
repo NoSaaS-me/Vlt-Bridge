@@ -104,7 +104,6 @@ function AgentsCompositorView({
   onStartFresh: (prompt: string) => void;
   onResumeSession: (session: AgentSession) => void;
   onRenameSession: (id: string, name: string) => void;
-  onRenameSession: (id: string, name: string) => void;
 }) {
   const hasRelaySessions = useMemo(
     () => polling.sessions.some((s) => s.source === 'relay' && s.status !== 'dead'),

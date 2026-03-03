@@ -2,22 +2,21 @@
 cronban_evaluator.py — Helper-Claude gate evaluation engine.
 
 Flow (triggered when an agent's turn ends):
-  1. Find all active GATE entries targeting the session that just went idle.
-  2. For each entry, build an evaluation prompt:
-       - Original task (prompt_text / skill)
+  1. Find all active PipelineCards targeting the session that just went idle.
+  2. For each card, load the current PipelineStage to get the gate_id.
+  3. Build an evaluation prompt:
+       - Original task (stage skill prompt / card info)
        - Agent's most recent output (last N assistant messages from transcript)
-       - Optional held-out eval_text (instructions the agent never saw)
-  3. Spawn / resume the project's dedicated "helper" Claude session.
-  4. Wait for helper's response (direct subprocess call via _run_claude_message).
-  5. Parse GATE_RESULT: PASS / GATE_RESULT: FAIL from the response.
-  6. Update entry gate_last_result; if PASS + auto_graduate → move card.
+       - Gate eval criteria (from CronbanGate.prompt_markdown)
+  4. Spawn / resume the project's dedicated "helper" Claude session.
+  5. Wait for helper's response (direct subprocess call via _run_claude_message).
+  6. Parse GATE_RESULT: PASS / GATE_RESULT: FAIL from the response.
+  7. Update card gate_last_result; if PASS + stage.auto_advance → advance to next stage.
 
 Helper session design:
   - One per project (keyed by project_id).
   - Marked with is_cronban_helper=True in agent_sessions.
   - Persists across evaluations via --resume, building up project context.
-  - Model is set at spawn time; eval_model on the entry influences spawning a
-    new helper when the existing one dies.
   - Does NOT trigger further gate evaluations when it goes idle (checked in
     server.py's _trigger_gate_evaluations).
 """
@@ -40,6 +39,11 @@ _MODEL_IDS = {
     "haiku":  "claude-haiku-4-5-20251001",
     "sonnet": "claude-sonnet-4-6",
     "opus":   "claude-opus-4-6",
+}
+
+_OPENAI_COMPAT_BASE = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
 }
 
 
@@ -246,178 +250,308 @@ def _get_available_helper(project_id: str, cwd: str, eval_model: str) -> tuple[s
 
 
 # ---------------------------------------------------------------------------
+# Card advancement helper
+# ---------------------------------------------------------------------------
+
+def _advance_card(card_id: str, current_stage_id: str, pipeline_id: str) -> None:
+    """
+    Advance a PipelineCard to the next stage. If the next stage is terminal (or
+    there is no next stage), mark the card as completed.
+    """
+    from vlt.db import engine
+    from vlt.core.models import PipelineCard, PipelineStage
+    from sqlmodel import Session, select
+
+    with Session(engine) as db:
+        current_stage = db.get(PipelineStage, current_stage_id)
+        if not current_stage:
+            logger.warning(f"advance_card: stage {current_stage_id} not found")
+            return
+
+        next_stage = db.exec(
+            select(PipelineStage).where(
+                PipelineStage.pipeline_id == pipeline_id,
+                PipelineStage.stage_order > current_stage.stage_order,
+            ).order_by(PipelineStage.stage_order)
+        ).first()
+
+        card = db.get(PipelineCard, card_id)
+        if not card:
+            return
+
+        now_iso = datetime.utcnow().isoformat()
+
+        if next_stage and not next_stage.is_terminal:
+            # Move to next stage, reset gate state
+            card.current_stage_id = next_stage.id
+            card.gate_eval_pending = False
+            card.gate_last_result = None
+            card.gate_last_checked_at = None
+            card.gate_consecutive_not_met = 0
+            card.updated_at = now_iso
+            db.add(card)
+            db.commit()
+            logger.info(
+                f"advance_card: {card_id!r} advanced from {current_stage.name!r} "
+                f"to {next_stage.name!r}"
+            )
+        else:
+            # No next stage or next stage is terminal — mark completed
+            card.status = "completed"
+            if next_stage and next_stage.is_terminal:
+                card.current_stage_id = next_stage.id
+            card.gate_eval_pending = False
+            card.updated_at = now_iso
+            db.add(card)
+            db.commit()
+            logger.info(f"advance_card: {card_id!r} marked completed (no more non-terminal stages)")
+
+
+# ---------------------------------------------------------------------------
+# External API evaluation (z.ai / OpenRouter / Gemini — OpenAI-compat)
+# ---------------------------------------------------------------------------
+
+async def _call_external_api(
+    prompt: str,
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: Optional[str],
+) -> Optional[str]:
+    """
+    Call an external OpenAI-compatible LLM for gate evaluation.
+
+    Returns the assistant message text, or None on failure.
+    """
+    import httpx
+
+    endpoint_base = base_url if base_url else _OPENAI_COMPAT_BASE.get(provider, "")
+    if not endpoint_base:
+        logger.error(f"External eval: unknown provider '{provider}' with no base_url")
+        return None
+
+    url = endpoint_base.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 600,
+        "temperature": 0.0,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(url, json=payload, headers=headers)
+            r.raise_for_status()
+        data = r.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        logger.error(f"External API eval failed ({provider}): {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Main evaluation entry point
 # ---------------------------------------------------------------------------
 
-async def run_gate_evaluation(entry_id: str, agent_session_id: str) -> None:
+async def run_gate_evaluation(card_id: str, agent_session_id: str) -> None:
     """
-    Run a full gate evaluation for one CronbanEntry.
+    Run a full gate evaluation for one PipelineCard.
 
-    Called as a background asyncio task after the agent's turn ends.
+    Called as a background asyncio task after the agent's turn ends
+    (from server.py _trigger_gate_evaluations) or by the gate_tick scheduler.
     """
     from vlt.db import engine
-    from vlt.core.models import CronbanEntry, AgentSession, KanbanColumn
-    from sqlmodel import Session, select
+    from vlt.core.models import PipelineCard, PipelineStage, AgentSession
+    from sqlmodel import Session
 
-    logger.info(f"Gate evaluation starting: entry={entry_id} agent_session={agent_session_id}")
+    logger.info(f"Gate evaluation starting: card={card_id} agent_session={agent_session_id}")
 
-    # ── Load entry + gate prompt ───────────────────────────────────────────
+    # ── Load card + stage + gate prompt ──────────────────────────────────────
     with Session(engine) as db:
-        entry = db.get(CronbanEntry, entry_id)
-        if not entry or entry.status != "active":
-            logger.info(f"Gate eval skipped: entry {entry_id} not active")
+        card = db.get(PipelineCard, card_id)
+        if not card or card.status != "active":
+            logger.info(f"Gate eval skipped: card {card_id} not active")
             return
-        if entry.entry_type != "gate":
+
+        stage = db.get(PipelineStage, card.current_stage_id)
+        if not stage:
+            logger.warning(f"Gate eval: stage {card.current_stage_id!r} not found for card {card_id}")
             return
+
+        if not stage.gate_id:
+            logger.info(f"Gate eval: stage {stage.name!r} has no gate — auto-passing")
+            if stage.auto_advance:
+                _advance_card(card_id, stage.id, card.pipeline_id)
+            return
+
+        # Resolve gate eval criteria
+        from vlt.core.models import CronbanGate
+        gate = db.get(CronbanGate, stage.gate_id)
+        if not gate:
+            logger.warning(f"Gate eval: gate {stage.gate_id!r} not found — skipping")
+            return
+
+        eval_instructions = gate.prompt_markdown
 
         # Resolve task prompt (what the working agent was told to do)
-        prompt_text = entry.prompt_text
-        if not prompt_text and entry.skill_id:
+        prompt_text: Optional[str] = stage.prompt_text
+        if not prompt_text and stage.skill_id:
             from vlt.core.models import CronbanSkill
-            skill = db.get(CronbanSkill, entry.skill_id)
+            skill = db.get(CronbanSkill, stage.skill_id)
             if skill:
                 prompt_text = skill.prompt_markdown
 
-        # Resolve gate eval instructions: gate_id takes priority over legacy eval_text
-        eval_instructions: Optional[str] = None
-        if entry.gate_id:
-            from vlt.core.models import CronbanGate
-            gate = db.get(CronbanGate, entry.gate_id)
-            if gate:
-                eval_instructions = gate.prompt_markdown
-            else:
-                logger.warning(f"Gate eval: gate_id {entry.gate_id!r} not found, skipping")
-                return
-        elif entry.eval_text:
-            # Legacy inline eval
-            eval_instructions = entry.eval_text
-        else:
-            logger.info(f"Gate eval: entry {entry_id} has no gate or eval_text, auto-passing")
-            # No gate configured — treat as pass
-            with Session(engine) as db2:
-                e = db2.get(CronbanEntry, entry_id)
-                if e:
-                    e.gate_last_result = '{"met": true, "reasoning": "No gate configured — auto-pass."}'
-                    e.gate_last_checked_at = datetime.utcnow().isoformat()
-                    db2.add(e)
-                    db2.commit()
-            return
-
-        project_id = entry.project_id or "default"
-        eval_model = entry.eval_model or "haiku"
-        title = entry.title
-        kanban_column_id = entry.kanban_column_id
+        project_id = card.project_id or "default"
+        eval_model = stage.eval_model or "haiku"
+        title = card.title
+        pipeline_id = card.pipeline_id
+        auto_advance = bool(stage.auto_advance)
 
         # Mark as evaluating
-        entry.gate_eval_pending = True
-        db.add(entry)
+        card.gate_eval_pending = True
+        db.add(card)
         db.commit()
+
+    # ── Load gate settings (provider dispatch) ────────────────────────────
+    from vlt.core.models import CronbanSettings
+    with Session(engine) as db:
+        gs = db.get(CronbanSettings, "default")
+        gate_provider = gs.gate_provider if gs else "claude_code"
+        gate_api_key = gs.gate_api_key if gs else None
+        gate_base_url = gs.gate_base_url if gs else None
+        # Per-stage eval_model overrides gate settings model for claude_code;
+        # for external providers use the configured model.
+        gate_cfg_model = gs.gate_model if gs else "sonnet"
 
     # ── Read agent's recent output ────────────────────────────────────────
     agent_output = _read_last_assistant_messages(agent_session_id, n=4)
     if not agent_output:
         logger.warning(f"Gate eval: no transcript output for session {agent_session_id}, skipping")
         with Session(engine) as db:
-            entry = db.get(CronbanEntry, entry_id)
-            if entry:
-                entry.gate_eval_pending = False
-                db.add(entry)
+            c = db.get(PipelineCard, card_id)
+            if c:
+                c.gate_eval_pending = False
+                db.add(c)
                 db.commit()
         return
 
     # ── Build eval prompt ─────────────────────────────────────────────────
     eval_prompt = _build_eval_prompt(title, prompt_text, agent_output, eval_instructions)
 
-    # ── Find / create helper session ──────────────────────────────────────
-    # Get project CWD from agent session or entry's target_cwd
-    with Session(engine) as db:
-        agent_sess = db.get(AgentSession, agent_session_id)
-        entry = db.get(CronbanEntry, entry_id)
-        cwd = (agent_sess.cwd if agent_sess else None) or (entry.target_cwd if entry else None) or "~"
+    # ── Dispatch to configured provider ───────────────────────────────────
+    raw_output: Optional[str] = None
+    model_id: str
 
-    cwd = str(cwd).replace("~", __import__("os").path.expanduser("~"))
+    if gate_provider == "claude_code":
+        # Use the helper session pool (persists project context via --resume)
+        with Session(engine) as db:
+            agent_sess = db.get(AgentSession, agent_session_id)
+            c = db.get(PipelineCard, card_id)
+            cwd = (agent_sess.cwd if agent_sess else None) or (c.target_cwd if c else None) or "~"
 
-    helper_id, is_new = _get_available_helper(project_id, cwd, eval_model)
-    model_id = _resolve_model(eval_model)
+        cwd = str(cwd).replace("~", __import__("os").path.expanduser("~"))
+        model_id = _resolve_model(eval_model)
 
-    logger.info(
-        f"Gate eval: helper_session={helper_id} is_new={is_new} "
-        f"model={model_id} cwd={cwd}"
-    )
-
-    # ── Invoke helper (direct subprocess, wait for result) ────────────────
-    # We import _run_claude_message from server.py at call time to avoid
-    # circular import at module load.
-    try:
-        from vlt.daemon.server import _run_claude_message
-
-        await _run_claude_message(
-            cwd=cwd,
-            message=eval_prompt,
-            session_id=helper_id,
-            is_first=is_new,
-            model=model_id,
+        helper_id, is_new = _get_available_helper(project_id, cwd, eval_model)
+        logger.info(
+            f"Gate eval [claude_code]: helper_session={helper_id} is_new={is_new} "
+            f"model={model_id} cwd={cwd}"
         )
 
-        # Mark helper session as not-new after first message
-        if is_new:
+        try:
+            from vlt.daemon.server import _run_claude_message
+
+            await _run_claude_message(
+                cwd=cwd,
+                message=eval_prompt,
+                session_id=helper_id,
+                is_first=is_new,
+                model=model_id,
+            )
+
+            if is_new:
+                with Session(engine) as db:
+                    h = db.get(AgentSession, helper_id)
+                    if h:
+                        h.status = "idle"
+                        db.add(h)
+                        db.commit()
+
+        except Exception as e:
+            logger.error(f"Gate eval: helper invocation failed: {e}")
             with Session(engine) as db:
-                h = db.get(AgentSession, helper_id)
-                if h:
-                    h.status = "idle"
-                    db.add(h)
+                c = db.get(PipelineCard, card_id)
+                if c:
+                    c.gate_eval_pending = False
+                    db.add(c)
                     db.commit()
+            return
 
-    except Exception as e:
-        logger.error(f"Gate eval: helper invocation failed: {e}")
-        with Session(engine) as db:
-            entry = db.get(CronbanEntry, entry_id)
-            if entry:
-                entry.gate_eval_pending = False
-                db.add(entry)
-                db.commit()
-        return
+        raw_output = _read_last_assistant_messages(helper_id, n=1)
 
-    # ── Read helper's response ────────────────────────────────────────────
-    helper_output = _read_last_assistant_messages(helper_id, n=1)
-    if not helper_output:
-        logger.warning(f"Gate eval: no response from helper session {helper_id}")
+    else:
+        # External OpenAI-compatible provider (zai, openrouter, gemini)
+        model_id = gate_cfg_model
+        if not gate_api_key:
+            logger.error(f"Gate eval [{gate_provider}]: no API key configured — skipping")
+            with Session(engine) as db:
+                c = db.get(PipelineCard, card_id)
+                if c:
+                    c.gate_eval_pending = False
+                    db.add(c)
+                    db.commit()
+            return
+
+        logger.info(f"Gate eval [{gate_provider}]: model={model_id}")
+        raw_output = await _call_external_api(
+            prompt=eval_prompt,
+            provider=gate_provider,
+            model=model_id,
+            api_key=gate_api_key,
+            base_url=gate_base_url,
+        )
+
+    if not raw_output:
+        logger.warning(f"Gate eval: no response from provider '{gate_provider}'")
         with Session(engine) as db:
-            entry = db.get(CronbanEntry, entry_id)
-            if entry:
-                entry.gate_eval_pending = False
-                db.add(entry)
+            c = db.get(PipelineCard, card_id)
+            if c:
+                c.gate_eval_pending = False
+                db.add(c)
                 db.commit()
         return
 
     # ── Parse result ──────────────────────────────────────────────────────
-    result = _parse_gate_result(helper_output)
-    logger.info(f"Gate eval result: entry={entry_id} met={result['met']} reasoning={result['reasoning'][:100]}")
+    result = _parse_gate_result(raw_output)
+    logger.info(f"Gate eval result: card={card_id} met={result['met']} reasoning={result['reasoning'][:100]}")
 
-    # ── Persist result + optionally graduate ──────────────────────────────
+    # ── Persist result + optionally advance ───────────────────────────────
     with Session(engine) as db:
-        entry = db.get(CronbanEntry, entry_id)
-        if not entry:
+        c = db.get(PipelineCard, card_id)
+        if not c:
             return
 
         now_iso = datetime.utcnow().isoformat()
-        entry.gate_last_result = json.dumps(result)
-        entry.gate_last_checked_at = now_iso
-        entry.gate_eval_pending = False
-        entry.gate_question_injected_at = None  # Reset for next cycle
+        c.gate_last_result = json.dumps(result)
+        c.gate_last_checked_at = now_iso
+        c.gate_eval_pending = False
 
         if result["met"]:
-            entry.gate_consecutive_not_met = 0
+            c.gate_consecutive_not_met = 0
         else:
-            entry.gate_consecutive_not_met += 1
+            c.gate_consecutive_not_met = (c.gate_consecutive_not_met or 0) + 1
 
-        db.add(entry)
+        db.add(c)
 
         # Log to gate logs
         from vlt.core.models import CronbanGateLog
         db.add(CronbanGateLog(
             id=str(uuid.uuid4()),
-            entry_id=entry_id,
+            entry_id=card_id,
             gate_met=result["met"],
             reasoning=result["reasoning"],
             model_used=model_id,
@@ -426,30 +560,9 @@ async def run_gate_evaluation(entry_id: str, agent_session_id: str) -> None:
         ))
         db.commit()
 
-        # Auto-graduation
-        if result["met"] and kanban_column_id:
-            col = db.get(KanbanColumn, kanban_column_id)
-            if col and col.auto_graduate:
-                # Find target column
-                if col.graduation_column_id:
-                    target_id = col.graduation_column_id
-                else:
-                    # Next column by col_order
-                    next_col = db.exec(
-                        select(KanbanColumn).where(
-                            KanbanColumn.project_id == col.project_id,
-                            KanbanColumn.col_order > col.col_order,
-                        ).order_by(KanbanColumn.col_order)
-                    ).first()
-                    target_id = next_col.id if next_col else None
-
-                if target_id and target_id != kanban_column_id:
-                    entry = db.get(CronbanEntry, entry_id)
-                    if entry:
-                        entry.kanban_column_id = target_id
-                        db.add(entry)
-                        db.commit()
-                        logger.info(
-                            f"Gate eval: auto-graduated {entry_id!r} "
-                            f"from {kanban_column_id!r} to {target_id!r}"
-                        )
+    # Auto-advance if gate passed
+    if result["met"] and auto_advance:
+        with Session(engine) as db:
+            c = db.get(PipelineCard, card_id)
+            if c:
+                _advance_card(card_id, c.current_stage_id, c.pipeline_id)

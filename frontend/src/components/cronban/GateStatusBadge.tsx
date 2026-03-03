@@ -12,22 +12,22 @@
  */
 import { Clock, CheckCircle, XCircle, RefreshCw, Brain } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { CronbanEntry } from '@/services/cronban-api';
+import type { PipelineCard } from '@/services/cronban-api';
 
 export interface GateStatusBadgeProps {
-  entry: CronbanEntry;
-  onRunCheck?: (entryId: string) => void;
+  card: PipelineCard;
+  onRunCheck?: (cardId: string) => void;
   isChecking?: boolean;
 }
 
-export function GateStatusBadge({ entry, onRunCheck, isChecking = false }: GateStatusBadgeProps) {
-  const result = entry.gate_last_result;
+export function GateStatusBadge({ card, onRunCheck, isChecking = false }: GateStatusBadgeProps) {
+  const result = card.gate_last_result;
   const tooltip = result?.reasoning ?? undefined;
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onRunCheck && !isChecking) {
-      onRunCheck(entry.id);
+      onRunCheck(card.id);
     }
   };
 
@@ -35,10 +35,10 @@ export function GateStatusBadge({ entry, onRunCheck, isChecking = false }: GateS
     'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors select-none';
 
   // Helper Claude is evaluating (triggered automatically after agent turn ends)
-  if (entry.gate_eval_pending) {
+  if (card.gate_eval_pending) {
     return (
       <span
-        title={`Helper ${entry.eval_model} is evaluating…`}
+        title="Helper Claude is evaluating…"
         className={cn(baseClass, 'bg-violet-500/15 border-violet-500/30 text-violet-400 cursor-not-allowed')}
       >
         <Brain className="h-3 w-3 animate-pulse" />
@@ -108,3 +108,6 @@ export function GateStatusBadge({ entry, onRunCheck, isChecking = false }: GateS
     </span>
   );
 }
+
+// Backwards-compat alias used by KanbanBoard
+export { GateStatusBadge as default };

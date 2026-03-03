@@ -24,7 +24,7 @@ export function SessionCard({
 }) {
   // Inline confirmation: first click arms → second click kills (within 2s)
   const [armed, setArmed] = useState(false);
-  const armTimer = useRef<ReturnType<typeof setTimeout>>();
+  const armTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Inline rename state
   const [editing, setEditing] = useState(false);

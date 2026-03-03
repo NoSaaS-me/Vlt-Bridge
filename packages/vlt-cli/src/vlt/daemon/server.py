@@ -2292,14 +2292,14 @@ async def _run_claude_message(
 
 async def _trigger_gate_evaluations(session_id: str) -> None:
     """
-    After a managed session's turn ends, find any active GATE entries targeting
+    After a managed session's turn ends, find any active PipelineCards targeting
     this session and run helper-Claude evaluations for each.
 
     Skips helper sessions themselves to avoid infinite recursion.
     """
     try:
         from vlt.db import engine
-        from vlt.core.models import AgentSession, CronbanEntry
+        from vlt.core.models import AgentSession, PipelineCard
         from sqlmodel import Session, select
 
         with Session(engine) as db:
@@ -2308,20 +2308,19 @@ async def _trigger_gate_evaluations(session_id: str) -> None:
             if sess and getattr(sess, "is_cronban_helper", False):
                 return
 
-            gate_entries = db.exec(
-                select(CronbanEntry).where(
-                    CronbanEntry.target_session_id == session_id,
-                    CronbanEntry.entry_type == "gate",
-                    CronbanEntry.status == "active",
-                    CronbanEntry.gate_eval_pending == False,  # noqa: E712
+            active_cards = db.exec(
+                select(PipelineCard).where(
+                    PipelineCard.target_session_id == session_id,
+                    PipelineCard.status == "active",
+                    PipelineCard.gate_eval_pending == False,  # noqa: E712
                 )
             ).all()
-            entry_ids = [e.id for e in gate_entries]
+            card_ids = [c.id for c in active_cards]
 
-        for entry_id in entry_ids:
-            logger.info(f"Scheduling gate evaluation: entry={entry_id} session={session_id}")
+        for card_id in card_ids:
+            logger.info(f"Scheduling gate evaluation: card={card_id} session={session_id}")
             from vlt.daemon.cronban_evaluator import run_gate_evaluation
-            asyncio.create_task(run_gate_evaluation(entry_id, session_id))
+            asyncio.create_task(run_gate_evaluation(card_id, session_id))
 
     except Exception as e:
         logger.error(f"_trigger_gate_evaluations error for session {session_id}: {e}")

@@ -1,96 +1,211 @@
 /**
- * KanbanBoard — main board view for gate-type CronbanEntries.
+ * KanbanBoard — Pipeline workflow view.
  *
  * Layout:
- *   - Horizontal scrolling flex row of KanbanColumns
- *   - Each column: header (name, count badge, add-card button), cards, empty state
- *   - "New Column" button at the end of the row
- *
- * Data:
- *   - listColumns(projectId) for columns
- *   - listEntries({ entry_type: 'gate', project_id }) for entries
- *   - runGateCheck(entryId) — shows result; if met, prompts to move card
- *   - moveKanbanCard(entryId, columnId) — handles requires_gate_check warning
- *   - createColumn() for new columns
- *   - updateColumn() for rename
- *   - deleteColumn() with optional move_to
+ *   - Pipeline selector (dropdown at top-left, or "Create pipeline" prompt)
+ *   - Horizontal columns = pipeline stages
+ *   - Cards within each stage
+ *   - "New Card" button in each stage, "New Stage" at the end
+ *   - Pipeline can be renamed/deleted via header menu
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, MoreVertical, Pencil, Trash2, Check, X, GraduationCap } from 'lucide-react';
+import { Plus, Check, X, Pencil, Trash2, ChevronDown, MoreVertical, Flag } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { KanbanCard } from './KanbanCard';
 import {
-  type CronbanEntry,
-  type KanbanColumn,
-  listColumns,
-  listEntries,
-  createColumn,
-  updateColumn,
-  deleteColumn,
-  runGateCheck,
-  moveKanbanCard,
+  type Pipeline,
+  type PipelineStage,
+  type PipelineCard,
+  listPipelines,
+  getPipeline,
+  createPipeline,
+  updatePipeline,
+  deletePipeline,
+  addStage,
+  updateStage,
+  deleteStage,
+  listCards,
+  createCard,
+  advanceCard,
+  deleteCard,
 } from '@/services/cronban-api';
 
 // ---------------------------------------------------------------------------
-// Column header with inline rename + kebab menu
+// New pipeline prompt
 // ---------------------------------------------------------------------------
-function ColumnHeader({
-  column,
+function NewPipelinePrompt({
+  projectId,
+  onCreated,
+}: {
+  projectId?: string;
+  onCreated: (p: Pipeline) => void;
+}) {
+  const [name, setName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleCreate = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setCreating(true);
+    try {
+      const p = await createPipeline({ project_id: projectId, name: trimmed });
+      // Add default stages
+      const stages = [
+        { name: 'To Do', stage_order: 0, auto_advance: true, is_terminal: false },
+        { name: 'In Progress', stage_order: 1, auto_advance: true, is_terminal: false },
+        { name: 'Done', stage_order: 2, auto_advance: false, is_terminal: true },
+      ];
+      for (const s of stages) {
+        await addStage(p.id, s);
+      }
+      onCreated(await getPipeline(p.id));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="h-full flex items-center justify-center">
+      <div className="text-center space-y-4 max-w-sm">
+        <div className="space-y-1">
+          <p className="text-sm font-medium">No pipelines yet</p>
+          <p className="text-xs text-muted-foreground">
+            A pipeline defines stages for your work items to move through.
+          </p>
+        </div>
+        <div className="flex gap-2 justify-center">
+          <Input
+            ref={inputRef}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+            placeholder="Pipeline name (e.g. Bug Fix)"
+            className="h-8 text-xs w-48"
+            disabled={creating}
+          />
+          <Button
+            size="sm"
+            className="h-8"
+            onClick={handleCreate}
+            disabled={creating || !name.trim()}
+          >
+            {creating ? '…' : 'Create'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline selector toolbar
+// ---------------------------------------------------------------------------
+function PipelineSelector({
+  pipelines,
+  selected,
+  onSelect,
+  onNewPipeline,
+}: {
+  pipelines: Pipeline[];
+  selected: Pipeline | null;
+  onSelect: (p: Pipeline) => void;
+  onNewPipeline: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 gap-1.5 text-xs max-w-48"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="truncate">{selected?.name ?? 'Select pipeline'}</span>
+        <ChevronDown className="h-3 w-3 shrink-0" />
+      </Button>
+      {open && (
+        <div className="absolute left-0 top-full mt-1 z-50 min-w-48 rounded-md border border-border bg-popover shadow-lg py-1">
+          {pipelines.map((p) => (
+            <button
+              key={p.id}
+              className={cn(
+                'w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors truncate',
+                selected?.id === p.id && 'bg-muted/30 font-medium',
+              )}
+              onClick={() => { onSelect(p); setOpen(false); }}
+            >
+              {p.name}
+            </button>
+          ))}
+          <div className="border-t border-border mt-1 pt-1">
+            <button
+              className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors flex items-center gap-1.5 text-muted-foreground"
+              onClick={() => { onNewPipeline(); setOpen(false); }}
+            >
+              <Plus className="h-3 w-3" /> New pipeline
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stage column header
+// ---------------------------------------------------------------------------
+function StageHeader({
+  stage,
   count,
-  columns,
-  onNewEntry,
+  onNewCard,
   onRename,
   onDelete,
-  onUpdateGraduation,
+  onToggleTerminal,
 }: {
-  column: KanbanColumn;
+  stage: PipelineStage;
   count: number;
-  columns: KanbanColumn[];
-  onNewEntry: () => void;
-  onRename: (newName: string) => void;
+  onNewCard: () => void;
+  onRename: (name: string) => void;
   onDelete: () => void;
-  onUpdateGraduation: (auto_graduate: boolean, graduation_column_id: string | null) => void;
+  onToggleTerminal: () => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(column.name);
+  const [draft, setDraft] = useState(stage.name);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [gradOpen, setGradOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Close menu on outside click
   useEffect(() => {
     if (!menuOpen) return;
     const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [menuOpen]);
 
   const commitRename = () => {
-    const name = draft.trim();
-    if (name && name !== column.name) onRename(name);
+    const n = draft.trim();
+    if (n && n !== stage.name) onRename(n);
     setEditing(false);
   };
 
-  const startEdit = () => {
-    setDraft(column.name);
-    setEditing(true);
-    setMenuOpen(false);
-    setTimeout(() => inputRef.current?.focus(), 0);
-  };
-
-  // Other columns available for graduation target
-  const otherCols = columns.filter((c) => c.id !== column.id);
-
   return (
-    <>
     <div className="flex items-center gap-1.5 px-3 py-2.5 border-b border-border">
       {editing ? (
         <div className="flex items-center gap-1 flex-1">
@@ -100,14 +215,14 @@ function ColumnHeader({
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitRename();
-              if (e.key === 'Escape') { setEditing(false); setDraft(column.name); }
+              if (e.key === 'Escape') { setEditing(false); setDraft(stage.name); }
             }}
             className="h-6 text-xs flex-1"
           />
           <button onClick={commitRename} className="text-emerald-400 hover:text-emerald-300">
             <Check className="h-3.5 w-3.5" />
           </button>
-          <button onClick={() => { setEditing(false); setDraft(column.name); }} className="text-muted-foreground hover:text-foreground">
+          <button onClick={() => { setEditing(false); setDraft(stage.name); }} className="text-muted-foreground hover:text-foreground">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -115,11 +230,18 @@ function ColumnHeader({
         <>
           <span
             className="text-xs font-semibold flex-1 truncate cursor-pointer hover:text-foreground text-foreground/80"
-            onDoubleClick={startEdit}
+            onDoubleClick={() => {
+              setDraft(stage.name);
+              setEditing(true);
+              setTimeout(() => inputRef.current?.focus(), 0);
+            }}
             title="Double-click to rename"
           >
-            {column.name}
+            {stage.name}
           </span>
+          {stage.is_terminal && (
+            <Flag className="h-3 w-3 text-emerald-400 shrink-0" aria-label="Terminal stage" />
+          )}
           <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 shrink-0">
             {count}
           </Badge>
@@ -127,12 +249,11 @@ function ColumnHeader({
             size="sm"
             variant="ghost"
             className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground shrink-0"
-            onClick={onNewEntry}
-            title="Add card to this column"
+            onClick={onNewCard}
+            title="Add card to this stage"
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
-          {/* Kebab menu */}
           <div className="relative" ref={menuRef}>
             <Button
               size="sm"
@@ -145,22 +266,28 @@ function ColumnHeader({
             {menuOpen && (
               <div className="absolute right-0 top-full mt-1 z-50 min-w-44 rounded-md border border-border bg-popover shadow-lg py-1">
                 <button
-                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 flex items-center gap-2 transition-colors"
-                  onClick={startEdit}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 flex items-center gap-2"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setDraft(stage.name);
+                    setEditing(true);
+                    setTimeout(() => inputRef.current?.focus(), 0);
+                  }}
                 >
-                  <Pencil className="h-3 w-3" /> Rename column
+                  <Pencil className="h-3 w-3" /> Rename stage
                 </button>
                 <button
-                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 flex items-center gap-2 transition-colors"
-                  onClick={() => { setMenuOpen(false); setGradOpen(true); }}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 flex items-center gap-2"
+                  onClick={() => { setMenuOpen(false); onToggleTerminal(); }}
                 >
-                  <GraduationCap className="h-3 w-3" /> Graduation settings
+                  <Flag className="h-3 w-3" />
+                  {stage.is_terminal ? 'Unmark terminal' : 'Mark as terminal'}
                 </button>
                 <button
-                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 flex items-center gap-2 text-destructive hover:text-destructive transition-colors"
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 flex items-center gap-2 text-destructive"
                   onClick={() => { setMenuOpen(false); onDelete(); }}
                 >
-                  <Trash2 className="h-3 w-3" /> Delete column
+                  <Trash2 className="h-3 w-3" /> Delete stage
                 </button>
               </div>
             )}
@@ -168,148 +295,72 @@ function ColumnHeader({
         </>
       )}
     </div>
-
-    {/* Graduation settings panel */}
-    {gradOpen && (
-      <div className="px-3 py-2.5 border-b border-border bg-muted/30 space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
-            <GraduationCap className="h-3 w-3" /> Graduation
-          </span>
-          <button onClick={() => setGradOpen(false)} className="text-muted-foreground hover:text-foreground">
-            <X className="h-3 w-3" />
-          </button>
-        </div>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={column.auto_graduate}
-            onChange={(e) => onUpdateGraduation(e.target.checked, column.graduation_column_id)}
-            className="h-3 w-3"
-          />
-          <span className="text-xs">Auto-move card when gate passes</span>
-        </label>
-        {column.auto_graduate && (
-          <div className="space-y-1">
-            <p className="text-[10px] text-muted-foreground">Target column</p>
-            <select
-              className="w-full h-7 rounded border border-border bg-background text-xs px-2"
-              value={column.graduation_column_id ?? ''}
-              onChange={(e) =>
-                onUpdateGraduation(column.auto_graduate, e.target.value || null)
-              }
-            >
-              <option value="">Next column (by order)</option>
-              {otherCols.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-      </div>
-    )}
-    </>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Single kanban column
+// New Card inline creator
 // ---------------------------------------------------------------------------
-function KanbanColumnView({
-  column,
-  entries,
-  columns,
-  checkingIds,
-  onNewEntry,
-  onRunGateCheck,
-  onMoveCard,
-  onRename,
-  onDelete,
-  onUpdateGraduation,
-}: {
-  column: KanbanColumn;
-  entries: CronbanEntry[];
-  columns: KanbanColumn[];
-  checkingIds: Set<string>;
-  onNewEntry: (columnId: string) => void;
-  onRunGateCheck: (entryId: string) => void;
-  onMoveCard: (entryId: string, columnId: string) => void;
-  onRename: (columnId: string, newName: string) => void;
-  onDelete: (columnId: string) => void;
-  onUpdateGraduation: (columnId: string, auto_graduate: boolean, graduation_column_id: string | null) => void;
-}) {
-  return (
-    <div className="flex flex-col w-72 shrink-0 rounded-lg border border-border bg-muted/20 overflow-hidden">
-      <ColumnHeader
-        column={column}
-        count={entries.length}
-        columns={columns}
-        onNewEntry={() => onNewEntry(column.id)}
-        onRename={(name) => onRename(column.id, name)}
-        onDelete={() => onDelete(column.id)}
-        onUpdateGraduation={(ag, gcid) => onUpdateGraduation(column.id, ag, gcid)}
-      />
+function NewCardInput({ onCreate }: { onCreate: (title: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-24">
-        {entries.length === 0 ? (
-          <div className="border-2 border-dashed border-border rounded-md p-4 text-center text-muted-foreground text-xs">
-            No cards
-          </div>
-        ) : (
-          entries.map((entry) => (
-            <KanbanCard
-              key={entry.id}
-              entry={entry}
-              onRunGateCheck={onRunGateCheck}
-              isCheckingGate={checkingIds.has(entry.id)}
-              onMoveCard={onMoveCard}
-              columns={columns}
-            />
-          ))
-        )}
-      </div>
+  const handleCreate = () => {
+    const t = title.trim();
+    if (!t) return;
+    onCreate(t);
+    setTitle('');
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button
+        className="w-full text-left px-2 py-1.5 text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1.5 rounded hover:bg-muted/30 transition-colors"
+        onClick={() => { setOpen(true); setTimeout(() => inputRef.current?.focus(), 0); }}
+      >
+        <Plus className="h-3 w-3" /> Add card
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1 p-1">
+      <Input
+        ref={inputRef}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') handleCreate();
+          if (e.key === 'Escape') { setOpen(false); setTitle(''); }
+        }}
+        placeholder="Card title…"
+        className="h-7 text-xs flex-1"
+      />
+      <Button size="sm" className="h-7 px-2" onClick={handleCreate} disabled={!title.trim()}>
+        <Check className="h-3.5 w-3.5" />
+      </Button>
+      <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => { setOpen(false); setTitle(''); }}>
+        <X className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// "New Column" inline creator
+// New Stage inline creator (at end of board)
 // ---------------------------------------------------------------------------
-function NewColumnInput({
-  projectId,
-  onCreated,
-}: {
-  projectId?: string;
-  onCreated: (col: KanbanColumn) => void;
-}) {
+function NewStageInput({ onCreate }: { onCreate: (name: string) => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
-  const [saving, setSaving] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
 
-  const handleOpen = () => {
-    setOpen(true);
-    setTimeout(() => inputRef.current?.focus(), 0);
-  };
-
-  const handleCreate = async () => {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    setSaving(true);
-    try {
-      const col = await createColumn({
-        project_id: projectId ?? '',
-        name: trimmed,
-        col_order: 9999,
-        color: null,
-        is_terminal: false,
-      });
-      onCreated(col);
-      setName('');
-      setOpen(false);
-    } finally {
-      setSaving(false);
-    }
+  const handleCreate = () => {
+    const n = name.trim();
+    if (!n) return;
+    onCreate(n);
+    setName('');
+    setOpen(false);
   };
 
   if (!open) {
@@ -318,10 +369,9 @@ function NewColumnInput({
         variant="outline"
         size="sm"
         className="h-8 gap-1.5 shrink-0 text-xs border-dashed"
-        onClick={handleOpen}
+        onClick={() => setOpen(true)}
       >
-        <Plus className="h-3.5 w-3.5" />
-        New Column
+        <Plus className="h-3.5 w-3.5" /> New Stage
       </Button>
     );
   }
@@ -329,19 +379,18 @@ function NewColumnInput({
   return (
     <div className="flex items-center gap-1.5 shrink-0">
       <Input
-        ref={inputRef}
+        autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') handleCreate();
           if (e.key === 'Escape') { setOpen(false); setName(''); }
         }}
-        placeholder="Column name…"
-        className="h-8 text-xs w-40"
-        disabled={saving}
+        placeholder="Stage name…"
+        className="h-8 text-xs w-36"
       />
-      <Button size="sm" className="h-8 px-2" onClick={handleCreate} disabled={saving || !name.trim()}>
-        {saving ? '…' : <Check className="h-3.5 w-3.5" />}
+      <Button size="sm" className="h-8 px-2" onClick={handleCreate} disabled={!name.trim()}>
+        <Check className="h-3.5 w-3.5" />
       </Button>
       <Button size="sm" variant="ghost" className="h-8 px-2" onClick={() => { setOpen(false); setName(''); }}>
         <X className="h-3.5 w-3.5" />
@@ -351,247 +400,206 @@ function NewColumnInput({
 }
 
 // ---------------------------------------------------------------------------
-// Default columns seed
-// ---------------------------------------------------------------------------
-const DEFAULT_COLUMNS = [
-  { name: 'To Do', col_order: 0, color: 'blue', is_terminal: false },
-  { name: 'In Progress', col_order: 1, color: 'amber', is_terminal: false },
-  { name: 'In Review', col_order: 2, color: 'purple', is_terminal: false },
-  { name: 'Done', col_order: 3, color: 'emerald', is_terminal: true },
-] as const;
-
-// ---------------------------------------------------------------------------
-// Move confirmation toast/banner (simple inline approach)
-// ---------------------------------------------------------------------------
-interface MoveWarning {
-  entryId: string;
-  columnId: string;
-  message: string;
-}
-
-// ---------------------------------------------------------------------------
 // Main KanbanBoard
 // ---------------------------------------------------------------------------
 export function KanbanBoard({
   projectId,
-  onNewEntry,
   refreshKey = 0,
 }: {
   projectId?: string;
-  onNewEntry: (columnId: string) => void;
+  onNewEntry?: (columnId: string) => void; // kept for backwards compat, unused
   refreshKey?: number;
 }) {
-  const [columns, setColumns] = useState<KanbanColumn[]>([]);
-  const [entries, setEntries] = useState<CronbanEntry[]>([]);
+  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [selected, setSelected] = useState<Pipeline | null>(null);
+  const [cards, setCards] = useState<PipelineCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
-  const [moveWarning, setMoveWarning] = useState<MoveWarning | null>(null);
-  const hasSeededRef = useRef(false);
+  const [advancingIds, setAdvancingIds] = useState<Set<string>>(new Set());
+  const [showNewPipeline, setShowNewPipeline] = useState(false);
 
-  // ---------------------------------------------------------------------------
-  // Load data
-  // ---------------------------------------------------------------------------
-  const loadData = useCallback(async () => {
+  // ─── Load pipelines ────────────────────────────────────────────────────
+  const loadPipelines = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [cols, ents] = await Promise.all([
-        listColumns(projectId),
-        listEntries({ entry_type: 'gate', project_id: projectId }),
-      ]);
-      // Sort columns by col_order
-      setColumns(cols.slice().sort((a, b) => a.col_order - b.col_order));
-      setEntries(ents.slice().sort((a, b) => a.kanban_order - b.kanban_order));
+      const ps = await listPipelines(projectId);
+      setPipelines(ps);
+      if (ps.length > 0 && !selected) {
+        setSelected(ps[0]);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load board');
+      setError(e instanceof Error ? e.message : 'Failed to load pipelines');
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { loadData(); }, [loadData, refreshKey]);
+  useEffect(() => { loadPipelines(); }, [loadPipelines, refreshKey]);
 
-  // Auto-seed standard columns on first load if board is empty
-  const seedDefaultColumns = useCallback(async () => {
+  // ─── Load cards for selected pipeline ─────────────────────────────────
+  const loadCards = useCallback(async () => {
+    if (!selected) return;
     try {
-      const created = await Promise.all(
-        DEFAULT_COLUMNS.map((col) =>
-          createColumn({ project_id: projectId ?? '', ...col })
-        )
-      );
-      setColumns(created.sort((a, b) => a.col_order - b.col_order));
+      const cs = await listCards({ pipeline_id: selected.id });
+      setCards(cs);
     } catch (e) {
-      console.error('Failed to seed default columns:', e);
+      console.error('Failed to load cards:', e);
     }
+  }, [selected]);
+
+  useEffect(() => { loadCards(); }, [loadCards]);
+
+  // ─── Pipeline operations ───────────────────────────────────────────────
+  const handlePipelineCreated = useCallback(async (p: Pipeline) => {
+    const ps = await listPipelines(projectId);
+    setPipelines(ps);
+    setSelected(ps.find((x) => x.id === p.id) ?? p);
+    setShowNewPipeline(false);
   }, [projectId]);
 
-  useEffect(() => {
-    if (!loading && columns.length === 0 && !hasSeededRef.current) {
-      hasSeededRef.current = true;
-      seedDefaultColumns();
-    }
-  }, [loading, columns.length, seedDefaultColumns]);
-
-  // ---------------------------------------------------------------------------
-  // Gate check + auto-graduation
-  // ---------------------------------------------------------------------------
-  const handleRunGateCheck = useCallback(async (entryId: string) => {
-    setCheckingIds((prev) => new Set(prev).add(entryId));
+  const handleRenamePipeline = useCallback(async (name: string) => {
+    if (!selected) return;
     try {
-      const result = await runGateCheck(entryId);
-      // Update the entry's gate_last_result in local state
-      setEntries((prev) => {
-        const updated = prev.map((e) =>
-          e.id === entryId
-            ? {
-                ...e,
-                gate_last_result: { met: result.met ?? false, reasoning: result.reasoning },
-                gate_last_checked_at: new Date().toISOString(),
-                gate_consecutive_not_met: result.met ? 0 : e.gate_consecutive_not_met + 1,
-              }
-            : e,
-        );
-        return updated;
+      const updated = await updatePipeline(selected.id, { name });
+      setPipelines((prev) => prev.map((p) => p.id === selected.id ? { ...p, name } : p));
+      setSelected((prev) => prev ? { ...prev, name: updated.name } : prev);
+    } catch (e) {
+      console.error('Rename pipeline failed:', e);
+    }
+  }, [selected]);
+
+  const handleDeletePipeline = useCallback(async () => {
+    if (!selected) return;
+    if (!confirm(`Delete pipeline "${selected.name}" and all its cards?`)) return;
+    try {
+      await deletePipeline(selected.id);
+      const ps = await listPipelines(projectId);
+      setPipelines(ps);
+      setSelected(ps[0] ?? null);
+      setCards([]);
+    } catch (e) {
+      console.error('Delete pipeline failed:', e);
+    }
+  }, [selected, projectId]);
+
+  // ─── Stage operations ──────────────────────────────────────────────────
+  const stages = selected?.stages ?? [];
+  const sortedStages = [...stages].sort((a, b) => a.stage_order - b.stage_order);
+
+  const handleAddStage = useCallback(async (name: string) => {
+    if (!selected) return;
+    const maxOrder = Math.max(...sortedStages.map((s) => s.stage_order), -1);
+    try {
+      const stage = await addStage(selected.id, {
+        name,
+        stage_order: maxOrder + 1,
+        auto_advance: true,
+        is_terminal: false,
       });
-
-      // Auto-graduate: if gate passed, find the source column and move to graduation target
-      if (result.met) {
-        setEntries((prev) => {
-          const entry = prev.find((e) => e.id === entryId);
-          if (!entry) return prev;
-          setColumns((cols) => {
-            const srcCol = cols.find((c) => c.id === entry.kanban_column_id);
-            if (!srcCol || !srcCol.auto_graduate) return cols;
-            // Find target: explicit graduation_column_id or next by col_order
-            const sortedCols = cols.slice().sort((a, b) => a.col_order - b.col_order);
-            const targetId = srcCol.graduation_column_id
-              ?? sortedCols.find((c) => c.col_order > srcCol.col_order)?.id
-              ?? null;
-            if (targetId && targetId !== entry.kanban_column_id) {
-              // Fire-and-forget move
-              moveKanbanCard(entryId, targetId, true).then(() => {
-                setEntries((e) =>
-                  e.map((x) => x.id === entryId ? { ...x, kanban_column_id: targetId } : x)
-                );
-              }).catch((err) => console.error('Auto-graduate move failed:', err));
-            }
-            return cols;
-          });
-          return prev;
-        });
-      }
+      setSelected((prev) => prev ? { ...prev, stages: [...prev.stages, stage] } : prev);
     } catch (e) {
-      console.error('Gate check failed:', e);
+      console.error('Add stage failed:', e);
+    }
+  }, [selected, sortedStages]);
+
+  const handleRenameStage = useCallback(async (stageId: string, name: string) => {
+    try {
+      await updateStage(stageId, { name });
+      setSelected((prev) => prev ? {
+        ...prev,
+        stages: prev.stages.map((s) => s.id === stageId ? { ...s, name } : s),
+      } : prev);
+    } catch (e) {
+      console.error('Rename stage failed:', e);
+    }
+  }, []);
+
+  const handleDeleteStage = useCallback(async (stageId: string) => {
+    const hasCards = cards.some((c) => c.current_stage_id === stageId);
+    if (hasCards) {
+      alert('Cannot delete a stage that has cards. Move or delete the cards first.');
+      return;
+    }
+    try {
+      await deleteStage(stageId);
+      setSelected((prev) => prev ? {
+        ...prev,
+        stages: prev.stages.filter((s) => s.id !== stageId),
+      } : prev);
+    } catch (e) {
+      console.error('Delete stage failed:', e);
+    }
+  }, [cards]);
+
+  const handleToggleTerminal = useCallback(async (stageId: string, isTerminal: boolean) => {
+    try {
+      await updateStage(stageId, { is_terminal: !isTerminal });
+      setSelected((prev) => prev ? {
+        ...prev,
+        stages: prev.stages.map((s) => s.id === stageId ? { ...s, is_terminal: !isTerminal } : s),
+      } : prev);
+    } catch (e) {
+      console.error('Toggle terminal failed:', e);
+    }
+  }, []);
+
+  // ─── Card operations ───────────────────────────────────────────────────
+  const handleNewCard = useCallback(async (stageId: string, title: string) => {
+    if (!selected) return;
+    try {
+      const card = await createCard({
+        pipeline_id: selected.id,
+        project_id: projectId,
+        title,
+        stage_id: stageId,
+      });
+      setCards((prev) => [...prev, card]);
+    } catch (e) {
+      console.error('Create card failed:', e);
+    }
+  }, [selected, projectId]);
+
+  const handleAdvanceCard = useCallback(async (cardId: string, stageId?: string) => {
+    setAdvancingIds((prev) => new Set(prev).add(cardId));
+    try {
+      const updated = await advanceCard(cardId, stageId);
+      setCards((prev) => prev.map((c) => c.id === cardId ? updated : c));
+    } catch (e) {
+      console.error('Advance card failed:', e);
     } finally {
-      setCheckingIds((prev) => {
+      setAdvancingIds((prev) => {
         const next = new Set(prev);
-        next.delete(entryId);
+        next.delete(cardId);
         return next;
       });
     }
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // Move card
-  // ---------------------------------------------------------------------------
-  const handleMoveCard = useCallback(async (entryId: string, columnId: string, force = false) => {
+  const handleDeleteCard = useCallback(async (cardId: string) => {
     try {
-      const res = await moveKanbanCard(entryId, columnId, force);
-      if (res.requires_gate_check && !force) {
-        setMoveWarning({
-          entryId,
-          columnId,
-          message: res.message ?? 'This column requires a passing gate check before moving.',
-        });
-        return;
-      }
-      if (res.moved) {
-        setEntries((prev) =>
-          prev.map((e) => (e.id === entryId ? { ...e, kanban_column_id: columnId } : e)),
-        );
-      }
+      await deleteCard(cardId);
+      setCards((prev) => prev.filter((c) => c.id !== cardId));
     } catch (e) {
-      console.error('Move card failed:', e);
+      console.error('Delete card failed:', e);
     }
   }, []);
 
-  const handleForceMove = useCallback(() => {
-    if (!moveWarning) return;
-    handleMoveCard(moveWarning.entryId, moveWarning.columnId, true);
-    setMoveWarning(null);
-  }, [moveWarning, handleMoveCard]);
+  // ─── Pipeline rename inline ────────────────────────────────────────────
+  const [renamingPipeline, setRenamingPipeline] = useState(false);
+  const [pipelineDraft, setPipelineDraft] = useState('');
 
-  // ---------------------------------------------------------------------------
-  // Column management
-  // ---------------------------------------------------------------------------
-  const handleColumnCreated = useCallback((col: KanbanColumn) => {
-    setColumns((prev) => [...prev, col].sort((a, b) => a.col_order - b.col_order));
-  }, []);
+  const commitPipelineRename = async () => {
+    const n = pipelineDraft.trim();
+    if (n && n !== selected?.name) await handleRenamePipeline(n);
+    setRenamingPipeline(false);
+  };
 
-  const handleRenameColumn = useCallback(async (columnId: string, newName: string) => {
-    try {
-      const updated = await updateColumn(columnId, { name: newName });
-      setColumns((prev) => prev.map((c) => (c.id === columnId ? updated : c)));
-    } catch (e) {
-      console.error('Rename column failed:', e);
-    }
-  }, []);
-
-  const handleDeleteColumn = useCallback(async (columnId: string) => {
-    // Move entries to first other column if any exist
-    const hasCards = entries.some((e) => e.kanban_column_id === columnId);
-    const otherCol = columns.find((c) => c.id !== columnId);
-    if (hasCards && !otherCol) {
-      alert('Cannot delete the only column that has cards.');
-      return;
-    }
-    try {
-      await deleteColumn(columnId, hasCards && otherCol ? otherCol.id : undefined);
-      setColumns((prev) => prev.filter((c) => c.id !== columnId));
-      if (hasCards && otherCol) {
-        setEntries((prev) =>
-          prev.map((e) =>
-            e.kanban_column_id === columnId ? { ...e, kanban_column_id: otherCol.id } : e,
-          ),
-        );
-      }
-    } catch (e) {
-      console.error('Delete column failed:', e);
-    }
-  }, [columns, entries]);
-
-  // ---------------------------------------------------------------------------
-  // Graduation settings
-  // ---------------------------------------------------------------------------
-  const handleUpdateGraduation = useCallback(async (
-    columnId: string,
-    auto_graduate: boolean,
-    graduation_column_id: string | null,
-  ) => {
-    try {
-      const updated = await updateColumn(columnId, { auto_graduate, graduation_column_id });
-      setColumns((prev) => prev.map((c) => (c.id === columnId ? updated : c)));
-    } catch (e) {
-      console.error('Update graduation settings failed:', e);
-    }
-  }, []);
-
-  // ---------------------------------------------------------------------------
-  // Group entries by column
-  // ---------------------------------------------------------------------------
-  const entriesByColumn = useCallback(
-    (columnId: string) => entries.filter((e) => e.kanban_column_id === columnId),
-    [entries],
-  );
-
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
+  // ─── Render ────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-        Loading board…
+        Loading…
       </div>
     );
   }
@@ -601,72 +609,128 @@ export function KanbanBoard({
       <div className="h-full flex items-center justify-center">
         <div className="text-center space-y-2">
           <p className="text-sm text-destructive">{error}</p>
-          <Button size="sm" variant="outline" onClick={loadData}>
-            Retry
-          </Button>
+          <Button size="sm" variant="outline" onClick={loadPipelines}>Retry</Button>
         </div>
       </div>
     );
   }
 
+  if (pipelines.length === 0 || showNewPipeline) {
+    return (
+      <NewPipelinePrompt
+        projectId={projectId}
+        onCreated={handlePipelineCreated}
+      />
+    );
+  }
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Move warning banner */}
-      {moveWarning && (
-        <div className="shrink-0 mx-4 mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 flex items-center gap-3 text-sm">
-          <span className="flex-1 text-amber-300/90 text-xs">{moveWarning.message}</span>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs border-amber-500/40 hover:bg-amber-500/20"
-            onClick={handleForceMove}
-          >
-            Move anyway
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-xs"
-            onClick={() => setMoveWarning(null)}
-          >
-            Cancel
-          </Button>
-        </div>
-      )}
+      {/* Toolbar */}
+      <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border">
+        <PipelineSelector
+          pipelines={pipelines}
+          selected={selected}
+          onSelect={setSelected}
+          onNewPipeline={() => setShowNewPipeline(true)}
+        />
 
-      {/* Board scroll area */}
+        {selected && (
+          <>
+            {renamingPipeline ? (
+              <div className="flex items-center gap-1">
+                <Input
+                  autoFocus
+                  value={pipelineDraft}
+                  onChange={(e) => setPipelineDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitPipelineRename();
+                    if (e.key === 'Escape') setRenamingPipeline(false);
+                  }}
+                  className="h-7 text-xs w-40"
+                />
+                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={commitPipelineRename}>
+                  <Check className="h-3 w-3" />
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setRenamingPipeline(false)}>
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                  onClick={() => { setPipelineDraft(selected.name); setRenamingPipeline(true); }}
+                  title="Rename pipeline"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                  onClick={handleDeletePipeline}
+                  title="Delete pipeline"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Board */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden p-4">
         <div className="flex gap-3 h-full items-start">
-          {columns.length === 0 ? (
-            <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">
-              <div className="text-center space-y-3">
-                <p>No columns yet. Create one to get started.</p>
-                <NewColumnInput projectId={projectId} onCreated={handleColumnCreated} />
-              </div>
-            </div>
-          ) : (
-            <>
-              {columns.map((col) => (
-                <KanbanColumnView
-                  key={col.id}
-                  column={col}
-                  entries={entriesByColumn(col.id)}
-                  columns={columns}
-                  checkingIds={checkingIds}
-                  onNewEntry={onNewEntry}
-                  onRunGateCheck={handleRunGateCheck}
-                  onMoveCard={handleMoveCard}
-                  onRename={handleRenameColumn}
-                  onDelete={handleDeleteColumn}
-                  onUpdateGraduation={handleUpdateGraduation}
+          {sortedStages.map((stage) => {
+            const stageCards = cards.filter((c) => c.current_stage_id === stage.id);
+            return (
+              <div
+                key={stage.id}
+                className={cn(
+                  'flex flex-col w-72 shrink-0 rounded-lg border border-border overflow-hidden',
+                  stage.is_terminal ? 'bg-emerald-500/5' : 'bg-muted/20',
+                )}
+              >
+                <StageHeader
+                  stage={stage}
+                  count={stageCards.length}
+                  onNewCard={() => undefined}
+                  onRename={(name) => handleRenameStage(stage.id, name)}
+                  onDelete={() => handleDeleteStage(stage.id)}
+                  onToggleTerminal={() => handleToggleTerminal(stage.id, stage.is_terminal)}
                 />
-              ))}
-              {/* New column creator */}
-              <div className="shrink-0 flex items-start pt-1">
-                <NewColumnInput projectId={projectId} onCreated={handleColumnCreated} />
+                <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-24">
+                  {stageCards.length === 0 && (
+                    <div className="border-2 border-dashed border-border rounded-md p-3 text-center text-muted-foreground text-xs">
+                      No cards
+                    </div>
+                  )}
+                  {stageCards.map((card) => (
+                    <KanbanCard
+                      key={card.id}
+                      card={card}
+                      stages={sortedStages}
+                      isAdvancing={advancingIds.has(card.id)}
+                      onAdvance={handleAdvanceCard}
+                      onDelete={handleDeleteCard}
+                    />
+                  ))}
+                  {!stage.is_terminal && (
+                    <NewCardInput onCreate={(title) => handleNewCard(stage.id, title)} />
+                  )}
+                </div>
               </div>
-            </>
-          )}
+            );
+          })}
+
+          {/* New stage button */}
+          <div className="shrink-0 flex items-start pt-1">
+            <NewStageInput onCreate={handleAddStage} />
+          </div>
         </div>
       </div>
     </div>

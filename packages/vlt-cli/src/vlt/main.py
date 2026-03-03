@@ -8,6 +8,8 @@ from rich.panel import Panel
 from rich.console import Console
 from rich.prompt import Prompt, Confirm
 import json
+
+console = Console()
 import os
 import sys
 import time
@@ -81,11 +83,30 @@ config_app = typer.Typer(name="config", help="Manage configuration and keys.")
 sync_app = typer.Typer(name="sync", help="Sync commands for remote backend.")
 daemon_app = typer.Typer(name="daemon", help="Background sync daemon management.")
 profile_app = typer.Typer(name="profile", help="Manage named profiles for isolated storage.")
+CRON_HELP = """
+Schedule recurring prompts into Claude sessions.
+
+Workflow:
+  1. vlt cron sessions          — list live sessions; note the ID of your target
+  2. vlt cron add <title> <expr> <prompt> --session <id>   — create the schedule
+  3. vlt cron list              — confirm it's active and see next fire time
+  4. vlt cron pause/resume/delete <id>  — manage it later
+
+Cron expressions (5-field):
+  "0 9 * * 1-5"   every weekday at 09:00 UTC
+  "*/30 * * * *"  every 30 minutes
+  "0 0 * * *"     daily at midnight
+
+If no --session is given you must supply --cwd (working directory) and
+optionally --new-session to spawn a fresh Claude session on each fire.
+"""
+cron_app = typer.Typer(name="cron", help=CRON_HELP, no_args_is_help=True)
 app.add_typer(thread_app, name="thread")
 app.add_typer(config_app, name="config")
 app.add_typer(sync_app, name="sync")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(profile_app, name="profile")
+app.add_typer(cron_app, name="cron")
 
 service = SqliteVaultService()
 
@@ -4668,6 +4689,297 @@ def bt_breakpoint(
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# vlt cron — schedule recurring prompts into Claude sessions
+# ---------------------------------------------------------------------------
+
+def _cron_daemon_url() -> str:
+    from vlt.config import get_settings
+    return get_settings().daemon_url
+
+
+def _cron_last_output(daemon_url: str, session_id: str, chars: int = 200) -> Optional[str]:
+    """Fetch last assistant message snippet from a session transcript."""
+    try:
+        import httpx
+        r = httpx.get(
+            f"{daemon_url}/api/sessions/{session_id}/transcript",
+            params={"types": "assistant"},
+            timeout=3.0,
+        )
+        if r.status_code != 200:
+            return None
+        entries = r.json().get("entries", [])
+        if not entries:
+            return None
+        msg = entries[-1].get("message", {})
+        content = msg.get("content", [])
+        text = ""
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text += block.get("text", "")
+        elif isinstance(content, str):
+            text = content
+        text = text.strip()
+        return text[:chars] if text else None
+    except Exception:
+        return None
+
+
+@cron_app.command("sessions")
+def cron_sessions(
+    project_id: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project slug"),
+    all: bool = typer.Option(False, "--all", "-a", help="Include dead sessions"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """List live Claude sessions with last model output (for choosing a cron target)."""
+    import httpx
+    daemon_url = _cron_daemon_url()
+
+    params: dict = {}
+    if all:
+        params["include_all"] = "true"
+    if project_id:
+        params["project_id"] = project_id
+
+    try:
+        r = httpx.get(f"{daemon_url}/api/sessions", params=params, timeout=5.0)
+        r.raise_for_status()
+        sessions = r.json()
+    except Exception as e:
+        console.print(f"[red]Error reaching daemon:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        out = []
+        for s in sessions:
+            snippet = _cron_last_output(daemon_url, s["id"])
+            out.append({**s, "last_output": snippet})
+        import json as _json
+        print(_json.dumps(out, indent=2))
+        return
+
+    if not sessions:
+        console.print("[dim]No live sessions found.[/dim]")
+        return
+
+    console.print(f"\n[bold]Live Sessions[/bold]  ([dim]use session ID as --session when scheduling[/dim])\n")
+    for s in sessions:
+        sid = s["id"]
+        name = s.get("name") or "[dim]unnamed[/dim]"
+        cwd = s.get("cwd", "")
+        status = s.get("status", "?")
+        color = {"idle": "green", "thinking": "yellow", "executing": "blue"}.get(status, "dim")
+        snippet = _cron_last_output(daemon_url, sid)
+
+        console.print(f"  [{color}]●[/{color}] [bold]{sid[:12]}…[/bold]  {name}  [{color}]{status}[/{color}]")
+        console.print(f"       [dim]{cwd}[/dim]")
+        if snippet:
+            # Indent + wrap snippet
+            lines = snippet.replace("\n", " ").strip()
+            console.print(f"       [italic dim]\"{lines}\"[/italic dim]")
+        console.print()
+
+
+@cron_app.command("list")
+def cron_list(
+    project_id: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project slug"),
+    status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter: active or paused"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """List all CronTriggers."""
+    import httpx
+    daemon_url = _cron_daemon_url()
+
+    params: dict = {}
+    if project_id:
+        params["project_id"] = project_id
+
+    try:
+        r = httpx.get(f"{daemon_url}/api/cronban/crons", params=params, timeout=5.0)
+        r.raise_for_status()
+        triggers = r.json()
+    except Exception as e:
+        console.print(f"[red]Error reaching daemon:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    if status:
+        triggers = [t for t in triggers if t.get("status") == status]
+
+    if json_output:
+        import json as _json
+        print(_json.dumps(triggers, indent=2))
+        return
+
+    if not triggers:
+        console.print("[dim]No cron triggers found.[/dim]")
+        return
+
+    console.print(f"\n[bold]Cron Triggers[/bold] ({len(triggers)} total)\n")
+    for t in triggers:
+        s = t.get("status", "?")
+        color = "green" if s == "active" else "yellow"
+        console.print(f"  [{color}]●[/{color}] [bold]{t['title']}[/bold]  [{color}]{s}[/{color}]")
+        console.print(f"       id: [dim]{t['id']}[/dim]")
+        console.print(f"       expr: [cyan]{t.get('cron_expression') or t.get('rrule_str', '?')}[/cyan]  tz: {t.get('timezone', 'UTC')}")
+        if t.get("next_fire_at"):
+            console.print(f"       next: [dim]{t['next_fire_at']}[/dim]")
+        if t.get("last_fired_at"):
+            console.print(f"       last: [dim]{t['last_fired_at']}[/dim]  (fired {t.get('fire_count', 0)}×)")
+        target = t.get("target_session_id")
+        if target:
+            console.print(f"       target: session [dim]{target[:12]}…[/dim]")
+        elif t.get("target_cwd"):
+            console.print(f"       target: cwd [dim]{t['target_cwd']}[/dim]")
+        console.print()
+
+
+@cron_app.command("add")
+def cron_add(
+    title: str = typer.Argument(..., help="Human-readable label for this schedule"),
+    expression: str = typer.Argument("", help='Cron expression (e.g. "0 9 * * 1-5"). Leave empty for one-off jobs (use --in or --at).'),
+    prompt: str = typer.Argument(..., help="Prompt text to inject when the trigger fires"),
+    session: Optional[str] = typer.Option(None, "--session", help="Target session ID (use 'vlt cron sessions' to find)"),
+    cwd: Optional[str] = typer.Option(None, "--cwd", help="Working directory (spawn new session here)"),
+    new_session: bool = typer.Option(False, "--new-session", help="Spawn a fresh session on each fire"),
+    fire_in: Optional[str] = typer.Option(None, "--in", help="One-off: fire in hh:mm or hh:mm:ss from now (e.g. 1:30)"),
+    fire_at: Optional[str] = typer.Option(None, "--at", help='One-off: fire at a specific time (e.g. "2026-03-10 14:30")'),
+    skill: Optional[str] = typer.Option(None, "--skill", help="Skill ID to use instead of inline prompt"),
+    project_id: Optional[str] = typer.Option(None, "--project", "-p", help="Associate with project slug"),
+    timezone: str = typer.Option("UTC", "--tz", help="IANA timezone, e.g. America/New_York"),
+):
+    """Create a new CronTrigger.
+
+    Examples:\n
+      # Every weekday at 9am, inject into a specific session:\n
+      vlt cron add "Daily standup" "0 9 * * 1-5" "Run the standup script" --session <id>\n\n
+      # One-off: fire in 90 minutes:\n
+      vlt cron add "Deploy check" "" "Verify the deployment is healthy" --in 1:30 --session <id>\n\n
+      # One-off: fire at a specific date and time:\n
+      vlt cron add "Release prep" "" "Prepare the release notes" --at "2026-03-10 14:30" --session <id>
+    """
+    import httpx
+    daemon_url = _cron_daemon_url()
+
+    payload: dict = {
+        "title": title,
+        "prompt_text": prompt,
+        "timezone": timezone,
+        "status": "active",
+        "create_new_session": new_session,
+    }
+    if fire_in:
+        payload["fire_in"] = fire_in
+    elif fire_at:
+        from datetime import datetime as _dt
+        from dateutil import parser as dtparser
+        dt = dtparser.parse(fire_at)
+        if dt.tzinfo is None:
+            from datetime import timezone as _tz
+            dt = dt.replace(tzinfo=_tz.utc)
+        payload["fire_at"] = dt.isoformat()
+    elif expression:
+        payload["cron_expression"] = expression
+
+    if session:
+        payload["target_session_id"] = session
+    if cwd:
+        payload["target_cwd"] = cwd
+    if skill:
+        payload["skill_id"] = skill
+    if project_id:
+        payload["project_id"] = project_id
+
+    try:
+        r = httpx.post(f"{daemon_url}/api/cronban/crons", json=payload, timeout=5.0)
+        r.raise_for_status()
+        t = r.json()
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    console.print(f"\n[green]✓ Created:[/green] [bold]{t['title']}[/bold]")
+    console.print(f"  id:   [dim]{t['id']}[/dim]")
+    console.print(f"  expr: [cyan]{t.get('cron_expression')}[/cyan]  tz: {t.get('timezone', 'UTC')}")
+    if t.get("next_fire_at"):
+        console.print(f"  next: {t['next_fire_at']}")
+
+
+@cron_app.command("fire")
+def cron_fire(
+    trigger_id: str = typer.Argument(..., help="CronTrigger ID to fire now"),
+):
+    """Fire a CronTrigger immediately (outside its schedule)."""
+    import httpx
+    daemon_url = _cron_daemon_url()
+
+    try:
+        r = httpx.post(f"{daemon_url}/api/cronban/crons/{trigger_id}/fire", timeout=10.0)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]✓ Fired.[/green]  session: [dim]{data.get('session_id', '?')}[/dim]")
+
+
+@cron_app.command("pause")
+def cron_pause(
+    trigger_id: str = typer.Argument(..., help="CronTrigger ID to pause"),
+):
+    """Pause an active CronTrigger (no more fires until resumed)."""
+    import httpx
+    daemon_url = _cron_daemon_url()
+
+    try:
+        r = httpx.patch(f"{daemon_url}/api/cronban/crons/{trigger_id}", json={"status": "paused"}, timeout=5.0)
+        r.raise_for_status()
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[yellow]⏸ Paused.[/yellow]  id: [dim]{trigger_id}[/dim]")
+
+
+@cron_app.command("resume")
+def cron_resume(
+    trigger_id: str = typer.Argument(..., help="CronTrigger ID to resume"),
+):
+    """Resume a paused CronTrigger."""
+    import httpx
+    daemon_url = _cron_daemon_url()
+
+    try:
+        r = httpx.patch(f"{daemon_url}/api/cronban/crons/{trigger_id}", json={"status": "active"}, timeout=5.0)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]▶ Resumed.[/green]  next: {data.get('next_fire_at', '?')}")
+
+
+@cron_app.command("delete")
+def cron_delete(
+    trigger_id: str = typer.Argument(..., help="CronTrigger ID to delete"),
+):
+    """Permanently delete a CronTrigger."""
+    import httpx
+    daemon_url = _cron_daemon_url()
+
+    try:
+        r = httpx.delete(f"{daemon_url}/api/cronban/crons/{trigger_id}", timeout=5.0)
+        r.raise_for_status()
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[red]✗ Deleted.[/red]  id: [dim]{trigger_id}[/dim]")
 
 
 @app.command("session-relay", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
