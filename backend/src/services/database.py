@@ -646,4 +646,9 @@ def init_database(db_path: str | Path | None = None) -> Path:
     return DatabaseService(db_path).initialize()
 
 
-__all__ = ["DatabaseService", "init_database", "DEFAULT_DB_PATH", "run_multi_project_migration"]
+def get_db_service() -> "DatabaseService":
+    """FastAPI dependency that returns a DatabaseService instance."""
+    return DatabaseService()
+
+
+__all__ = ["DatabaseService", "init_database", "DEFAULT_DB_PATH", "run_multi_project_migration", "get_db_service"]
