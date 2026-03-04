@@ -31,8 +31,5 @@ def get_registry() -> ConnectorRegistry:
 
 
 def _load_builtin_connectors(registry: ConnectorRegistry) -> None:
-    try:
-        from .mailgun import MailgunConnector
-        registry.register(MailgunConnector)
-    except ImportError:
-        pass
+    from .mailgun import MailgunConnector
+    registry.register(MailgunConnector)
