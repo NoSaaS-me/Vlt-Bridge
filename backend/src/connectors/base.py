@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from backend.src.models.connectors import ConnectorAction, CredentialField
+from ..models.connectors import ConnectorAction, CredentialField
 
 
 class BaseConnector(ABC):
