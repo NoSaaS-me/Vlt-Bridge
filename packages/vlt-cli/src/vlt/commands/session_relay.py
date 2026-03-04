@@ -150,8 +150,15 @@ def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
     env["VLT_SESSION_ID"] = session_id
     env["TERM"] = os.environ.get("TERM", "xterm-256color")
 
+    # Inject --session-id so Claude's hook session ID matches our relay registration UUID.
+    # Without this, the relay registers with UUID-X but Claude fires hooks with UUID-Y,
+    # so the inject queue never connects to the right session.
+    relay_args = args[:]
+    if "--session-id" not in relay_args and "--resume" not in relay_args:
+        relay_args = ["--session-id", session_id] + relay_args
+
     proc = subprocess.Popen(
-        [claude_bin] + args,
+        [claude_bin] + relay_args,
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
@@ -356,7 +363,10 @@ def _relay_windows(claude_bin: str, args: list[str], session_id: str) -> int:
     import msvcrt
 
     cols, rows = os.get_terminal_size()
-    proc = PtyProcess.spawn([claude_bin] + args, dimensions=(rows, cols))
+    relay_args = args[:]
+    if "--session-id" not in relay_args and "--resume" not in relay_args:
+        relay_args = ["--session-id", session_id] + relay_args
+    proc = PtyProcess.spawn([claude_bin] + relay_args, dimensions=(rows, cols))
 
     register_session(session_id, os.getcwd(), os.getpid(), args)
 
@@ -396,7 +406,13 @@ def run_relay(args: list[str]) -> int:
     Main entry point. Called from the CLI command.
     Detects platform and runs the appropriate relay.
     """
-    session_id = str(uuid.uuid4())
+    # Reuse the --resume session ID so the relay inject queue matches the
+    # hook-reported session ID, enabling webchat ↔ CLI bidirectional messaging.
+    _resume_idx = next((i for i, a in enumerate(args) if a == "--resume"), None)
+    if _resume_idx is not None and _resume_idx + 1 < len(args):
+        session_id = args[_resume_idx + 1]
+    else:
+        session_id = str(uuid.uuid4())
 
     try:
         claude_bin = find_real_claude()

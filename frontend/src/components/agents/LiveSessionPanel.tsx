@@ -15,7 +15,22 @@ import {
   X,
   ChevronDown,
   ChevronRight,
+  History,
 } from 'lucide-react';
+
+const SHOW_HISTORY_KEY = 'vlt:livechat:showHistory';
+function useShowHistory() {
+  const [show, setShow] = useState(() => {
+    try { return localStorage.getItem(SHOW_HISTORY_KEY) === 'true'; } catch { return false; }
+  });
+  const toggle = useCallback(() => {
+    setShow((prev) => {
+      try { localStorage.setItem(SHOW_HISTORY_KEY, String(!prev)); } catch {}
+      return !prev;
+    });
+  }, []);
+  return [show, toggle] as const;
+}
 import { cn } from '@/lib/utils';
 import { type AgentSession, getLiveSessionWsUrl } from '@/services/daemon-api';
 import { Button } from '@/components/ui/button';
@@ -33,6 +48,7 @@ interface ParsedMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: ContentPart[];
   timestamp?: string;
+  historical?: boolean;
 }
 
 interface ContentPart {
@@ -279,6 +295,7 @@ export function LiveSessionPanel({
   const [waitingForResponse, setWaitingForResponse] = useState(false);
   // Live ctx_pct from WS (overrides session prop when available)
   const [liveCtxPct, setLiveCtxPct] = useState<number | null>(session.ctx_pct);
+  const [showHistory, toggleShowHistory] = useShowHistory();
 
   const wsRef = useRef<WebSocket | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -314,10 +331,11 @@ export function LiveSessionPanel({
         const msg = JSON.parse(event.data);
 
         if (msg.type === 'initial') {
-          // Parse all existing entries
+          // Parse all existing entries, mark as historical
           const parsed = (msg.entries || [])
             .map(parseEntry)
-            .filter(Boolean) as ParsedMessage[];
+            .filter(Boolean)
+            .map((m: ParsedMessage) => ({ ...m, historical: true })) as ParsedMessage[];
           setMessages(parsed);
           if (msg.session?.status) setStatus(msg.session.status);
         } else if (msg.type === 'entry') {
@@ -417,8 +435,17 @@ export function LiveSessionPanel({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-muted-foreground">
-            {messages.length} messages
+            {messages.filter((m) => !m.historical).length} messages
           </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn('h-6 w-6 p-0', showHistory && 'text-amber-400')}
+            title={showHistory ? 'Hide history' : 'Show history'}
+            onClick={toggleShowHistory}
+          >
+            <History className="h-3.5 w-3.5" />
+          </Button>
           <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>
             <X className="h-3.5 w-3.5" />
           </Button>
@@ -432,15 +459,36 @@ export function LiveSessionPanel({
         onScroll={handleScroll}
       >
         <div className="max-w-3xl mx-auto p-4 space-y-3">
-          {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-              <Loader2 className="h-8 w-8 text-muted-foreground/30 animate-spin mb-3" />
-              <p className="text-sm text-muted-foreground">Waiting for conversation data...</p>
-            </div>
-          )}
-          {messages.map((msg) => (
-            <MessageBubble key={msg.id} msg={msg} />
-          ))}
+          {(() => {
+            const visible = showHistory ? messages : messages.filter((m) => !m.historical);
+            const liveStart = messages.findIndex((m) => !m.historical);
+            if (visible.length === 0) return (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <Loader2 className="h-8 w-8 text-muted-foreground/30 animate-spin mb-3" />
+                <p className="text-sm text-muted-foreground">Waiting for new messages…</p>
+                {messages.some((m) => m.historical) && (
+                  <button
+                    className="mt-3 text-xs text-muted-foreground underline"
+                    onClick={toggleShowHistory}
+                  >
+                    Show session history
+                  </button>
+                )}
+              </div>
+            );
+            return visible.map((msg, i) => (
+              <>
+                {showHistory && liveStart > 0 && i === liveStart && (
+                  <div key="divider" className="flex items-center gap-2 py-1">
+                    <div className="flex-1 h-px bg-border/60" />
+                    <span className="text-[10px] text-muted-foreground/60 shrink-0">live session start</span>
+                    <div className="flex-1 h-px bg-border/60" />
+                  </div>
+                )}
+                <MessageBubble key={msg.id} msg={msg} />
+              </>
+            ));
+          })()}
           {(status === 'thinking' || status === 'executing' || waitingForResponse) && (
             <ThinkingIndicator status={status === 'executing' ? 'executing' : 'thinking'} />
           )}

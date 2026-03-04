@@ -254,7 +254,8 @@ async def _dispatch_to_session(
                 return target_session_id
 
             # 2. Session not running — look up DB and spawn with --resume (persistent)
-            with Session(engine) as db:
+            from vlt.db import engine as _engine  # lazy: avoids stale module-cache issues
+            with Session(_engine) as db:
                 sess = db.get(AgentSession, target_session_id)
 
             if sess and sess.cwd:

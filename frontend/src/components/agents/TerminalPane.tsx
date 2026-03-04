@@ -92,8 +92,8 @@ export function TerminalPane({
         </div>
       </div>
 
-      {/* Terminal */}
-      <div className="flex-1 relative overflow-hidden bg-[#0a0f1a]">
+      {/* Terminal — overflow-x:auto so wide content scrolls rather than wraps */}
+      <div className="flex-1 relative overflow-x-auto overflow-y-hidden bg-[#0a0f1a]">
         <div ref={containerRef} className="absolute inset-0 p-1" />
       </div>
 

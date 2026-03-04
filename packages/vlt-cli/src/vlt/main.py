@@ -850,6 +850,25 @@ claude() { vlt session-relay "$@"; }
         console.print(f"[yellow]![/yellow] Unknown shell '{detected_shell}'. Skipping shell function install.")
         console.print("[dim]Supported: fish, bash, zsh. You can manually add: claude() { vlt session-relay \"$@\"; }[/dim]")
 
+    # ── vlt-claude binary symlink (shell-agnostic, survives claude self-update) ──
+    import shutil as _shutil
+    vlt_claude_bin = _shutil.which("vlt-claude")
+    if vlt_claude_bin:
+        safe_dir = Path.home() / ".local" / "share" / "vlt" / "bin"
+        safe_dir.mkdir(parents=True, exist_ok=True)
+        link = safe_dir / "claude"
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(vlt_claude_bin)
+        console.print(f"[green]✓[/green] Binary wrapper: {link} → {vlt_claude_bin}")
+        console.print(f"[dim]  Prepend to PATH so it takes precedence over ~/.local/bin/claude:[/dim]")
+        if detected_shell == "fish":
+            console.print(f"[dim]  fish_add_path {safe_dir}[/dim]")
+        else:
+            console.print(f'[dim]  export PATH="{safe_dir}:$PATH"[/dim]')
+    else:
+        console.print("[yellow]![/yellow] vlt-claude not found — run 'uv pip install -e packages/vlt-cli' first")
+
     # ── Claude Code hooks ─────────────────────────────────────────────────
     claude_settings_path = Path.home() / ".claude" / "settings.json"
     claude_settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4987,6 +5006,213 @@ def session_relay_cmd(ctx: typer.Context):
     """Transparently wrap claude with vlt daemon session relay (PTY recording + web access)."""
     from vlt.commands.session_relay import run_relay
     sys.exit(run_relay(ctx.args))
+
+
+@app.command("setup")
+def setup_wizard(
+    cwd: Optional[str] = typer.Argument(None, help="Project directory (default: current dir)"),
+    fix: bool = typer.Option(True, "--fix/--check-only", help="Auto-fix issues found (default: fix)"),
+):
+    """
+    Interactive setup wizard — checks and configures vlt for a project.
+
+    Verifies: daemon health, hooks, vlt-claude wrapper in PATH, project vlt.toml.
+    Fixes each issue in place, printing the exact commands it runs.
+    """
+    import shutil as _shutil
+    import subprocess as _sub
+    import httpx as _httpx
+    from rich.rule import Rule
+
+    wiz = Console()
+    project_dir = Path(cwd or os.getcwd()).resolve()
+    detected_shell = Path(os.environ.get("SHELL", "bash")).name or "bash"
+    failures: list[str] = []
+    warnings: list[str] = []
+
+    def step(label: str) -> None:
+        wiz.print(f"\n[bold]{label}[/bold]")
+
+    def good(msg: str) -> None:
+        wiz.print(f"  [green]✓[/green] {msg}")
+
+    def warn(msg: str) -> None:
+        warnings.append(msg)
+        wiz.print(f"  [yellow]![/yellow] {msg}")
+
+    def bad(msg: str) -> None:
+        failures.append(msg)
+        wiz.print(f"  [red]✗[/red] {msg}")
+
+    def cmd(msg: str) -> None:
+        wiz.print(f"  [dim]→ {msg}[/dim]")
+
+    wiz.print(Rule("[bold blue]vlt setup wizard[/bold blue]"))
+    wiz.print(f"[dim]Project: {project_dir}  |  Shell: {detected_shell}[/dim]")
+
+    # ── 1. Daemon running ──────────────────────────────────────────────────
+    step("1 / 4  Daemon health")
+    daemon_url = "http://localhost:8765"
+    try:
+        r = _httpx.get(f"{daemon_url}/health", timeout=2.0)
+        if r.status_code == 200:
+            good("Daemon is running at localhost:8765")
+        else:
+            raise ValueError(f"status {r.status_code}")
+    except Exception:
+        warn("Daemon not responding")
+        if fix:
+            cmd("vlt daemon start")
+            _sub.Popen(
+                [sys.executable, "-m", "vlt.daemon.server"],
+                start_new_session=True,
+                stdout=_sub.DEVNULL,
+                stderr=_sub.DEVNULL,
+            )
+            import time as _time
+            _time.sleep(2)
+            try:
+                _httpx.get(f"{daemon_url}/health", timeout=2.0).raise_for_status()
+                good("Daemon started")
+            except Exception:
+                bad("Could not start daemon — run 'vlt daemon start' manually then re-run setup")
+        else:
+            bad("Run:  vlt daemon start")
+
+    # ── 2. Claude Code hooks ───────────────────────────────────────────────
+    step("2 / 4  Claude Code hooks")
+    settings_path = Path.home() / ".claude" / "settings.json"
+    hooks_ok = False
+    if settings_path.exists():
+        try:
+            s = json.loads(settings_path.read_text())
+            hooks = s.get("hooks", {})
+            hooks_ok = any(
+                "8765/api/hooks" in str(h)
+                for event_hooks in hooks.values()
+                for h in event_hooks
+            )
+        except Exception:
+            pass
+
+    if hooks_ok:
+        good("Hooks configured in ~/.claude/settings.json")
+    else:
+        warn("Hooks not found in ~/.claude/settings.json")
+        if fix:
+            cmd(f"vlt daemon install --shell {detected_shell}")
+            # Inline the hook installation (avoid re-detecting shell)
+            hook_url = f"{daemon_url}/api/hooks"
+            claude_settings = {}
+            if settings_path.exists():
+                try:
+                    claude_settings = json.loads(settings_path.read_text())
+                except Exception:
+                    pass
+            hooks = claude_settings.setdefault("hooks", {})
+            hook_cmd = f"curl -s -X POST {hook_url} -H 'Content-Type: application/json' -d @- &"
+            hook_entry = {"hooks": [{"type": "command", "command": hook_cmd}]}
+            for event in ["SessionStart", "PostToolUse", "Stop", "UserPromptSubmit"]:
+                existing = hooks.get(event, [])
+                if not any(hook_url in str(h) for h in existing):
+                    existing.append(hook_entry)
+                    hooks[event] = existing
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_text(json.dumps(claude_settings, indent=2))
+            good("Hooks written")
+        else:
+            bad("Run:  vlt daemon install")
+
+    # ── 3. vlt-claude wrapper in PATH ─────────────────────────────────────
+    step("3 / 4  vlt-claude wrapper in PATH")
+    vlt_claude_bin = _shutil.which("vlt-claude")
+    claude_in_path = _shutil.which("claude")
+    safe_dir = Path.home() / ".local" / "share" / "vlt" / "bin"
+    link = safe_dir / "claude"
+
+    if not vlt_claude_bin:
+        bad("vlt-claude not installed — run:  pip install --user -e packages/vlt-cli")
+    else:
+        good(f"vlt-claude found at {vlt_claude_bin}")
+
+        # Check if our symlink exists
+        if link.exists() or link.is_symlink():
+            good(f"Symlink exists: {link}")
+        else:
+            warn(f"Symlink not at {link}")
+            if fix:
+                safe_dir.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(vlt_claude_bin)
+                cmd(f"ln -s {vlt_claude_bin} {link}")
+                good("Symlink created")
+
+        # Check if that directory is in PATH before ~/.local/bin
+        path_dirs = os.environ.get("PATH", "").split(":")
+        vlt_bin_in_path = str(safe_dir) in path_dirs
+        local_bin_idx = next((i for i, d in enumerate(path_dirs) if "/.local/bin" in d), 999)
+        vlt_bin_idx = next((i for i, d in enumerate(path_dirs) if str(safe_dir) in d), 999)
+
+        if vlt_bin_in_path and vlt_bin_idx < local_bin_idx:
+            good(f"{safe_dir} is in PATH (position {vlt_bin_idx}, before ~/.local/bin at {local_bin_idx})")
+        elif vlt_bin_in_path:
+            warn(f"{safe_dir} is in PATH but AFTER ~/.local/bin — vlt-claude won't shadow `claude`")
+            if detected_shell == "fish":
+                wiz.print(f"  [yellow]Fix:[/yellow]  fish_add_path {safe_dir}")
+            else:
+                wiz.print(f"  [yellow]Fix:[/yellow]  Prepend to PATH: export PATH=\"{safe_dir}:$PATH\"")
+        else:
+            warn(f"{safe_dir} not in current PATH")
+            if detected_shell == "fish":
+                wiz.print(f"  [yellow]Run once:[/yellow]  fish_add_path {safe_dir}")
+            else:
+                wiz.print(f"  [yellow]Add to shell:[/yellow]  export PATH=\"{safe_dir}:$PATH\"")
+            wiz.print("  [dim](new terminals will pick this up automatically after adding)[/dim]")
+
+        # Check if `claude` resolves to our wrapper
+        if claude_in_path:
+            real = os.path.realpath(claude_in_path)
+            if vlt_claude_bin and (os.path.realpath(vlt_claude_bin) == real or "vlt" in real.lower()):
+                good(f"`claude` → vlt-claude  ({claude_in_path})")
+            else:
+                warn(f"`claude` resolves to {claude_in_path} (not vlt-claude) — PATH order may need adjustment")
+
+    # ── 4. Project vlt.toml ────────────────────────────────────────────────
+    step("4 / 4  Project configuration (vlt.toml)")
+
+    # Walk up to find vlt.toml
+    vlt_toml: Optional[Path] = None
+    for parent in [project_dir] + list(project_dir.parents):
+        candidate = parent / "vlt.toml"
+        if candidate.exists():
+            vlt_toml = candidate
+            break
+
+    if vlt_toml:
+        good(f"vlt.toml found at {vlt_toml}")
+    else:
+        warn(f"No vlt.toml found in {project_dir} or parents")
+        if fix:
+            default_name = project_dir.name
+            name = Prompt.ask("  Project name", default=default_name)
+            project_id = name.lower().replace(" ", "-")
+            toml_content = f'[project]\nid = "{project_id}"\nname = "{name}"\npath = "{project_dir}"\n'
+            toml_path = project_dir / "vlt.toml"
+            toml_path.write_text(toml_content)
+            cmd(f"Created {toml_path}")
+            good(f"vlt.toml created (project_id: {project_id})")
+        else:
+            bad(f"Create {project_dir / 'vlt.toml'} with [project] id = \"my-project\"")
+
+    # ── Summary ────────────────────────────────────────────────────────────
+    wiz.print()
+    wiz.print(Rule())
+    if failures:
+        wiz.print(f"[bold red]✗ {len(failures)} error(s).[/bold red] Fix the items above and re-run [bold]vlt setup[/bold].")
+    elif warnings:
+        wiz.print(f"[bold yellow]⚠ Setup complete with {len(warnings)} warning(s).[/bold yellow] See above for manual steps.")
+    else:
+        wiz.print("[bold green]✓ Setup complete.[/bold green] All checks passed.")
+    wiz.print()
 
 
 if __name__ == "__main__":

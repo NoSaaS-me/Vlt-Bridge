@@ -36,6 +36,7 @@ oracle = [
 [project.scripts]
 vlt = "vlt.main:app"
 vlt-mcp = "vlt.mcp_server:main"
+vlt-claude = "vlt.claude_cmd:main"
 
 [build-system]
 requires = ["hatchling"]

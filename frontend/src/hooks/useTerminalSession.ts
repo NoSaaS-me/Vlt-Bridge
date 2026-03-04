@@ -62,6 +62,10 @@ export function useTerminalSession({
         lineHeight: 1.2,
         cursorBlink: false,
         allowProposedApi: true,
+        scrollback: 5000,
+        // Don't hard-wrap at a narrow browser-pane width — let the PTY content
+        // determine wrapping. FitAddon still auto-fits cols on resize.
+        cols: 220,
       });
 
       const fitAddon = new FitAddon();
@@ -70,7 +74,9 @@ export function useTerminalSession({
 
       // Delay initial fit to ensure container has dimensions
       requestAnimationFrame(() => {
-        if (!cancelled) fitAddon.fit();
+        if (cancelled) return;
+        fitAddon.fit();
+        if (term.cols < 200) term.resize(200, term.rows);
       });
 
       termRef.current = term;
@@ -93,12 +99,18 @@ export function useTerminalSession({
   // ── ResizeObserver — fit xterm to container, but NEVER send resize to relay ──
   // The relay's PTY dimensions are owned by the user's real terminal.
   // Sending browser pane dimensions would overwrite them and break the user's terminal.
+  // Enforce a minimum of 200 cols so content from wide terminals doesn't hard-wrap.
+  const MIN_COLS = 200;
   useEffect(() => {
     if (!containerRef.current) return;
     const el = containerRef.current;
     const observer = new ResizeObserver(() => {
-      if (fitRef.current && el.isConnected) {
-        fitRef.current.fit();
+      const term = termRef.current;
+      const fit = fitRef.current;
+      if (!fit || !term || !el.isConnected) return;
+      fit.fit();
+      if (term.cols < MIN_COLS) {
+        term.resize(MIN_COLS, term.rows);
       }
     });
     observer.observe(el);
