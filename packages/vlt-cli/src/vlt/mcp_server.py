@@ -40,7 +40,9 @@ def create_server():
             "Call vlt_code_init first on any new project.\n"
             "- vlt_note_*: Markdown vault notes. Requires Document-MCP backend running.\n"
             "- vlt_oracle_*: AI-powered multi-source answers about your codebase.\n"
-            "- vlt_status, vlt_project_detect: Health check and project auto-detection.\n\n"
+            "- vlt_status, vlt_project_detect: Health check and project auto-detection.\n"
+            "- connector_list, connector_call: Send emails and invoke external services via configured connectors. "
+            "Call connector_list first to see what's available for your account.\n\n"
             "QUICK START: Call vlt_status to see what's available. "
             "Call vlt_project_detect to find your current project context automatically."
         ),
@@ -77,6 +79,12 @@ def create_server():
         register_cronban_tools(mcp)
     except ImportError:
         logger.debug("cronban_tools not available")
+
+    try:
+        from vlt.mcp.connector_tools import register_connector_tools
+        register_connector_tools(mcp)
+    except ImportError:
+        logger.debug("connector_tools not available")
 
     return mcp
 
