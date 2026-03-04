@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 
 from .base import BaseConnector
-from backend.src.models.connectors import ConnectorAction, ConnectorParam, CredentialField
+from ..models.connectors import ConnectorAction, ConnectorParam, CredentialField
 
 MAILGUN_API_BASE = "https://api.mailgun.net/v3"
 
