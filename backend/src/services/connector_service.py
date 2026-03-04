@@ -15,26 +15,32 @@ class ConnectorService:
     def get_config(self, user_id: str, connector_name: str) -> dict[str, str]:
         """Return all config key/value pairs for a connector, including __enabled."""
         conn = self.db.connect()
-        cursor = conn.execute(
-            "SELECT config_key, config_value FROM connector_configs WHERE user_id=? AND connector_name=?",
-            (user_id, connector_name),
-        )
-        return {row["config_key"]: row["config_value"] or "" for row in cursor.fetchall()}
+        try:
+            cursor = conn.execute(
+                "SELECT config_key, config_value FROM connector_configs WHERE user_id=? AND connector_name=?",
+                (user_id, connector_name),
+            )
+            return {row["config_key"]: row["config_value"] or "" for row in cursor.fetchall()}
+        finally:
+            conn.close()
 
     def set_config(self, user_id: str, connector_name: str, updates: dict[str, str]) -> None:
         """Upsert config keys for a connector."""
         conn = self.db.connect()
-        for key, value in updates.items():
-            conn.execute(
-                """
-                INSERT INTO connector_configs (user_id, connector_name, config_key, config_value)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT (user_id, connector_name, config_key)
-                DO UPDATE SET config_value=excluded.config_value, updated_at=datetime('now')
-                """,
-                (user_id, connector_name, key, value),
-            )
-        conn.commit()
+        try:
+            for key, value in updates.items():
+                conn.execute(
+                    """
+                    INSERT INTO connector_configs (user_id, connector_name, config_key, config_value)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT (user_id, connector_name, config_key)
+                    DO UPDATE SET config_value=excluded.config_value, updated_at=datetime('now')
+                    """,
+                    (user_id, connector_name, key, value),
+                )
+            conn.commit()
+        finally:
+            conn.close()
 
     def is_enabled(self, user_id: str, connector_name: str) -> bool:
         config = self.get_config(user_id, connector_name)

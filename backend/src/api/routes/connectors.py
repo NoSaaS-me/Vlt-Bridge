@@ -98,7 +98,10 @@ async def invoke_connector(
 
     try:
         result = await connector.invoke(body.action, body.params, credentials)
-        return ConnectorInvokeResponse(success=result.get("success", True), result=result)
+        success = result.get("success", True)
+        error = result.get("error") if not success else None
+        payload = {k: v for k, v in result.items() if k not in ("success", "error")}
+        return ConnectorInvokeResponse(success=success, result=payload, error=error)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
