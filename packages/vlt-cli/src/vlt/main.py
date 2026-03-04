@@ -101,12 +101,14 @@ If no --session is given you must supply --cwd (working directory) and
 optionally --new-session to spawn a fresh Claude session on each fire.
 """
 cron_app = typer.Typer(name="cron", help=CRON_HELP, no_args_is_help=True)
+connectors_app = typer.Typer(name="connectors", help="List and invoke external service connectors.", no_args_is_help=True)
 app.add_typer(thread_app, name="thread")
 app.add_typer(config_app, name="config")
 app.add_typer(sync_app, name="sync")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(profile_app, name="profile")
 app.add_typer(cron_app, name="cron")
+app.add_typer(connectors_app, name="connectors")
 
 service = SqliteVaultService()
 
@@ -5213,6 +5215,141 @@ def setup_wizard(
     else:
         wiz.print("[bold green]✓ Setup complete.[/bold green] All checks passed.")
     wiz.print()
+
+
+# ---------------------------------------------------------------------------
+# Connectors subcommands
+# ---------------------------------------------------------------------------
+
+def _connectors_client():
+    """Return (vault_url, headers) for the connectors API."""
+    import httpx
+    from vlt.config import Settings
+
+    settings = Settings()
+    vault_url = os.environ.get("VLT_VAULT_URL") or settings.vault_url or "http://localhost:8000"
+    sync_token = os.environ.get("VLT_SYNC_TOKEN") or settings.sync_token
+
+    if not sync_token:
+        from rich.console import Console
+        Console().print("[red]Error: VLT_SYNC_TOKEN not set. Run [bold]vlt config set sync_token <token>[/bold] first.[/red]")
+        raise typer.Exit(code=1)
+
+    headers = {"Authorization": f"Bearer {sync_token}"}
+    return vault_url, headers
+
+
+@connectors_app.command("list")
+def connectors_list(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """List connectors enabled for your account, with their available actions."""
+    import httpx
+    import json as json_lib
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    vault_url, headers = _connectors_client()
+
+    try:
+        resp = httpx.get(f"{vault_url}/api/connectors", headers=headers, timeout=10.0)
+    except httpx.ConnectError:
+        console.print(f"[red]Error: Cannot connect to backend at {vault_url}[/red]")
+        raise typer.Exit(code=1)
+
+    if resp.status_code != 200:
+        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
+        raise typer.Exit(code=1)
+
+    data = resp.json()
+    connectors = [c for c in data.get("connectors", []) if c.get("enabled") and c.get("configured")]
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(connectors, indent=2) + "\n")
+        return
+
+    if not connectors:
+        console.print("[yellow]No connectors enabled. Configure them in the Connectors tab.[/yellow]")
+        return
+
+    table = Table(title="Enabled Connectors")
+    table.add_column("Name", style="cyan")
+    table.add_column("Display Name")
+    table.add_column("Actions")
+
+    for c in connectors:
+        actions = ", ".join(a["name"] for a in c.get("actions", []))
+        table.add_row(c["name"], c["display_name"], actions)
+
+    console.print(table)
+
+
+@connectors_app.command("call")
+def connectors_call(
+    connector: str = typer.Argument(..., help="Connector name, e.g. mailgun"),
+    action: str = typer.Argument(..., help="Action name, e.g. send_email"),
+    params: str = typer.Argument("{}", help="JSON string of action parameters"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Invoke a connector action.
+
+    Examples:
+
+        vlt connectors call mailgun send_email '{"to":"you@example.com","subject":"Hi","body":"Hello!"}'
+    """
+    import httpx
+    import json as json_lib
+    from rich.console import Console
+
+    console = Console()
+
+    try:
+        params_dict = json_lib.loads(params)
+    except json_lib.JSONDecodeError as e:
+        console.print(f"[red]Error: params must be valid JSON: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    vault_url, headers = _connectors_client()
+
+    try:
+        resp = httpx.post(
+            f"{vault_url}/api/connectors/{connector}/invoke",
+            json={"action": action, "params": params_dict},
+            headers=headers,
+            timeout=30.0,
+        )
+    except httpx.ConnectError:
+        console.print(f"[red]Error: Cannot connect to backend at {vault_url}[/red]")
+        raise typer.Exit(code=1)
+
+    if resp.status_code == 403:
+        console.print(f"[red]Error: Connector '{connector}' is not enabled. Configure it in the Connectors tab.[/red]")
+        raise typer.Exit(code=1)
+    if resp.status_code == 404:
+        console.print(f"[red]Error: Connector '{connector}' not found.[/red]")
+        raise typer.Exit(code=1)
+    if resp.status_code >= 400:
+        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
+        raise typer.Exit(code=1)
+
+    data = resp.json()
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(data, indent=2) + "\n")
+        return
+
+    if data.get("success"):
+        console.print("[green]✓ Success[/green]")
+        result = data.get("result", {})
+        if result:
+            for k, v in result.items():
+                console.print(f"  [dim]{k}:[/dim] {v}")
+    else:
+        console.print(f"[red]✗ Failed:[/red] {data.get('error', 'Unknown error')}")
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
