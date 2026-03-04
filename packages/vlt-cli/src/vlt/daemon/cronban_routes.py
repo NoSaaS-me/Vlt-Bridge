@@ -216,28 +216,60 @@ async def _dispatch_to_session(
     create_new: bool,
 ) -> Optional[str]:
     """
-    Send a prompt to a session. Returns the session_id used, or None on failure.
-    Tries managed sessions first, then HTTP injection, then spawns new.
+    Send a prompt to a session via the SDK subprocess path.
+
+    Cron/webhook dispatch NEVER uses relay inject (_session_inject_queues) because
+    that mechanism types keystrokes into the user's interactive PTY terminal.
+    All automated messages go through SDK sessions (persistent subprocesses).
+
+    Routing:
+      1. SDK session already running → write to stdin directly.
+      2. Session exists in DB → spawn SDK session with --resume.
+      3. create_new=True → spawn fresh session via /api/sessions/spawn.
     """
     try:
-        from vlt.daemon.server import _managed_sessions, _managed_message_worker
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        # The daemon runs as __main__ (python -m vlt.daemon.server), so
+        # vlt.daemon.server is NOT in sys.modules — importing it would create
+        # a second module object with a separate _sdk_sessions dict.
+        # Always access live state through __main__ to share the same dicts.
+        _srv = _sys.modules['__main__']
+        _sdk_sessions = _srv._sdk_sessions
+        _spawn_sdk_session = _srv._spawn_sdk_session
 
         if target_session_id:
-            mgd = _managed_sessions.get(target_session_id)
-            if mgd:
-                mgd["queue"].append({"text": prompt})
-                if not mgd["processing"]:
-                    asyncio.create_task(_managed_message_worker(target_session_id))
+            # 1. Already running — write to stdin directly
+            sdk = _sdk_sessions.get(target_session_id)
+            if sdk and sdk["proc"].returncode is None:
+                user_msg = json.dumps({
+                    "type": "user",
+                    "message": {"role": "user", "content": prompt},
+                    "session_id": "default",
+                }) + "\n"
+                sdk["proc"].stdin.write(user_msg.encode())
+                asyncio.create_task(sdk["proc"].stdin.drain())
+                logger.info(f"_dispatch: SDK write for {target_session_id}")
                 return target_session_id
 
-        if target_session_id and not create_new:
-            # Try HTTP injection
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"http://127.0.0.1:8765/api/sessions/{target_session_id}/inject",
-                    json={"message": prompt},
-                )
-                if resp.status_code == 200:
+            # 2. Session not running — look up DB and spawn with --resume (persistent)
+            with Session(engine) as db:
+                sess = db.get(AgentSession, target_session_id)
+
+            if sess and sess.cwd:
+                cwd_key = str(_Path(sess.cwd).resolve())
+                ok = await _spawn_sdk_session(target_session_id, cwd_key, is_new=False)
+                if ok:
+                    sdk = _sdk_sessions[target_session_id]
+                    user_msg = json.dumps({
+                        "type": "user",
+                        "message": {"role": "user", "content": prompt},
+                        "session_id": "default",
+                    }) + "\n"
+                    sdk["proc"].stdin.write(user_msg.encode())
+                    await sdk["proc"].stdin.drain()
+                    logger.info(f"_dispatch: SDK resume for {target_session_id} (status={sess.status})")
                     return target_session_id
 
         if create_new and target_cwd:

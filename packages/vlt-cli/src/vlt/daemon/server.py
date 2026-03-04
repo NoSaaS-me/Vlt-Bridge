@@ -27,17 +27,12 @@ progress in real-time via progress callbacks during indexing.
 """
 
 import asyncio
-import fcntl
 import json
 import logging
 import os
-import pty
 import shutil
 import signal
-import struct
-import subprocess
 import sys
-import termios
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -1574,10 +1569,10 @@ async def claude_hook(request: Request):
     new_status = _HOOK_STATUS_MAP.get(event)
     now = datetime.utcnow().isoformat()
 
-    # Check if this session belongs to a managed session — don't mark as "dead"
-    # since managed sessions persist between individual claude -p invocations
-    is_managed = session_id in _managed_sessions
-    if is_managed and new_status == "dead":
+    # SDK sessions (both new and resumed) stay alive between messages —
+    # don't mark as "dead" on Stop/SessionEnd hooks
+    is_sdk = session_id in _sdk_sessions
+    if is_sdk and new_status == "dead":
         new_status = "idle"
 
     with Session(engine) as db:
@@ -1590,7 +1585,7 @@ async def claude_hook(request: Request):
                 session.transcript_path = transcript_path
             if model and not session.model:
                 session.model = model
-            if is_managed:
+            if is_sdk:
                 session.source = "managed"
             # Backfill project_id if missing
             if not session.project_id and session.cwd:
@@ -1607,13 +1602,13 @@ async def claude_hook(request: Request):
                 name=Path(cwd).name if cwd else "unknown",
                 project_id=inferred_pid,
                 status=new_status or "idle",
-                source="managed" if is_managed else "hook",
+                source="managed" if is_sdk else "hook",
                 transcript_path=transcript_path,
                 model=model,
             ))
             db.commit()
 
-    logger.debug(f"Hook received: event={event}, session={session_id}, status={new_status}")
+    logger.info(f"Hook received: event={event}, session={session_id}, status={new_status}, is_sdk={is_sdk}")
 
     # Append to in-memory ring buffer for the Events panel
     _hook_events.append({
@@ -1675,8 +1670,13 @@ async def dismiss_session(session_id: str):
         _scrollback_path(session_id).unlink(missing_ok=True)
     except Exception:
         pass
-    # Clean up managed session state so the worker doesn't run any queued msgs
-    _managed_sessions.pop(session_id, None)
+    # Terminate SDK session subprocess if running
+    sdk = _sdk_sessions.pop(session_id, None)
+    if sdk:
+        try:
+            sdk["proc"].terminate()
+        except Exception:
+            pass
     # Push dead status to any open live stream clients
     _push_status_to_live(session_id, "dead", "Killed")
     return {"ok": True}
@@ -1793,13 +1793,13 @@ _live_stream_queues: Dict[str, Set[asyncio.Queue]] = {}
 # Per-session byte offset for incremental JSONL reads
 _live_file_offsets: Dict[str, int] = {}
 
+# Per-session lock to prevent concurrent _push_new_jsonl_entries calls from
+# duplicating entries (poll loop + hook events fire concurrently).
+_live_push_locks: Dict[str, asyncio.Lock] = {}
+
 # Per-session context injection queue: messages from browser → Claude via hooks
 _injection_queues: Dict[str, list] = {}
 
-
-def _find_managed_by_session_id(sid: str) -> Optional[Dict]:
-    """Look up a managed session entry by session_id."""
-    return _managed_sessions.get(sid)
 
 
 def _push_status_to_live(session_id: str, status: str, event: str) -> None:
@@ -1825,72 +1825,78 @@ async def _push_new_jsonl_entries(session_id: str, transcript_path: str) -> None
     if not path.exists():
         return
 
-    offset = _live_file_offsets.get(session_id, 0)
+    # Serialize concurrent callers (poll loop + hook events) so the same file
+    # offset is never read twice, preventing duplicate entries in the browser.
+    if session_id not in _live_push_locks:
+        _live_push_locks[session_id] = asyncio.Lock()
 
-    try:
-        def _read_new():
-            with open(path, "r", encoding="utf-8") as f:
-                f.seek(offset)
-                entries = []
-                for line in f:
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        entries.append(json.loads(stripped))
-                    except json.JSONDecodeError:
-                        continue
-                return entries, f.tell()
+    async with _live_push_locks[session_id]:
+        offset = _live_file_offsets.get(session_id, 0)
 
-        new_entries, new_offset = await asyncio.to_thread(_read_new)
-        _live_file_offsets[session_id] = new_offset
-    except Exception:
-        return
-
-    # Extract ctx_pct from the latest assistant message.usage
-    latest_ctx_pct = None
-    for entry in new_entries:
-        if entry.get("type") == "assistant":
-            usage = (entry.get("message") or {}).get("usage")
-            if usage:
-                total_in = (
-                    usage.get("input_tokens", 0)
-                    + usage.get("cache_creation_input_tokens", 0)
-                    + usage.get("cache_read_input_tokens", 0)
-                )
-                # Claude context window is 200k tokens
-                latest_ctx_pct = min(100, round(total_in / 200_000 * 100))
-
-    if latest_ctx_pct is not None:
-        # Update DB
         try:
-            from vlt.db import engine
-            from vlt.core.models import AgentSession
-            with Session(engine) as db:
-                sess = db.get(AgentSession, session_id)
-                if sess:
-                    sess.ctx_pct = latest_ctx_pct
-                    db.commit()
-        except Exception:
-            pass
-        # Push to WS clients
-        ctx_msg = {"type": "ctx_pct", "ctx_pct": latest_ctx_pct}
-        for q in list(clients):
-            try:
-                q.put_nowait(ctx_msg)
-            except asyncio.QueueFull:
-                pass
+            def _read_new():
+                with open(path, "r", encoding="utf-8") as f:
+                    f.seek(offset)
+                    entries = []
+                    for line in f:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        try:
+                            entries.append(json.loads(stripped))
+                        except json.JSONDecodeError:
+                            continue
+                    return entries, f.tell()
 
-    _STREAM_TYPES = {"user", "assistant", "system"}
-    for entry in new_entries:
-        if entry.get("type") not in _STREAM_TYPES:
-            continue
-        msg = {"type": "entry", "entry": entry}
-        for q in list(clients):
+            new_entries, new_offset = await asyncio.to_thread(_read_new)
+            _live_file_offsets[session_id] = new_offset
+        except Exception:
+            return
+
+        # Extract ctx_pct from the latest assistant message.usage
+        latest_ctx_pct = None
+        for entry in new_entries:
+            if entry.get("type") == "assistant":
+                usage = (entry.get("message") or {}).get("usage")
+                if usage:
+                    total_in = (
+                        usage.get("input_tokens", 0)
+                        + usage.get("cache_creation_input_tokens", 0)
+                        + usage.get("cache_read_input_tokens", 0)
+                    )
+                    # Claude context window is 200k tokens
+                    latest_ctx_pct = min(100, round(total_in / 200_000 * 100))
+
+        if latest_ctx_pct is not None:
+            # Update DB
             try:
-                q.put_nowait(msg)
-            except asyncio.QueueFull:
+                from vlt.db import engine
+                from vlt.core.models import AgentSession
+                with Session(engine) as db:
+                    sess = db.get(AgentSession, session_id)
+                    if sess:
+                        sess.ctx_pct = latest_ctx_pct
+                        db.commit()
+            except Exception:
                 pass
+            # Push to WS clients
+            ctx_msg = {"type": "ctx_pct", "ctx_pct": latest_ctx_pct}
+            for q in list(clients):
+                try:
+                    q.put_nowait(ctx_msg)
+                except asyncio.QueueFull:
+                    pass
+
+        _STREAM_TYPES = {"user", "assistant", "system"}
+        for entry in new_entries:
+            if entry.get("type") not in _STREAM_TYPES:
+                continue
+            msg = {"type": "entry", "entry": entry}
+            for q in list(clients):
+                try:
+                    q.put_nowait(msg)
+                except asyncio.QueueFull:
+                    pass
 
 
 def _resolve_transcript_path(session) -> str:
@@ -1930,21 +1936,6 @@ async def session_live_ws(websocket: WebSocket, session_id: str):
         f"WS session info: id={session_id} source={session.source} "
         f"status={session.status} cwd={session.cwd}"
     )
-
-    # Auto-recover managed session state after daemon restart.
-    # If the DB says source="managed" but _managed_sessions lost it,
-    # reconstruct the entry so the recv_loop --resume worker can handle input.
-    if session.source == "managed" and session.cwd:
-        if not _find_managed_by_session_id(session_id):
-            cwd_key = str(Path(session.cwd).resolve())
-            _managed_sessions[session_id] = {
-                "session_id": session_id,
-                "processing": False,
-                "queue": [],
-                "cwd": cwd_key,
-                "is_new": False,  # always --resume for recovered sessions
-            }
-            logger.info(f"Auto-recovered managed session state: {session_id} cwd={cwd_key}")
 
     transcript_path = _resolve_transcript_path(session)
 
@@ -2034,11 +2025,7 @@ async def session_live_ws(websocket: WebSocket, session_id: str):
                     await websocket.send_json({"type": "ping"})
 
         async def recv_loop():
-            """Route browser input based on session type:
-            - relay → direct PTY write via inject queue
-            - managed (web-spawned) → queue for --resume worker
-            - hook (terminal CLI) → additionalContext via hook response
-            """
+            """Route browser input to PTY relay (legacy) or SDK subprocess."""
             async for raw in websocket.iter_text():
                 try:
                     msg = json.loads(raw)
@@ -2049,89 +2036,46 @@ async def session_live_ws(websocket: WebSocket, session_id: str):
 
                     logger.info(f"WS recv: session={session_id} type={msg_type} text_len={len(text)}")
 
-                    # 1. Relay session — direct PTY stdin write
+                    # 1. Relay session — direct PTY stdin write (legacy path)
                     if session_id in _session_inject_queues:
                         logger.info(f"WS route: RELAY for {session_id}")
                         await _session_inject_queues[session_id].put(text + "\n")
-                        await websocket.send_json({
-                            "type": "input_sent",
-                            "text": text,
-                        })
+                        await websocket.send_json({"type": "input_sent", "text": text})
 
-                    # 2. Web-spawned managed session — queue for --resume worker
-                    elif (managed := _find_managed_by_session_id(session_id)) is not None:
-                        logger.info(f"WS route: MANAGED for {session_id} processing={managed['processing']}")
-                        managed["queue"].append({"text": text})
-                        if not managed["processing"]:
-                            asyncio.create_task(
-                                _managed_message_worker(session_id)
-                            )
-                        await websocket.send_json({
-                            "type": "input_sent",
-                            "text": text,
-                        })
-
-                    # 3. Fallback — check if terminal Claude is still active.
-                    #    If session is dead or idle long enough, promote to
-                    #    managed and use --resume (no active terminal process).
-                    #    Otherwise, queue as additionalContext for hook injection.
+                    # 2. SDK session (new or resumed) — write to persistent subprocess stdin
                     else:
-                        can_resume = False
-                        sess_cwd = None
-                        with Session(engine) as _db:
-                            sess = _db.get(AgentSession, session_id)
-                            if sess and sess.cwd:
-                                sess_cwd = sess.cwd
-                                if sess.status == "dead":
-                                    can_resume = True
-                                elif sess.status == "idle" and sess.last_activity:
-                                    try:
-                                        la = datetime.fromisoformat(sess.last_activity)
-                                        idle_secs = (datetime.utcnow() - la).total_seconds()
-                                        if idle_secs > 60:
-                                            can_resume = True
-                                    except Exception:
-                                        pass
-
-                        if can_resume and sess_cwd:
-                            # Promote to managed session — use --resume
+                        sdk = _sdk_sessions.get(session_id)
+                        logger.info(f"WS route: SDK check sid={session_id} in_sdk={sdk is not None} rc={sdk['proc'].returncode if sdk else 'N/A'}")
+                        if not sdk or sdk["proc"].returncode is not None:
+                            # Spawn/respawn with --resume (persistent, stays alive)
+                            sess_cwd = None
+                            with Session(engine) as _db:
+                                sess = _db.get(AgentSession, session_id)
+                                if sess and sess.cwd:
+                                    sess_cwd = sess.cwd
+                            if not sess_cwd:
+                                logger.warning(f"No CWD for {session_id}, cannot dispatch")
+                                continue
                             cwd_key = str(Path(sess_cwd).resolve())
-                            if session_id not in _managed_sessions:
-                                _managed_sessions[session_id] = {
-                                    "session_id": session_id,
-                                    "processing": False,
-                                    "queue": [],
-                                    "cwd": cwd_key,
-                                    "is_new": False,
-                                }
-                            mgd = _managed_sessions[session_id]
-                            mgd["queue"].append({"text": text})
-                            if not mgd["processing"]:
-                                asyncio.create_task(
-                                    _managed_message_worker(session_id)
-                                )
-                            # Update source in DB
+                            ok = await _spawn_sdk_session(session_id, cwd_key, is_new=False)
+                            if not ok:
+                                continue
+                            sdk = _sdk_sessions[session_id]
                             with Session(engine) as _db:
                                 s = _db.get(AgentSession, session_id)
                                 if s:
                                     s.source = "managed"
                                     _db.commit()
-                            logger.info(
-                                f"Promoted session {session_id} to managed "
-                                f"(--resume), was idle/dead"
-                            )
-                            await websocket.send_json({
-                                "type": "input_sent",
-                                "text": text,
-                            })
-                        else:
-                            # Active terminal Claude — use hook injection
-                            _injection_queues.setdefault(session_id, []).append(text)
-                            await websocket.send_json({
-                                "type": "injected",
-                                "text": text,
-                                "queued": len(_injection_queues[session_id]),
-                            })
+                            logger.info(f"Promoted session {session_id} to SDK (--resume)")
+
+                        user_msg = json.dumps({
+                            "type": "user",
+                            "message": {"role": "user", "content": text},
+                            "session_id": "default",
+                        }) + "\n"
+                        sdk["proc"].stdin.write(user_msg.encode())
+                        await sdk["proc"].stdin.drain()
+                        await websocket.send_json({"type": "input_sent", "text": text})
                 except (json.JSONDecodeError, Exception) as e:
                     logger.debug(f"WS recv_loop error for {session_id}: {e}")
 
@@ -2153,6 +2097,7 @@ async def session_live_ws(websocket: WebSocket, session_id: str):
         if not _live_stream_queues.get(session_id):
             _live_stream_queues.pop(session_id, None)
             _live_file_offsets.pop(session_id, None)
+            _live_push_locks.pop(session_id, None)
 
 
 @app.post("/api/sessions/{session_id}/context")
@@ -2177,117 +2122,128 @@ async def inject_context(session_id: str, request: Request):
 
 
 # =============================================================================
-# Daemon-Managed Sessions (Message Queue)
+# SDK-Managed Sessions (Persistent Subprocess)
 # =============================================================================
 #
-# Instead of maintaining a long-running interactive PTY (Claude's TUI doesn't
-# accept raw PTY input reliably), we use a message-queue approach:
+# Uses claude's --input-format stream-json --output-format stream-json flags
+# to maintain a persistent subprocess per session. Messages are sent as JSONL
+# on stdin; events (assistant, result, etc.) stream back on stdout.
 #
-#   1. New session:      claude -p "msg" --session-id <uuid> --dangerously-skip-permissions
-#   2. Resume existing:  claude -p "msg" --resume <session_id> --dangerously-skip-permissions
+#   New session:  claude -p --session-id <uuid> --input-format stream-json \
+#                          --output-format stream-json
+#   Resume:       claude -p --resume <id>    --input-format stream-json \
+#                          --output-format stream-json
 #
-# The session_id is pre-assigned (uuid4) for new sessions so we know the JSONL
-# file path before the process starts. For existing sessions (user clicked in UI),
-# we use --resume to append to that conversation. Hooks fire normally.
+# The subprocess stays alive between messages (no new process per message).
+# _sdk_stdout_reader tracks status (thinking/idle). Content delivery still
+# uses hook-triggered JSONL reads for consistency with non-SDK sessions.
 
-# Per-cwd managed session state
-_managed_sessions: Dict[str, dict] = {}  # session_id → {session_id, processing, queue, cwd, is_new}
+_sdk_sessions: Dict[str, dict] = {}  # session_id → {proc, cwd, is_new}
 
 
-async def _run_claude_message(
+async def _spawn_sdk_session(
+    session_id: str,
     cwd: str,
-    message: str,
-    session_id: Optional[str] = None,
-    is_first: bool = True,
+    is_new: bool = True,
     model: Optional[str] = None,
-) -> Optional[str]:
+) -> bool:
     """
-    Run a single claude -p message in a PTY and wait for completion.
+    Spawn a persistent claude subprocess in stream-json mode.
 
-    For the first message: uses --session-id to pre-assign the session UUID.
-    For subsequent messages: uses --resume to target that specific session.
-    Returns the session_id used, or None on failure.
+    Both --session-id (new) and --resume (existing) stay alive between messages.
+    The process receives user messages on stdin and emits events on stdout.
     """
+    existing = _sdk_sessions.get(session_id)
+    if existing and existing["proc"].returncode is None:
+        logger.info(f"SDK session already running: {session_id}")
+        return True
+    if existing:
+        _sdk_sessions.pop(session_id)
+
     claude_bin = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
-    cmd = [claude_bin, "-p", message, "--dangerously-skip-permissions"]
-    if session_id:
-        if is_first:
-            cmd.extend(["--session-id", session_id])
-        else:
-            cmd.extend(["--resume", session_id])
+    cmd = [
+        claude_bin, "-p",
+        "--input-format", "stream-json",
+        "--output-format", "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+    ]
+    if is_new:
+        cmd += ["--session-id", session_id]
+    else:
+        cmd += ["--resume", session_id]
     if model:
-        cmd.extend(["--model", model])
+        cmd += ["--model", model]
 
-    # Clean env: remove Claude nesting detection vars
     _STRIP_VARS = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}
     spawn_env = {k: v for k, v in os.environ.items() if k not in _STRIP_VARS}
-    spawn_env["TERM"] = "xterm-256color"
-
-    master_fd, slave_fd = pty.openpty()
-    winsize = struct.pack("HHHH", 50, 120, 0, 0)
-    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
 
     if not os.path.isdir(cwd):
-        os.close(master_fd)
-        os.close(slave_fd)
-        logger.error(f"CWD does not exist: {cwd}")
-        return None
+        logger.error(f"SDK session: cwd does not exist: {cwd}")
+        return False
 
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=spawn_env,
-            preexec_fn=os.setsid,
         )
     except FileNotFoundError:
-        os.close(master_fd)
-        os.close(slave_fd)
-        logger.error(f"'claude' not found at {claude_bin}")
-        return None
+        logger.error(f"claude not found at {claude_bin}")
+        return False
 
-    os.close(slave_fd)
-    logger.info(f"Managed message PID={proc.pid} cwd={cwd} session={session_id} first={is_first}")
+    # No init handshake needed — the control_request type causes claude to exit.
+    # Just register and start reading; messages are sent directly as user turns.
+    # (The control_request handshake causes claude to exit with code 1)
+    _sdk_sessions[session_id] = {"proc": proc, "cwd": cwd, "is_new": is_new}
+    asyncio.create_task(_sdk_stdout_reader(session_id, proc))
+    logger.info(f"SDK session spawned: sid={session_id} is_new={is_new} cwd={cwd} pid={proc.pid}")
+    return True
 
-    # Drain PTY output in background thread
-    loop = asyncio.get_event_loop()
 
-    async def drain():
-        while proc.poll() is None:
-            try:
-                await loop.run_in_executor(
-                    None, lambda: os.read(master_fd, 16384)
-                )
-            except OSError:
+async def _sdk_stdout_reader(session_id: str, proc) -> None:
+    """
+    Read streaming events from SDK subprocess stdout.
+
+    Tracks session status from result/assistant events. Does NOT push content
+    entries to the live stream — that's handled by hook-triggered JSONL reads
+    to avoid duplicates with the existing infrastructure.
+    """
+    try:
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
                 break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            etype = event.get("type")
+            if etype == "result":
+                _push_status_to_live(session_id, "idle", "SDKResult")
+                asyncio.create_task(_trigger_gate_evaluations(session_id))
+            elif etype == "assistant":
+                _push_status_to_live(session_id, "thinking", "SDKAssistant")
+    except Exception as e:
+        logger.error(f"SDK stdout reader error session={session_id}: {e}")
+    finally:
+        # Capture stderr for diagnostics
         try:
-            os.close(master_fd)
-        except OSError:
+            stderr_bytes = await asyncio.wait_for(proc.stderr.read(4096), timeout=0.5)
+            if stderr_bytes:
+                logger.warning(f"SDK stderr session={session_id}: {stderr_bytes.decode(errors='replace')[:500]}")
+        except Exception:
             pass
-
-    drain_task = asyncio.create_task(drain())
-
-    # Wait for process to complete (timeout 5 minutes)
-    try:
-        exit_code = await asyncio.wait_for(
-            loop.run_in_executor(None, proc.wait),
-            timeout=300.0,
-        )
-        logger.info(f"Managed message PID={proc.pid} exited code={exit_code}")
-    except asyncio.TimeoutError:
-        proc.kill()
-        logger.warning(f"Managed message PID={proc.pid} timed out, killed")
-
-    drain_task.cancel()
-    try:
-        await drain_task
-    except (asyncio.CancelledError, Exception):
-        pass
-
-    return session_id
+        rc = proc.returncode
+        _sdk_sessions.pop(session_id, None)
+        _push_status_to_live(session_id, "dead", "SDKProcessExit")
+        logger.info(f"SDK stdout reader exited: {session_id} rc={rc}")
 
 
 async def _trigger_gate_evaluations(session_id: str) -> None:
@@ -2326,63 +2282,6 @@ async def _trigger_gate_evaluations(session_id: str) -> None:
         logger.error(f"_trigger_gate_evaluations error for session {session_id}: {e}")
 
 
-async def _managed_message_worker(session_id: str):
-    """
-    Process queued messages for a managed session one at a time.
-    Each message spawns claude -p, waits for completion, then processes next.
-    """
-    managed = _managed_sessions.get(session_id)
-    if not managed:
-        return
-
-    cwd = managed["cwd"]
-    managed["processing"] = True
-    logger.info(f"Managed worker started: sid={session_id} cwd={cwd} queue_len={len(managed['queue'])}")
-
-    # Pre-generate session_id if not already set
-    if not managed["session_id"]:
-        managed["session_id"] = str(uuid.uuid4())
-        managed["is_new"] = True
-        logger.info(f"Pre-assigned session_id={managed['session_id']} for cwd={cwd}")
-
-    sid = managed["session_id"]
-    is_new_session = managed.get("is_new", True)
-
-    try:
-        while managed["queue"]:
-            msg = managed["queue"].pop(0)
-            text = msg["text"]
-            model = msg.get("model")
-
-            logger.info(
-                f"Managed worker processing: sid={sid} first={is_new_session} "
-                f"text_len={len(text)}"
-            )
-            _push_status_to_live(sid, "thinking", "ManagedMessage")
-
-            result = await _run_claude_message(
-                cwd=cwd,
-                message=text,
-                session_id=sid,
-                is_first=is_new_session,  # True = --session-id, False = --resume
-                model=model,
-            )
-            logger.info(f"Managed worker message done: sid={sid} result={result}")
-
-            # After first message, always resume
-            is_new_session = False
-            managed["is_new"] = False
-            _push_status_to_live(sid, "idle", "ManagedMessageDone")
-
-            # Trigger gate evaluations for any gate cards targeting this session
-            asyncio.create_task(_trigger_gate_evaluations(sid))
-
-    except Exception as e:
-        logger.error(f"Managed worker error: sid={sid} cwd={cwd} error={e}")
-    finally:
-        managed["processing"] = False
-        logger.info(f"Managed worker finished: sid={sid} cwd={cwd}")
-
 
 @app.post("/api/sessions/spawn")
 async def spawn_managed_session(request: Request):
@@ -2409,15 +2308,6 @@ async def spawn_managed_session(request: Request):
         sid = str(uuid.uuid4())
         is_new = True
 
-    # Always create a new managed entry keyed by session_id
-    _managed_sessions[sid] = {
-        "session_id": sid,
-        "processing": False,
-        "queue": [],
-        "cwd": cwd_path,
-        "is_new": is_new,
-    }
-
     # Pre-create the DB record so the WebSocket handler can find the session
     # immediately (before the claude -p process fires its first hook).
     from vlt.db import engine as _engine
@@ -2437,9 +2327,18 @@ async def spawn_managed_session(request: Request):
             ))
             db.commit()
 
-    managed = _managed_sessions[sid]
-    managed["queue"].append({"text": message, "model": model})
-    asyncio.create_task(_managed_message_worker(sid))
+    # Spawn persistent subprocess (--session-id for new, --resume for existing)
+    ok = await _spawn_sdk_session(sid, cwd_path, is_new=is_new, model=model)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to spawn SDK session")
+    user_msg = json.dumps({
+        "type": "user",
+        "message": {"role": "user", "content": message},
+        "session_id": "default",
+    }) + "\n"
+    _sdk_sessions[sid]["proc"].stdin.write(user_msg.encode())
+    await _sdk_sessions[sid]["proc"].stdin.drain()
+    _push_status_to_live(sid, "thinking", "Spawned")
 
     logger.info(f"Spawn: sid={sid} resume={resume_id is not None} cwd={cwd_path}")
 
@@ -2504,6 +2403,12 @@ def run_server(
 
 if __name__ == "__main__":
     import argparse
+    import sys as _sys
+
+    # Register this module under its package path so that any submodule doing
+    # `from vlt.daemon.server import ...` gets the already-loaded module (us)
+    # rather than importing a fresh copy with a separate _sdk_sessions dict.
+    _sys.modules.setdefault("vlt.daemon.server", _sys.modules["__main__"])
 
     parser = argparse.ArgumentParser(description="VLT Daemon Server")
     parser.add_argument(

@@ -2,11 +2,9 @@
  * LiveSessionPanel — Real-time conversation view for Claude Code sessions.
  *
  * Connects via WebSocket to stream JSONL transcript entries as they're written.
- * Supports context injection: user types a message in the input bar, it's queued
- * and injected into the agent's next turn via the UserPromptSubmit hook response.
- *
- * This replaces the need for PTY relay + xterm.js for hook-based sessions.
- * The hooks provide bidirectional control: observe AND interact with Claude remotely.
+ * Supports bidirectional messaging: user types in the input bar, the daemon
+ * routes it via the managed session worker (claude -p --resume) so it runs as
+ * a discrete turn without touching the user's interactive terminal.
  */
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
@@ -276,10 +274,7 @@ export function LiveSessionPanel({
   const [status, setStatus] = useState(session.status);
   const [connected, setConnected] = useState(false);
   const [inputText, setInputText] = useState('');
-  const [injectionPending, setInjectionPending] = useState(0);
   const [autoScroll, setAutoScroll] = useState(true);
-  // 'unknown' = haven't sent yet, 'direct' = PTY control, 'queued' = additionalContext fallback
-  const [inputMode, setInputMode] = useState<'unknown' | 'direct' | 'queued'>('unknown');
   // Show thinking indicator immediately after sending, before hook fires
   const [waitingForResponse, setWaitingForResponse] = useState(false);
   // Live ctx_pct from WS (overrides session prop when available)
@@ -328,7 +323,9 @@ export function LiveSessionPanel({
         } else if (msg.type === 'entry') {
           const parsed = parseEntry(msg.entry);
           if (parsed) {
-            setMessages((prev) => [...prev, parsed]);
+            setMessages((prev) =>
+              prev.some((m) => m.id === parsed.id) ? prev : [...prev, parsed],
+            );
           }
         } else if (msg.type === 'status') {
           setStatus(msg.status);
@@ -336,13 +333,6 @@ export function LiveSessionPanel({
           if (msg.status === 'thinking' || msg.status === 'executing' || msg.status === 'idle') {
             setWaitingForResponse(false);
           }
-        } else if (msg.type === 'injected') {
-          setInjectionPending(msg.queued);
-          setInputMode('queued');
-        } else if (msg.type === 'input_sent') {
-          // PTY direct input succeeded — clear pending since it was sent immediately
-          setInjectionPending(0);
-          setInputMode('direct');
         } else if (msg.type === 'ctx_pct') {
           setLiveCtxPct(msg.ctx_pct);
         }
@@ -364,7 +354,6 @@ export function LiveSessionPanel({
 
     wsRef.current.send(JSON.stringify({ type: 'inject', text }));
     setInputText('');
-    setInjectionPending((prev) => prev + 1);
     setWaitingForResponse(true);
     inputRef.current?.focus();
   }, [inputText]);
@@ -486,19 +475,8 @@ export function LiveSessionPanel({
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={
-                inputMode === 'direct'
-                  ? 'Send message to Claude...'
-                  : inputMode === 'queued'
-                    ? 'Queue context for next turn...'
-                    : 'Send message...'
-              }
-              className={cn(
-                'flex-1 rounded-md px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1',
-                inputMode === 'direct'
-                  ? 'bg-emerald-500/10 border border-emerald-500/30 focus:ring-emerald-500/50'
-                  : 'bg-muted/30 border border-border focus:ring-blue-500/50',
-              )}
+              placeholder="Send message to Claude..."
+              className="flex-1 rounded-md px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 bg-muted/30 border border-border focus:ring-blue-500/50"
               disabled={!connected}
             />
             <Button
@@ -511,16 +489,6 @@ export function LiveSessionPanel({
               <Send className="h-3.5 w-3.5" />
             </Button>
           </div>
-          {inputMode === 'direct' && (
-            <p className="max-w-3xl mx-auto mt-1 text-[10px] text-emerald-400/80">
-              Direct PTY control — messages sent to Claude immediately
-            </p>
-          )}
-          {injectionPending > 0 && inputMode !== 'direct' && (
-            <p className="max-w-3xl mx-auto mt-1 text-[10px] text-amber-400/80">
-              {injectionPending} message{injectionPending !== 1 ? 's' : ''} queued for next turn
-            </p>
-          )}
         </div>
       )}
     </div>
