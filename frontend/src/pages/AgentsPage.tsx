@@ -7,8 +7,8 @@
  *   Compositor        — horizontal scrolling terminal panes
  *   Events ticker     — compact event strip at bottom
  */
-import { useState, useCallback, useMemo, useEffect } from 'react';
-import { Bot, Clock, Plug, RefreshCw, Settings2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useState, useCallback, useMemo } from 'react';
+import { Bot, Clock, Plug, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type AgentSession, dismissSession, spawnSession, renameSession } from '@/services/daemon-api';
 import { useSessionPolling } from '@/hooks/useSessionPolling';
@@ -18,13 +18,7 @@ import { TerminalCompositor } from '@/components/agents/TerminalCompositor';
 import { EventsTicker } from '@/components/agents/EventsTicker';
 import { LiveSessionPanel } from '@/components/agents/LiveSessionPanel';
 import { CronbanView as CronbanViewReal } from '@/components/cronban/CronbanView';
-import { listConnectors, getConnectorConfig, saveConnectorConfig, type ConnectorInfo } from '@/services/connectors';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { ConnectorsPage } from '@/pages/ConnectorsPage';
 
 // ---------------------------------------------------------------------------
 // Nav
@@ -46,149 +40,8 @@ function CronbanView({ projectId }: { projectId?: string }) {
   return <CronbanViewReal projectId={projectId} />;
 }
 
-function ConnectorDialog({
-  connector,
-  onClose,
-  onSaved,
-}: {
-  connector: ConnectorInfo;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [fields, setFields] = useState<Record<string, string>>({});
-  const [enabled, setEnabled] = useState(connector.enabled);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getConnectorConfig(connector.name)
-      .then((cfg) => {
-        setEnabled(cfg['__enabled'] === 'true');
-        const rest: Record<string, string> = {};
-        for (const [k, v] of Object.entries(cfg)) {
-          if (!k.startsWith('__')) rest[k] = v;
-        }
-        setFields(rest);
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [connector.name]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      await saveConnectorConfig(connector.name, { ...fields, __enabled: enabled ? 'true' : 'false' });
-      onSaved();
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>{connector.display_name} Settings</DialogTitle>
-        </DialogHeader>
-        {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-        {loading ? (
-          <p className="text-sm text-muted-foreground py-4">Loading…</p>
-        ) : (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <Label>Enable connector</Label>
-              <Switch checked={enabled} onCheckedChange={setEnabled} />
-            </div>
-            {connector.credential_fields.map((field) => (
-              <div key={field.name} className="space-y-1">
-                <Label htmlFor={`f-${field.name}`}>{field.label}</Label>
-                <Input
-                  id={`f-${field.name}`}
-                  type={field.secret ? 'password' : 'text'}
-                  placeholder={field.secret && fields[field.name] === '••••••••' ? 'Already set — enter new value to change' : field.placeholder}
-                  value={fields[field.name] === '••••••••' ? '' : (fields[field.name] ?? '')}
-                  onChange={(e) => setFields((prev) => ({ ...prev, [field.name]: e.target.value }))}
-                />
-              </div>
-            ))}
-          </div>
-        )}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving || loading}>{saving ? 'Saving…' : 'Save'}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function ConnectorsView() {
-  const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [configuring, setConfiguring] = useState<ConnectorInfo | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try { setConnectors(await listConnectors()); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Failed to load'); }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  return (
-    <div className="h-full flex flex-col">
-      <div className="px-4 pt-4 pb-3 flex items-center gap-2 border-b border-border">
-        <Plug className="h-4 w-4 text-muted-foreground" />
-        <span className="text-sm font-semibold">Connectors</span>
-      </div>
-      <div className="p-4 space-y-3 overflow-y-auto flex-1">
-        {error && <p className="text-xs text-destructive">{error}</p>}
-        {loading && <p className="text-xs text-muted-foreground">Loading…</p>}
-        {!loading && !error && connectors.length === 0 && (
-          <p className="text-xs text-muted-foreground">No connectors registered.</p>
-        )}
-        <div className="grid grid-cols-2 gap-3">
-          {connectors.map((c) => (
-            <div key={c.name} className="rounded-md border border-border p-3 space-y-2">
-              <div className="flex items-center justify-between gap-1">
-                <span className="font-medium text-sm truncate">{c.display_name}</span>
-                <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" onClick={() => setConfiguring(c)}>
-                  <Settings2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-              <p className="text-[11px] text-muted-foreground">{c.description}</p>
-              <div>
-                {c.enabled && c.configured ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border text-emerald-400 bg-emerald-500/15 border-emerald-500/30">
-                    <CheckCircle2 className="h-2.5 w-2.5" />enabled
-                  </span>
-                ) : c.enabled ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border text-amber-400 bg-amber-500/15 border-amber-500/30">
-                    <AlertCircle className="h-2.5 w-2.5" />needs config
-                  </span>
-                ) : (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded border text-muted-foreground bg-muted/50 border-border">
-                    disabled
-                  </span>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-      {configuring && (
-        <ConnectorDialog connector={configuring} onClose={() => setConfiguring(null)} onSaved={load} />
-      )}
-    </div>
-  );
+  return <ConnectorsPage />;
 }
 
 // ---------------------------------------------------------------------------
