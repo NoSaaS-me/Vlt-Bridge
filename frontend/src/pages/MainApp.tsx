@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle, List, AlertCircle, Upload, Bot, Plug } from 'lucide-react';
+import { Plus, Settings as SettingsIcon, FolderPlus, MessageCircle, List, AlertCircle, Upload, Bot } from 'lucide-react';
 import { useFontSize } from '@/hooks/useFontSize';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Button } from '@/components/ui/button';
@@ -845,9 +845,6 @@ export function MainApp() {
               className="transition-all duration-250 ease-out"
             >
               <Network className="h-4 w-4 transition-transform duration-250" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => navigate('/connectors')} title="Connectors">
-              <Plug className="h-4 w-4" />
             </Button>
             {/* [S] Settings button */}
             <Button data-tour="settings-button" variant="ghost" size="sm" onClick={() => navigate('/settings')}>

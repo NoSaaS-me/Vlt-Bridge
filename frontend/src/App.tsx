@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { MainApp } from './pages/MainApp';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
-import { ConnectorsPage } from './pages/ConnectorsPage';
 import { isAuthenticated, getCurrentUser, setAuthTokenFromHash, ensureDemoToken, isDemoSession } from './services/auth';
 import { AuthLoadingSkeleton } from './components/AuthLoadingSkeleton';
 import { Toaster } from './components/ui/toaster';
@@ -109,16 +108,6 @@ function App() {
                 <ProtectedRoute>
                   <ProjectProvider>
                     <Settings />
-                  </ProjectProvider>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/connectors"
-              element={
-                <ProtectedRoute>
-                  <ProjectProvider>
-                    <ConnectorsPage />
                   </ProjectProvider>
                 </ProtectedRoute>
               }
