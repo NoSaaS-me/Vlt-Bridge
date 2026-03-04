@@ -5,7 +5,7 @@
  * The "+" button opens a popover with options to find existing sessions
  * or spawn a new one.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Bot, Plus, WifiOff, Search, Sparkles } from 'lucide-react';
 import { type AgentSession } from '@/services/daemon-api';
 import { Separator } from '@/components/ui/separator';
@@ -51,11 +51,28 @@ export function SessionSidebar({
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [findDialogOpen, setFindDialogOpen] = useState(false);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [showHistory, setShowHistory] = useState(() => {
+    try { return localStorage.getItem('vlt:livechat:showHistory') === 'true'; } catch { return false; }
+  });
 
-  // All non-dead sessions in one list, sorted by activity.
-  const liveSessions = sessions
+  // Sync with Settings page changes via storage event
+  useEffect(() => {
+    const handler = (e: StorageEvent) => {
+      if (e.key === 'vlt:livechat:showHistory') setShowHistory(e.newValue === 'true');
+    };
+    window.addEventListener('storage', handler);
+    return () => window.removeEventListener('storage', handler);
+  }, []);
+
+  // All non-dead sessions sorted by activity.
+  const allSessions = sessions
     .filter((s) => s.status !== 'dead')
     .sort((a, b) => new Date(b.last_activity).getTime() - new Date(a.last_activity).getTime());
+
+  // When history is hidden, only show actively running sessions.
+  const liveSessions = showHistory
+    ? allSessions
+    : allSessions.filter((s) => s.status === 'thinking' || s.status === 'executing');
 
   return (
     <div className="h-full flex flex-col bg-background/50 border-r border-border">
@@ -141,10 +158,21 @@ export function SessionSidebar({
         ) : liveSessions.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 px-3 text-center">
             <Bot className="h-6 w-6 text-muted-foreground/30 mb-2" />
-            <p className="text-[10px] text-muted-foreground">No sessions for this project</p>
-            <p className="mt-1 text-[9px] text-muted-foreground/60">
-              Use + to find or start a session
-            </p>
+            {!showHistory && allSessions.length > 0 ? (
+              <>
+                <p className="text-[10px] text-muted-foreground">No active sessions</p>
+                <p className="mt-1 text-[9px] text-muted-foreground/60">
+                  Enable history in Settings → Agents
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-[10px] text-muted-foreground">No sessions for this project</p>
+                <p className="mt-1 text-[9px] text-muted-foreground/60">
+                  Use + to find or start a session
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="p-2 space-y-1">

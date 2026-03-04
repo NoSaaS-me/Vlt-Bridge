@@ -5,7 +5,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Copy, RefreshCw, Check, Save, Github } from 'lucide-react';
+import { ArrowLeft, Copy, RefreshCw, Check, Save, Github, Bot } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -36,6 +36,51 @@ import { SystemLogs } from '@/components/SystemLogs';
 import { CronbanSettings } from '@/components/cronban/CronbanSettings';
 import { TtsSettings } from '@/components/TtsSettings';
 import { useProjectContext } from '@/contexts/ProjectContext';
+
+const SHOW_HISTORY_KEY = 'vlt:livechat:showHistory';
+
+function AgentsSettings() {
+  const [showHistory, setShowHistory] = useState<boolean>(() => {
+    try { return localStorage.getItem(SHOW_HISTORY_KEY) === 'true'; } catch { return false; }
+  });
+
+  const handleToggle = (val: boolean) => {
+    setShowHistory(val);
+    try {
+      localStorage.setItem(SHOW_HISTORY_KEY, String(val));
+      // Notify same-tab listeners (storage event only fires cross-tab)
+      window.dispatchEvent(new StorageEvent('storage', { key: SHOW_HISTORY_KEY, newValue: String(val) }));
+    } catch {}
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Bot className="h-5 w-5 text-muted-foreground" />
+            <CardTitle>Agent Chat</CardTitle>
+          </div>
+          <CardDescription>
+            Settings for the live agent chat panel.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">Show session history</p>
+              <p className="text-xs text-muted-foreground">
+                When enabled, the chat panel loads previous messages from the transcript on connect.
+                Off by default so you see only new messages.
+              </p>
+            </div>
+            <Switch checked={showHistory} onCheckedChange={handleToggle} />
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 export function Settings() {
   const navigate = useNavigate();
@@ -495,7 +540,7 @@ export function Settings() {
         )}
 
         <Tabs defaultValue="account" className="w-full">
-          <TabsList data-tour="settings-tabs" className="grid w-full grid-cols-8">
+          <TabsList data-tour="settings-tabs" className="flex w-full overflow-x-auto h-auto flex-wrap gap-0">
             <TabsTrigger data-tour="settings-account-tab" value="account">Account</TabsTrigger>
             <TabsTrigger data-tour="settings-models-tab" value="models">Models</TabsTrigger>
             <TabsTrigger value="context">Context</TabsTrigger>
@@ -504,6 +549,7 @@ export function Settings() {
             <TabsTrigger data-tour="settings-oracle-tab" value="oracle">Oracle</TabsTrigger>
             <TabsTrigger value="cronban">Cronban</TabsTrigger>
             <TabsTrigger value="tts">TTS</TabsTrigger>
+            <TabsTrigger value="agents">Agents</TabsTrigger>
           </TabsList>
 
           <TabsContent value="account" className="space-y-6 mt-6">
@@ -1445,6 +1491,10 @@ export function Settings() {
 
           <TabsContent value="tts" className="space-y-6 mt-6">
             <TtsSettings />
+          </TabsContent>
+
+          <TabsContent value="agents" className="space-y-6 mt-6">
+            <AgentsSettings />
           </TabsContent>
         </Tabs>
       </div>

@@ -15,7 +15,6 @@ import {
   X,
   ChevronDown,
   ChevronRight,
-  History,
 } from 'lucide-react';
 
 const SHOW_HISTORY_KEY = 'vlt:livechat:showHistory';
@@ -295,7 +294,7 @@ export function LiveSessionPanel({
   const [waitingForResponse, setWaitingForResponse] = useState(false);
   // Live ctx_pct from WS (overrides session prop when available)
   const [liveCtxPct, setLiveCtxPct] = useState<number | null>(session.ctx_pct);
-  const [showHistory, toggleShowHistory] = useShowHistory();
+  const [showHistory] = useShowHistory();
 
   const wsRef = useRef<WebSocket | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -437,15 +436,6 @@ export function LiveSessionPanel({
           <span className="text-[10px] text-muted-foreground">
             {messages.filter((m) => !m.historical).length} messages
           </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn('h-6 w-6 p-0', showHistory && 'text-amber-400')}
-            title={showHistory ? 'Hide history' : 'Show history'}
-            onClick={toggleShowHistory}
-          >
-            <History className="h-3.5 w-3.5" />
-          </Button>
           <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>
             <X className="h-3.5 w-3.5" />
           </Button>
@@ -467,12 +457,9 @@ export function LiveSessionPanel({
                 <Loader2 className="h-8 w-8 text-muted-foreground/30 animate-spin mb-3" />
                 <p className="text-sm text-muted-foreground">Waiting for new messages…</p>
                 {messages.some((m) => m.historical) && (
-                  <button
-                    className="mt-3 text-xs text-muted-foreground underline"
-                    onClick={toggleShowHistory}
-                  >
-                    Show session history
-                  </button>
+                  <p className="mt-2 text-xs text-muted-foreground/60">
+                    Enable "Show session history" in Settings → Agents to see past messages.
+                  </p>
                 )}
               </div>
             );
