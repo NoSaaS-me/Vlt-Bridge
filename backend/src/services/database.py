@@ -327,6 +327,17 @@ DDL_STATEMENTS: tuple[str, ...] = (
         tokenize='porter unicode61'
     )
     """,
+    # Connector configs (023-connectors)
+    """
+    CREATE TABLE IF NOT EXISTS connector_configs (
+        user_id        TEXT NOT NULL,
+        connector_name TEXT NOT NULL,
+        config_key     TEXT NOT NULL,
+        config_value   TEXT,
+        PRIMARY KEY (user_id, connector_name, config_key)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_connector_configs_user ON connector_configs(user_id, connector_name)",
 )
 
 # Migration statements for existing databases
@@ -363,6 +374,15 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE user_settings ADD COLUMN tts_voice_id TEXT",
     "ALTER TABLE user_settings ADD COLUMN tts_model TEXT DEFAULT 'eleven_multilingual_v2'",
     "ALTER TABLE user_settings ADD COLUMN elevenlabs_api_key TEXT",
+    # Add connector_configs table (023-connectors)
+    """CREATE TABLE IF NOT EXISTS connector_configs (
+        user_id        TEXT NOT NULL,
+        connector_name TEXT NOT NULL,
+        config_key     TEXT NOT NULL,
+        config_value   TEXT,
+        PRIMARY KEY (user_id, connector_name, config_key)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_connector_configs_user ON connector_configs(user_id, connector_name)",
 )
 
 
