@@ -334,7 +334,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         connector_name TEXT NOT NULL,
         config_key     TEXT NOT NULL,
         config_value   TEXT,
-        updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at     TEXT,
         PRIMARY KEY (user_id, connector_name, config_key)
     )
     """,
@@ -381,10 +381,12 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
         connector_name TEXT NOT NULL,
         config_key     TEXT NOT NULL,
         config_value   TEXT,
-        updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at     TEXT,
         PRIMARY KEY (user_id, connector_name, config_key)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_connector_configs_user ON connector_configs(user_id, connector_name)",
+    # Add updated_at column to existing connector_configs tables (023-connectors patch)
+    "ALTER TABLE connector_configs ADD COLUMN updated_at TEXT",
 )
 
 
