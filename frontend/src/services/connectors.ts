@@ -7,6 +7,8 @@ export interface CredentialField {
   label: string;
   secret: boolean;
   placeholder: string;
+  field_type?: string;   // "text" | "select", defaults to "text"
+  options?: string[];    // only for select type
 }
 
 export interface ConnectorParam {

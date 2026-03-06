@@ -49,6 +49,7 @@
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 import unicodedata
 from typing import Any
@@ -98,6 +99,25 @@ def _injection_scan(text: str) -> bool:
     return hits >= _INJECTION_THRESHOLD
 
 
+def _apply_filter(value: str, patterns: list[str], mode: str) -> bool:
+    """Return True if the message should be INCLUDED (not filtered out).
+
+    mode="allow_all": always True
+    mode="whitelist": True if value matches ANY pattern
+    mode="blacklist": True if value matches NO pattern
+
+    Patterns support fnmatch wildcards: * and *@domain.com
+    """
+    if mode == "allow_all" or not patterns:
+        return True
+    matched = any(fnmatch.fnmatch(value, p) for p in patterns)
+    if mode == "whitelist":
+        return matched
+    if mode == "blacklist":
+        return not matched
+    return True  # default allow
+
+
 class MailgunConnector(BaseConnector):
     name = "mailgun"
     display_name = "Mailgun"
@@ -106,8 +126,36 @@ class MailgunConnector(BaseConnector):
         CredentialField(name="api_key", label="API Key", secret=True, placeholder="key-..."),
         CredentialField(name="domain", label="Mailgun Domain", secret=False, placeholder="mg.yourdomain.com"),
         CredentialField(name="from_address", label="Default From Address", secret=False, placeholder="noreply@mg.yourdomain.com"),
-        CredentialField(name="from_whitelist", label="Inbox: Allowed Senders (comma-separated)", secret=False, placeholder="alice@example.com, bob@company.com"),
-        CredentialField(name="subject_whitelist", label="Inbox: Allowed Subject Keywords (comma-separated)", secret=False, placeholder="invoice, support, order"),
+        # FROM FILTER
+        CredentialField(
+            name="from_filter_mode",
+            label="Sender Filter Mode",
+            secret=False,
+            placeholder="",
+            field_type="select",
+            options=["allow_all", "whitelist", "blacklist"],
+        ),
+        CredentialField(
+            name="from_filter_list",
+            label="Sender Filter Patterns (comma-separated, supports * and *@domain.com)",
+            secret=False,
+            placeholder="*@trusted.com, billing@stripe.com, *",
+        ),
+        # SUBJECT FILTER
+        CredentialField(
+            name="subject_filter_mode",
+            label="Subject Filter Mode",
+            secret=False,
+            placeholder="",
+            field_type="select",
+            options=["allow_all", "whitelist", "blacklist"],
+        ),
+        CredentialField(
+            name="subject_filter_list",
+            label="Subject Filter Keywords (comma-separated, supports *)",
+            secret=False,
+            placeholder="invoice, support, *order*",
+        ),
     ]
     actions = [
         ConnectorAction(
@@ -226,17 +274,12 @@ class MailgunConnector(BaseConnector):
                 detail = resp.text[:200]
             return {"success": False, "error": f"Mailgun error {resp.status_code}: {detail}"}
 
-        # Build whitelist filters from credentials (empty = allow all)
-        from_whitelist = [
-            f.strip().lower()
-            for f in credentials.get("from_whitelist", "").split(",")
-            if f.strip()
-        ]
-        subject_whitelist = [
-            s.strip().lower()
-            for s in credentials.get("subject_whitelist", "").split(",")
-            if s.strip()
-        ]
+        # Build filter config from credentials
+        from_mode = credentials.get("from_filter_mode", "allow_all").strip() or "allow_all"
+        from_patterns = [p.strip().lower() for p in credentials.get("from_filter_list", "").split(",") if p.strip()]
+
+        subject_mode = credentials.get("subject_filter_mode", "allow_all").strip() or "allow_all"
+        subject_patterns = [p.strip().lower() for p in credentials.get("subject_filter_list", "").split(",") if p.strip()]
 
         items = resp.json().get("items", [])
         messages = []
@@ -245,14 +288,12 @@ class MailgunConnector(BaseConnector):
             storage = item.get("storage", {})
             sender = headers.get("from", "").lower()
             subject_raw = headers.get("subject", "")
-
-            # Apply from whitelist (if configured)
-            if from_whitelist and not any(allowed in sender for allowed in from_whitelist):
-                continue
-
-            # Apply subject whitelist (if configured) — use lowercased version for matching
             subject_lower = subject_raw.lower()
-            if subject_whitelist and not any(kw in subject_lower for kw in subject_whitelist):
+
+            # Apply sender and subject filters
+            if not _apply_filter(sender, from_patterns, from_mode):
+                continue
+            if not _apply_filter(subject_lower, subject_patterns, subject_mode):
                 continue
 
             # Tier 1: strip invisible chars from subject and from header

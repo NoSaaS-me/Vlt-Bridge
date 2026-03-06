@@ -96,19 +96,34 @@ function ConnectorSettingsDialog({
             {connector.credential_fields.map((field) => (
               <div key={field.name} className="space-y-1">
                 <Label htmlFor={`field-${field.name}`}>{field.label}</Label>
-                <Input
-                  id={`field-${field.name}`}
-                  type={field.secret ? 'password' : 'text'}
-                  placeholder={
-                    field.secret && fields[field.name] === '••••••••'
-                      ? 'Already set — enter new value to change'
-                      : field.placeholder
-                  }
-                  value={fields[field.name] === '••••••••' ? '' : (fields[field.name] ?? '')}
-                  onChange={(e) =>
-                    setFields((prev) => ({ ...prev, [field.name]: e.target.value }))
-                  }
-                />
+                {field.field_type === 'select' ? (
+                  <select
+                    id={`field-${field.name}`}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+                    value={fields[field.name] ?? field.options?.[0] ?? ''}
+                    onChange={(e) => setFields((prev) => ({ ...prev, [field.name]: e.target.value }))}
+                  >
+                    {(field.options ?? []).map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt === 'allow_all' ? 'Allow All' : opt.charAt(0).toUpperCase() + opt.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input
+                    id={`field-${field.name}`}
+                    type={field.secret ? 'password' : 'text'}
+                    placeholder={
+                      field.secret && fields[field.name] === '••••••••'
+                        ? 'Already set — enter new value to change'
+                        : field.placeholder
+                    }
+                    value={fields[field.name] === '••••••••' ? '' : (fields[field.name] ?? '')}
+                    onChange={(e) =>
+                      setFields((prev) => ({ ...prev, [field.name]: e.target.value }))
+                    }
+                  />
+                )}
               </div>
             ))}
           </div>

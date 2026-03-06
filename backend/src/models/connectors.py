@@ -12,6 +12,8 @@ class CredentialField(BaseModel):
     label: str
     secret: bool = True
     placeholder: str = ""
+    field_type: str = "text"       # "text" | "select"
+    options: list[str] = Field(default_factory=list)  # only used when field_type="select"
 
 
 class ConnectorParam(BaseModel):
