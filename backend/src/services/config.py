@@ -81,6 +81,14 @@ class AppConfig(BaseModel):
         description="Base URL for the application (used for widget asset URLs, OAuth redirects in production)"
     )
 
+    connector_encryption_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "Fernet key for encrypting connector credentials at rest (CONNECTOR_ENCRYPTION_KEY). "
+            "If unset, derived from JWT_SECRET_KEY via HKDF."
+        ),
+    )
+
     # BT Oracle Configuration (020-bt-oracle-agent)
     # Note: oracle_use_bt removed - BT is now the only implementation
     oracle_prompt_budget: int = Field(
@@ -151,6 +159,9 @@ def get_config() -> AppConfig:
     # Base URL for application (for widget URLs, etc.)
     base_url = _read_env("BASE_URL", "http://localhost:8000")
 
+    # Connector encryption key (Phase 2)
+    connector_encryption_key = _read_env("CONNECTOR_ENCRYPTION_KEY")
+
     # BT Oracle configuration (020-bt-oracle-agent)
     oracle_prompt_budget_str = _read_env("ORACLE_PROMPT_BUDGET", "8000")
     try:
@@ -173,6 +184,8 @@ def get_config() -> AppConfig:
         frame_options=frame_options,
         admin_user_ids=admin_user_ids,
         base_url=base_url,
+        # Connector encryption (Phase 2)
+        connector_encryption_key=connector_encryption_key,
         # BT Oracle (020-bt-oracle-agent)
         oracle_prompt_budget=oracle_prompt_budget,
     )

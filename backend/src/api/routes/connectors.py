@@ -74,8 +74,30 @@ async def update_connector_config(
     registry = get_registry()
     if not registry.get(connector_name):
         raise HTTPException(status_code=404, detail=f"Connector '{connector_name}' not found")
-    svc.set_config(auth.user_id, connector_name, body.config)
+    # Filter out masked placeholder values so existing encrypted secrets are not overwritten.
+    filtered = {k: v for k, v in body.config.items() if v != "••••••••"}
+    svc.set_config(auth.user_id, connector_name, filtered)
     return {"connector": connector_name, "saved": True}
+
+
+@router.get("/{connector_name}/credentials")
+async def get_connector_credentials(
+    connector_name: str,
+    auth: AuthContext = Depends(require_auth_context),
+    svc: ConnectorService = Depends(get_connector_service),
+) -> dict:
+    """
+    Get decrypted credentials for a connector (for daemon/service use).
+    Returns only non-metadata keys (no __ prefixed keys).
+    Requires a valid Bearer token — daemon uses LOCAL_USER_ID-scoped token.
+    """
+    registry = get_registry()
+    connector = registry.get(connector_name)
+    if not connector:
+        raise HTTPException(status_code=404, detail=f"Connector '{connector_name}' not found")
+
+    credentials = svc.get_credentials(auth.user_id, connector_name)
+    return {"connector": connector_name, "credentials": credentials}
 
 
 @router.post("/{connector_name}/invoke", response_model=ConnectorInvokeResponse)
