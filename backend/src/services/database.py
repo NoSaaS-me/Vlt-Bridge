@@ -339,6 +339,17 @@ DDL_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_connector_configs_user ON connector_configs(user_id, connector_name)",
+    # OAuth2 CSRF state table (023-connectors Phase 3)
+    """
+    CREATE TABLE IF NOT EXISTS oauth_states (
+        state          TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL,
+        connector_name TEXT NOT NULL,
+        created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        expires_at     TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_oauth_states_user ON oauth_states(user_id, connector_name)",
 )
 
 # Migration statements for existing databases
@@ -387,6 +398,15 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_connector_configs_user ON connector_configs(user_id, connector_name)",
     # Add updated_at column to existing connector_configs tables (023-connectors patch)
     "ALTER TABLE connector_configs ADD COLUMN updated_at TEXT",
+    # oauth_states table for OAuth2 CSRF token validation (023-connectors Phase 3)
+    """CREATE TABLE IF NOT EXISTS oauth_states (
+        state          TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL,
+        connector_name TEXT NOT NULL,
+        created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        expires_at     TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_oauth_states_user ON oauth_states(user_id, connector_name)",
 )
 
 
