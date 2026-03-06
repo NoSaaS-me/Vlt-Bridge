@@ -1,0 +1,87 @@
+[connector]
+name = "github"
+display_name = "GitHub"
+description = "GitHub repository, issue, and pull request management via the GitHub REST API."
+auth_type = "api_key"
+
+[[credential_fields]]
+name = "api_key"
+label = "Personal Access Token"
+secret = true
+placeholder = "ghp_..."
+
+[[actions]]
+name = "list_repos"
+description = "List the authenticated user's repositories."
+method = "GET"
+url = "https://api.github.com/user/repos"
+auth_header = "Authorization: token {api_key}"
+
+  [[actions.params]]
+  name = "per_page"
+  description = "Number of results per page (max 100)"
+  required = false
+  default = "30"
+
+  [[actions.params]]
+  name = "sort"
+  description = "Sort by: created, updated, pushed, full_name"
+  required = false
+  default = "updated"
+
+[[actions]]
+name = "create_issue"
+description = "Create a new issue in a GitHub repository."
+method = "POST"
+url = "https://api.github.com/repos/{owner}/{repo}/issues"
+auth_header = "Authorization: token {api_key}"
+
+  [[actions.params]]
+  name = "owner"
+  description = "Repository owner (username or org)"
+  required = true
+
+  [[actions.params]]
+  name = "repo"
+  description = "Repository name"
+  required = true
+
+  [[actions.params]]
+  name = "title"
+  description = "Issue title"
+  required = true
+
+  [[actions.params]]
+  name = "body"
+  description = "Issue body in Markdown"
+  required = false
+  default = ""
+
+  [[actions.params]]
+  name = "labels"
+  description = "Comma-separated label names"
+  required = false
+  default = ""
+
+[[actions]]
+name = "list_issues"
+description = "List issues for a repository."
+method = "GET"
+url = "https://api.github.com/repos/{owner}/{repo}/issues"
+auth_header = "Authorization: token {api_key}"
+
+  [[actions.params]]
+  name = "owner"
+  description = "Repository owner"
+  required = true
+
+  [[actions.params]]
+  name = "repo"
+  description = "Repository name"
+  required = true
+
+  [[actions.params]]
+  name = "state"
+  description = "Issue state: open, closed, all"
+  required = false
+  default = "open"

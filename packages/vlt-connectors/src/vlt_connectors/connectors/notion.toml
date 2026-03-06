@@ -1,0 +1,64 @@
+[connector]
+name = "notion"
+display_name = "Notion"
+description = "Search and create pages in Notion workspaces via the Notion API."
+auth_type = "api_key"
+
+[[credential_fields]]
+name = "api_key"
+label = "Integration Token"
+secret = true
+placeholder = "secret_..."
+
+[[credential_fields]]
+name = "notion_version"
+label = "Notion API Version"
+secret = false
+placeholder = "2022-06-28"
+
+[[actions]]
+name = "search"
+description = "Search Notion pages and databases by title."
+method = "POST"
+url = "https://api.notion.com/v1/search"
+auth_header = "Authorization: Bearer {api_key}"
+
+  [[actions.params]]
+  name = "query"
+  description = "Search query string"
+  required = true
+
+  [[actions.params]]
+  name = "page_size"
+  description = "Number of results (max 100)"
+  required = false
+  default = "10"
+
+[[actions]]
+name = "get_page"
+description = "Get a Notion page by ID."
+method = "GET"
+url = "https://api.notion.com/v1/pages/{page_id}"
+auth_header = "Authorization: Bearer {api_key}"
+
+  [[actions.params]]
+  name = "page_id"
+  description = "Notion page ID (UUID)"
+  required = true
+
+[[actions]]
+name = "create_page"
+description = "Create a new page in a Notion database."
+method = "POST"
+url = "https://api.notion.com/v1/pages"
+auth_header = "Authorization: Bearer {api_key}"
+
+  [[actions.params]]
+  name = "database_id"
+  description = "Target database ID"
+  required = true
+
+  [[actions.params]]
+  name = "title"
+  description = "Page title"
+  required = true

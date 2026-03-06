@@ -27,6 +27,13 @@ class ConnectorRegistry:
             self.register_service(HuggingFaceInferenceConnector())
         except ImportError:
             pass
+        # Load built-in declarative TOML connectors
+        from pathlib import Path
+        from .declarative import load_connectors_from_dir
+        connectors_dir = Path(__file__).parent / "connectors"
+        if connectors_dir.exists():
+            for c in load_connectors_from_dir(connectors_dir):
+                self.register_action(c)
 
     def register_action(self, connector: "ActionConnector") -> None:
         self._action[connector.name] = connector
