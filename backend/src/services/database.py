@@ -346,7 +346,8 @@ DDL_STATEMENTS: tuple[str, ...] = (
         user_id        TEXT NOT NULL,
         connector_name TEXT NOT NULL,
         created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-        expires_at     TEXT NOT NULL
+        expires_at     TEXT NOT NULL,
+        pkce_verifier  TEXT
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_oauth_states_user ON oauth_states(user_id, connector_name)",
@@ -404,9 +405,12 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
         user_id        TEXT NOT NULL,
         connector_name TEXT NOT NULL,
         created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-        expires_at     TEXT NOT NULL
+        expires_at     TEXT NOT NULL,
+        pkce_verifier  TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS ix_oauth_states_user ON oauth_states(user_id, connector_name)",
+    # Add pkce_verifier column to existing oauth_states tables (023-connectors Phase 5 fix)
+    "ALTER TABLE oauth_states ADD COLUMN pkce_verifier TEXT",
 )
 
 

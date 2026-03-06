@@ -99,28 +99,10 @@ async def oauth_authorize(
     try:
         conn.execute(
             """INSERT OR REPLACE INTO oauth_states
-               (state, user_id, connector_name, created_at, expires_at)
-               VALUES (?, ?, ?, datetime('now'), ?)""",
-            (state, auth.user_id, connector_name, expires_at),
+               (state, user_id, connector_name, created_at, expires_at, pkce_verifier)
+               VALUES (?, ?, ?, datetime('now'), ?, ?)""",
+            (state, auth.user_id, connector_name, expires_at, pkce_verifier),
         )
-        # Store PKCE verifier alongside the state if present
-        if pkce_verifier:
-            # We abuse a second row with a synthetic key so we don't change the schema
-            conn.execute(
-                """INSERT OR REPLACE INTO oauth_states
-                   (state, user_id, connector_name, created_at, expires_at)
-                   VALUES (?, ?, ?, datetime('now'), ?)""",
-                (f"pkce:{state}", auth.user_id, connector_name, expires_at),
-            )
-            # Store verifier value as a config key on the state row by repurposing
-            # the user_id field — actually, we need to store the verifier value.
-            # Use a separate UPDATE to pack it into the state row connector_name field
-            # is taken. Instead, store a companion row keyed by "pkce:{state}" and
-            # encode the verifier in the user_id column (harmless, deleted after use).
-            conn.execute(
-                """UPDATE oauth_states SET user_id=? WHERE state=?""",
-                (pkce_verifier, f"pkce:{state}"),
-            )
         # Purge expired states
         conn.execute("DELETE FROM oauth_states WHERE expires_at < datetime('now')")
         conn.commit()
@@ -165,7 +147,7 @@ async def oauth_callback(
     conn = db.connect()
     try:
         row = conn.execute(
-            "SELECT user_id, expires_at FROM oauth_states WHERE state=? AND connector_name=?",
+            "SELECT user_id, expires_at, pkce_verifier FROM oauth_states WHERE state=? AND connector_name=?",
             (state, connector_name),
         ).fetchone()
         if not row:
@@ -180,15 +162,11 @@ async def oauth_callback(
             conn.commit()
             raise HTTPException(status_code=400, detail="OAuth state expired")
 
-        # Retrieve PKCE verifier if present
-        pkce_row = conn.execute(
-            "SELECT user_id FROM oauth_states WHERE state=?",
-            (f"pkce:{state}",),
-        ).fetchone()
-        pkce_verifier: Optional[str] = pkce_row["user_id"] if pkce_row else None
+        # Read PKCE verifier from the dedicated column
+        pkce_verifier: Optional[str] = row["pkce_verifier"]
 
-        # Delete used state rows
-        conn.execute("DELETE FROM oauth_states WHERE state=? OR state=?", (state, f"pkce:{state}"))
+        # Delete used state row
+        conn.execute("DELETE FROM oauth_states WHERE state=?", (state,))
         conn.commit()
     finally:
         conn.close()
