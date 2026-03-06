@@ -56,8 +56,8 @@ from typing import Any
 
 import httpx
 
-from .base import BaseConnector
-from ..models.connectors import ConnectorAction, ConnectorParam, CredentialField
+from ..base import ActionConnector
+from ..models import ConnectorAction, ConnectorParam, CredentialField
 
 MAILGUN_API_BASE = "https://api.mailgun.net/v3"
 
@@ -118,7 +118,7 @@ def _apply_filter(value: str, patterns: list[str], mode: str) -> bool:
     return True  # default allow
 
 
-class MailgunConnector(BaseConnector):
+class MailgunConnector(ActionConnector):
     name = "mailgun"
     display_name = "Mailgun"
     description = "Send and receive emails via the Mailgun API. Supports inbox reading for inbound messages stored by a Mailgun Route."

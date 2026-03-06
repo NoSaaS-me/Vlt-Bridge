@@ -43,7 +43,7 @@ def _get_redirect_uri(request: Request, connector_name: str) -> str:
 
 
 def _get_connector_or_404(connector_name: str):
-    from ...connectors.registry import get_registry
+    from vlt_connectors.registry import get_registry
     connector = get_registry().get(connector_name)
     if not connector:
         raise HTTPException(status_code=404, detail=f"Connector '{connector_name}' not found")

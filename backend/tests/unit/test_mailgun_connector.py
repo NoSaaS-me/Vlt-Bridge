@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from backend.src.connectors.mailgun import MailgunConnector
+from vlt_connectors.connectors.mailgun import MailgunConnector
 
 
 def test_mailgun_has_send_email_action():
@@ -24,7 +24,7 @@ async def test_mailgun_send_email_success():
     mock_response.status_code = 200
     mock_response.json.return_value = {"id": "<msg-id>", "message": "Queued"}
 
-    with patch("backend.src.connectors.mailgun.httpx.AsyncClient") as mock_client_cls:
+    with patch("vlt_connectors.connectors.mailgun.httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)

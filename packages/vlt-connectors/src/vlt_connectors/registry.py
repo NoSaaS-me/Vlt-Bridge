@@ -19,9 +19,10 @@ class ConnectorRegistry:
     def _load_defaults(self) -> None:
         """Load built-in connectors."""
         try:
-            from .connectors.mailgun import MailgunConnector  # stays in backend for now
-        except ImportError:
-            pass
+            from .connectors.mailgun import MailgunConnector
+            self.register_action(MailgunConnector())
+        except ImportError as e:
+            logger.warning("Could not load MailgunConnector: %s", e)
         try:
             from .service.huggingface import HuggingFaceInferenceConnector
             self.register_service(HuggingFaceInferenceConnector())
@@ -54,11 +55,19 @@ class ConnectorRegistry:
     def get_service(self, name: str) -> "ServiceConnector | None":
         return self._service.get(name)
 
+    def get(self, name: str) -> "ActionConnector | None":
+        """Compatibility shim: look up by name across action connectors."""
+        return self._action.get(name)
+
     def list_action_connectors(self) -> list["ActionConnector"]:
         return list(self._action.values())
 
     def list_service_connectors(self) -> list["ServiceConnector"]:
         return list(self._service.values())
+
+    def list_all(self) -> list["ActionConnector"]:
+        """Compatibility shim: return all action connectors (matches old backend registry API)."""
+        return list(self._action.values())
 
 
 def get_registry() -> ConnectorRegistry:

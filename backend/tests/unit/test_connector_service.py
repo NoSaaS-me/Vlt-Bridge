@@ -47,7 +47,7 @@ def test_get_credentials_excludes_enabled_key(svc):
 
 
 def test_is_configured_requires_all_required_fields(svc):
-    from backend.src.connectors.mailgun import MailgunConnector
+    from vlt_connectors.connectors.mailgun import MailgunConnector
     conn = MailgunConnector()
     # No credentials set — not configured
     assert svc.is_configured("user1", conn) is False

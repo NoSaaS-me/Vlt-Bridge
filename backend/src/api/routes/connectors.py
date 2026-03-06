@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..middleware import AuthContext, require_auth_context
-from ...connectors.registry import get_registry
+from vlt_connectors.registry import get_registry
 from ...models.connectors import (
     ConnectorInfo,
     ConnectorListResponse,

@@ -8,7 +8,7 @@ from cryptography.fernet import Fernet
 from fastapi import Depends
 
 from .database import DatabaseService, get_db_service
-from ..connectors.base import BaseConnector
+from vlt_connectors.base import BaseConnector
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class ConnectorService:
 
     def _get_secret_field_names(self, connector_name: str) -> set[str]:
         """Return config_key names that are secret=True for this connector."""
-        from ..connectors.registry import get_registry
+        from vlt_connectors.registry import get_registry
         connector = get_registry().get(connector_name)
         if connector is None:
             return set()
