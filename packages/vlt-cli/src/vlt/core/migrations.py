@@ -459,6 +459,53 @@ def apply_pipeline_migrations():
         except Exception:
             pass  # Already exists
 
+        # gate_id on cron_triggers (idempotent)
+        try:
+            conn.execute(text("ALTER TABLE cron_triggers ADD COLUMN gate_id TEXT"))
+        except Exception:
+            pass  # Already exists
+
+        # skill_id / prompt_text / gate_id on pipeline_cards (idempotent)
+        try:
+            conn.execute(text("ALTER TABLE pipeline_cards ADD COLUMN skill_id TEXT"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE pipeline_cards ADD COLUMN prompt_text TEXT"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE pipeline_cards ADD COLUMN gate_id TEXT"))
+        except Exception:
+            pass
+
+        # WebhookListener connector columns (idempotent)
+        for col in ["connector_name TEXT", "pattern_filter_json TEXT", "backend_user_id TEXT"]:
+            try:
+                conn.execute(text(f"ALTER TABLE webhook_listeners ADD COLUMN {col}"))
+            except Exception:
+                pass  # Already exists
+
+        # Webhook event log table
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS webhook_event_logs (
+                id TEXT PRIMARY KEY,
+                listener_id TEXT NOT NULL,
+                connector_name TEXT,
+                event_type TEXT,
+                received_at TEXT NOT NULL,
+                matched INTEGER NOT NULL DEFAULT 0,
+                match_details TEXT,
+                fields_json TEXT,
+                fired INTEGER NOT NULL DEFAULT 0,
+                fire_log_id TEXT
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_webhook_event_logs_listener "
+            "ON webhook_event_logs(listener_id, received_at DESC)"
+        ))
+
         conn.commit()
 
         # ── Data migration (only if new tables are empty) ─────────────────

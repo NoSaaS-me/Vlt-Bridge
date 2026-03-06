@@ -1,8 +1,28 @@
 """Connector base classes."""
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from dataclasses import dataclass, field as dataclass_field
+from typing import Any, ClassVar, Optional
 from .models import CredentialField, ConnectorAction, ConnectorInfo
+
+
+@dataclass
+class WebhookEventDef:
+    """Definition of one type of webhook event this connector can emit."""
+    event_type: str
+    description: str
+    fields: list[str]
+    example_fields: dict[str, str] = dataclass_field(default_factory=dict)
+
+
+@dataclass
+class ConnectorEvent:
+    """A parsed webhook event from a connector."""
+    connector: str
+    event_type: str
+    timestamp: str
+    fields: dict[str, str]
+    raw_payload: dict
 
 
 class BaseConnector(ABC):
@@ -31,12 +51,20 @@ class BaseConnector(ABC):
 class ActionConnector(BaseConnector):
     """User/agent-triggered action connectors. Exposed via connector_call MCP tool."""
     connector_type: ClassVar[str] = "action"
-    webhook_events: ClassVar[list] = []  # non-empty = also a webhook source
+    webhook_events: ClassVar[list[WebhookEventDef]] = []  # non-empty = also a webhook source
 
     @abstractmethod
     async def invoke(self, action: str, params: dict[str, Any], credentials: dict[str, str]) -> dict:
         """Invoke a named action with user-provided params and decrypted credentials."""
         ...
+
+    def verify_webhook(self, headers: dict[str, str], body_bytes: bytes, credentials: dict[str, str]) -> bool:
+        """Verify webhook signature. Default: no verification (subclass overrides)."""
+        return True
+
+    def parse_webhook(self, headers: dict[str, str], body_bytes: bytes, credentials: dict[str, str]) -> Optional[ConnectorEvent]:
+        """Parse raw webhook into a ConnectorEvent. Default: not implemented."""
+        return None
 
 
 class ServiceConnector(BaseConnector):

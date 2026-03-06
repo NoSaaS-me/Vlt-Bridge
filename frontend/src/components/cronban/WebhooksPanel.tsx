@@ -5,12 +5,17 @@
  * that can be triggered by external systems (CI/CD, error handlers, etc.).
  * Optional HMAC-SHA256 auth via webhook_secret.
  *
+ * Connector-bound webhooks additionally expose a backend endpoint at
+ * /api/webhooks/connector/{id} that verifies HMAC, applies pattern filters,
+ * and injects event variables into the prompt before forwarding to the daemon.
+ *
  * Layout:
  *   - Left: list of webhook listeners
- *   - Right: editor (name, skill/prompt, pipeline, secret, target session)
+ *   - Right: editor (name, skill/prompt, pipeline, secret, target session,
+ *             connector binding, pattern filter)
  */
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Webhook, Trash2, Zap, Copy, Eye, EyeOff } from 'lucide-react';
+import { Plus, Webhook, Trash2, Zap, Copy, Eye, EyeOff, Plug } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +29,7 @@ import {
   fireWebhook,
   listSkills,
 } from '@/services/cronban-api';
+import { type ConnectorInfo, listConnectors } from '@/services/connectors';
 
 // ---------------------------------------------------------------------------
 // Webhook list item
@@ -57,6 +63,7 @@ function WebhookListItem({
         <p className="text-[10px] text-muted-foreground mt-0.5">
           {webhook.fire_count > 0 ? `Fired ${webhook.fire_count}×` : 'Never fired'}
           {webhook.has_secret && ' · 🔒'}
+          {webhook.connector_name && ` · ${webhook.connector_name}`}
           {webhook.pipeline_id && ' · pipeline'}
         </p>
       </div>
@@ -81,15 +88,78 @@ function WebhookListItem({
 }
 
 // ---------------------------------------------------------------------------
+// Pattern condition row
+// ---------------------------------------------------------------------------
+interface Condition {
+  field: string;
+  operator: string;
+  value: string;
+}
+
+const OPERATORS = [
+  'equals', 'contains', 'starts_with', 'ends_with',
+  'glob', 'regex', 'not_equals', 'not_contains',
+] as const;
+
+function ConditionRow({
+  condition,
+  fieldHints,
+  onChange,
+  onRemove,
+}: {
+  condition: Condition;
+  fieldHints: string[];
+  onChange: (c: Condition) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <input
+        list="field-hints"
+        value={condition.field}
+        onChange={(e) => onChange({ ...condition, field: e.target.value })}
+        placeholder="field"
+        className="flex-1 min-w-0 h-7 rounded border border-border bg-background px-2 text-xs"
+      />
+      <datalist id="field-hints">
+        {fieldHints.map((f) => <option key={f} value={f} />)}
+      </datalist>
+      <select
+        value={condition.operator}
+        onChange={(e) => onChange({ ...condition, operator: e.target.value })}
+        className="h-7 rounded border border-border bg-background px-1.5 text-xs"
+      >
+        {OPERATORS.map((op) => <option key={op} value={op}>{op}</option>)}
+      </select>
+      <Input
+        value={condition.value}
+        onChange={(e) => onChange({ ...condition, value: e.target.value })}
+        placeholder="value"
+        className="flex-1 min-w-0 h-7 text-xs"
+      />
+      <button
+        onClick={onRemove}
+        className="p-1 rounded text-muted-foreground hover:text-destructive transition-colors shrink-0"
+        title="Remove condition"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Webhook editor
 // ---------------------------------------------------------------------------
 function WebhookEditor({
   webhook,
   skills,
+  connectors,
   onSave,
 }: {
   webhook: WebhookListener;
   skills: CronbanSkill[];
+  connectors: ConnectorInfo[];
   onSave: (data: Partial<WebhookListener> & { webhook_secret?: string; prompt_text?: string }) => void;
 }) {
   const [name, setName] = useState(webhook.name);
@@ -97,6 +167,15 @@ function WebhookEditor({
   const [skillId, setSkillId] = useState(webhook.skill_id ?? '');
   const [secretDraft, setSecretDraft] = useState('');
   const [showSecret, setShowSecret] = useState(false);
+  const [connectorName, setConnectorName] = useState(webhook.connector_name ?? '');
+  const [backendUserId, setBackendUserId] = useState(webhook.backend_user_id ?? '');
+  const [conditions, setConditions] = useState<Condition[]>(() => {
+    if (!webhook.pattern_filter_json) return [];
+    try {
+      const parsed = JSON.parse(webhook.pattern_filter_json);
+      return parsed.conditions ?? [];
+    } catch { return []; }
+  });
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
@@ -104,24 +183,43 @@ function WebhookEditor({
     setStatus(webhook.status);
     setSkillId(webhook.skill_id ?? '');
     setSecretDraft('');
+    setConnectorName(webhook.connector_name ?? '');
+    setBackendUserId(webhook.backend_user_id ?? '');
+    try {
+      const parsed = webhook.pattern_filter_json ? JSON.parse(webhook.pattern_filter_json) : null;
+      setConditions(parsed?.conditions ?? []);
+    } catch { setConditions([]); }
     setDirty(false);
   }, [webhook.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mark = () => setDirty(true);
 
+  // Field hints from selected connector's webhook_events
+  const selectedConnector = connectors.find((c) => c.name === connectorName);
+  const fieldHints: string[] = (selectedConnector as any)?.webhook_events?.flatMap((e: any) => e.fields ?? []) ?? [];
+
   const handleSave = () => {
+    const patternFilterJson = conditions.length > 0
+      ? JSON.stringify({ conditions })
+      : null;
+
     const data: Parameters<typeof onSave>[0] = {
       name,
       status,
       skill_id: skillId || undefined,
+      connector_name: connectorName || null,
+      backend_user_id: backendUserId || null,
+      pattern_filter_json: patternFilterJson,
     };
     if (secretDraft) data.webhook_secret = secretDraft;
     onSave(data);
     setDirty(false);
   };
 
-  // Endpoint URL (displayed, not functional from UI)
-  const endpointPath = `/vlt/api/cronban/webhooks/${webhook.id}/fire`;
+  // Fire endpoint — manual
+  const manualEndpointPath = `/vlt/api/cronban/webhooks/${webhook.id}/fire`;
+  // Connector webhook endpoint — hits the backend for HMAC verify + pattern filter
+  const connectorEndpointPath = `/api/webhooks/connector/${webhook.id}`;
 
   return (
     <div className="flex-1 p-4 space-y-4 overflow-y-auto">
@@ -203,25 +301,134 @@ function WebhookEditor({
           </div>
         </div>
 
-        {/* Endpoint */}
-        <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">Fire endpoint</label>
-          <div className="flex items-center gap-1.5 bg-muted/30 rounded border border-border px-2.5 py-1.5">
-            <code className="text-[10px] font-mono text-muted-foreground flex-1 truncate">
-              POST {endpointPath}
-            </code>
-            <button
-              onClick={() => navigator.clipboard.writeText(endpointPath)}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-              title="Copy path"
-            >
-              <Copy className="h-3 w-3" />
-            </button>
+        {/* ── Connector Binding ─────────────────────────────────────── */}
+        <div className="border border-border rounded-md p-3 space-y-3">
+          <div className="flex items-center gap-1.5">
+            <Plug className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Connector binding
+            </span>
           </div>
-          <p className="text-[10px] text-muted-foreground">
-            Optional body: {'{ "append_message": "…" }'}
-            {webhook.has_secret && ', "signature": "sha256=…"'}
-          </p>
+
+          {/* Connector selector */}
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Connector</label>
+            <select
+              value={connectorName}
+              onChange={(e) => { setConnectorName(e.target.value); setConditions([]); mark(); }}
+              className="w-full h-8 rounded border border-border bg-background text-sm px-2"
+            >
+              <option value="">— none (generic webhook) —</option>
+              {connectors
+                .filter((c) => c.connector_type !== 'service')
+                .map((c) => (
+                  <option key={c.name} value={c.name}>{c.display_name}</option>
+                ))}
+            </select>
+            {connectorName && (
+              <p className="text-[10px] text-muted-foreground">
+                Webhook URL shown below handles HMAC verification + pattern filtering.
+              </p>
+            )}
+          </div>
+
+          {/* Backend user ID (only shown when connector is set) */}
+          {connectorName && (
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Backend user ID</label>
+              <Input
+                value={backendUserId}
+                onChange={(e) => { setBackendUserId(e.target.value); mark(); }}
+                placeholder="local-dev"
+                className="h-8 text-sm font-mono"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                The user whose connector credentials are used for HMAC verification.
+              </p>
+            </div>
+          )}
+
+          {/* Pattern filter (only shown when connector is set) */}
+          {connectorName && (
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">
+                Pattern filter{' '}
+                <span className="text-muted-foreground/60">(all conditions AND-matched)</span>
+              </label>
+              <div className="space-y-1.5">
+                {conditions.map((cond, i) => (
+                  <ConditionRow
+                    key={i}
+                    condition={cond}
+                    fieldHints={fieldHints}
+                    onChange={(c) => { const next = [...conditions]; next[i] = c; setConditions(next); mark(); }}
+                    onRemove={() => { setConditions(conditions.filter((_, j) => j !== i)); mark(); }}
+                  />
+                ))}
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1"
+                onClick={() => { setConditions([...conditions, { field: '', operator: 'contains', value: '' }]); mark(); }}
+              >
+                <Plus className="h-3 w-3" />
+                Add condition
+              </Button>
+              {fieldHints.length > 0 && (
+                <p className="text-[10px] text-muted-foreground">
+                  Available fields: {fieldHints.join(', ')}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Endpoint URLs */}
+        <div className="space-y-2">
+          {connectorName ? (
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Connector webhook URL</label>
+              <div className="flex items-center gap-1.5 bg-blue-500/5 border border-blue-500/20 rounded px-2.5 py-1.5">
+                <code className="text-[10px] font-mono text-blue-400 flex-1 truncate">
+                  POST {connectorEndpointPath}
+                </code>
+                <button
+                  onClick={() => navigator.clipboard.writeText(connectorEndpointPath)}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Copy path"
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Configure this URL in your connector's webhook settings (e.g. Mailgun Routes).
+                Handles HMAC verification, pattern filtering, and variable injection automatically.
+              </p>
+            </div>
+          ) : null}
+
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">
+              {connectorName ? 'Manual fire endpoint' : 'Fire endpoint'}
+            </label>
+            <div className="flex items-center gap-1.5 bg-muted/30 rounded border border-border px-2.5 py-1.5">
+              <code className="text-[10px] font-mono text-muted-foreground flex-1 truncate">
+                POST {manualEndpointPath}
+              </code>
+              <button
+                onClick={() => navigator.clipboard.writeText(manualEndpointPath)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+                title="Copy path"
+              >
+                <Copy className="h-3 w-3" />
+              </button>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Optional body: {'{ "append_message": "…" }'}
+              {webhook.has_secret && ', "signature": "sha256=…"'}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -240,18 +447,21 @@ function WebhookEditor({
 export function WebhooksPanel({ projectId }: { projectId?: string }) {
   const [webhooks, setWebhooks] = useState<WebhookListener[]>([]);
   const [skills, setSkills] = useState<CronbanSkill[]>([]);
+  const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
   const [selected, setSelected] = useState<WebhookListener | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [ws, ss] = await Promise.all([
+      const [ws, ss, cs] = await Promise.all([
         listWebhooks(projectId),
         listSkills(projectId),
+        listConnectors().catch(() => [] as ConnectorInfo[]),
       ]);
       setWebhooks(ws);
       setSkills(ss);
+      setConnectors(cs);
       if (!selected && ws.length > 0) setSelected(ws[0]);
     } finally {
       setLoading(false);
@@ -356,6 +566,7 @@ export function WebhooksPanel({ projectId }: { projectId?: string }) {
           key={selected.id}
           webhook={selected}
           skills={skills}
+          connectors={connectors}
           onSave={handleSave}
         />
       ) : (

@@ -28,6 +28,11 @@ class ConnectorRegistry:
             self.register_service(HuggingFaceInferenceConnector())
         except ImportError:
             pass
+        try:
+            from .service.ollama import OllamaConnector
+            self.register_service(OllamaConnector())
+        except ImportError:
+            pass
         # Load built-in declarative TOML connectors
         from pathlib import Path
         from .declarative import load_connectors_from_dir

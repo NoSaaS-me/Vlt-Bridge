@@ -642,6 +642,11 @@ class PipelineCard(Base):
     color: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     current_stage_id: Mapped[str] = mapped_column(String)                    # FK → pipeline_stages.id
     status: Mapped[str] = mapped_column(String, default="active")            # active/completed/paused/failed
+    # Card-level action override (takes priority over stage skill/prompt when set)
+    skill_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)   # FK → cronban_skills.id
+    prompt_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Inline fallback
+    # Card-level gate override (takes priority over stage gate when set)
+    gate_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)    # FK → cronban_gates.id
     # Agent target
     target_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     target_cwd: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -676,6 +681,7 @@ class CronTrigger(Base):
     pipeline_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)   # FK → pipelines.id
     skill_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)      # FK → cronban_skills.id
     prompt_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)     # Inline fallback
+    gate_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)       # FK → cronban_gates.id
     # Schedule
     cron_expression: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     rrule_str: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -719,6 +725,10 @@ class WebhookListener(Base):
     target_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     target_cwd: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     create_new_session: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Connector binding (for external service webhooks, e.g. Mailgun)
+    connector_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    pattern_filter_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    backend_user_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # Stats
     fire_count: Mapped[int] = mapped_column(Integer, default=0)
     last_fired_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)

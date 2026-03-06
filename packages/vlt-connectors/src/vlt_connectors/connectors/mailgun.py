@@ -50,13 +50,15 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import hmac as _hmac
 import re
 import unicodedata
-from typing import Any
+from typing import Any, ClassVar, Optional
 
 import httpx
 
-from ..base import ActionConnector
+from ..base import ActionConnector, ConnectorEvent, WebhookEventDef
 from ..models import ConnectorAction, ConnectorParam, CredentialField
 
 MAILGUN_API_BASE = "https://api.mailgun.net/v3"
@@ -188,6 +190,92 @@ class MailgunConnector(ActionConnector):
             ],
         ),
     ]
+    webhook_events: ClassVar[list[WebhookEventDef]] = [
+        WebhookEventDef(
+            event_type="inbound_email",
+            description="Inbound email received and stored by Mailgun route",
+            fields=["sender", "recipient", "subject", "from_domain", "body_preview", "attachment_count", "message_id"],
+            example_fields={
+                "sender": "billing@stripe.com",
+                "recipient": "inbox@mg.yourdomain.com",
+                "subject": "Invoice #12345",
+                "from_domain": "stripe.com",
+                "body_preview": "Your payment of $99.00...",
+                "attachment_count": "1",
+            },
+        ),
+        WebhookEventDef(
+            event_type="delivery_status",
+            description="Email delivery status update (delivered/bounced/dropped)",
+            fields=["event", "recipient", "message_id", "reason", "severity"],
+            example_fields={"event": "delivered", "recipient": "user@example.com"},
+        ),
+    ]
+
+    def verify_webhook(self, headers: dict[str, str], body_bytes: bytes, credentials: dict[str, str]) -> bool:
+        """Verify Mailgun webhook HMAC-SHA256 signature."""
+        import json
+        api_key = credentials.get("api_key", "")
+        if not api_key:
+            return False
+        try:
+            body = json.loads(body_bytes)
+        except (json.JSONDecodeError, ValueError):
+            return False
+        sig_data = body.get("signature", {})
+        timestamp = sig_data.get("timestamp", "")
+        token = sig_data.get("token", "")
+        signature = sig_data.get("signature", "")
+        if not (timestamp and token and signature):
+            # Inbound route form-post — no HMAC verification available, allow through
+            return True
+        expected = _hmac.new(api_key.encode(), f"{timestamp}{token}".encode(), hashlib.sha256).hexdigest()
+        return _hmac.compare_digest(signature, expected)
+
+    def parse_webhook(self, headers: dict[str, str], body_bytes: bytes, credentials: dict[str, str]) -> Optional[ConnectorEvent]:
+        """Parse a raw Mailgun webhook payload into a ConnectorEvent."""
+        import json
+        from datetime import datetime, timezone
+        try:
+            body = json.loads(body_bytes)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        event_data = body.get("event-data", body)
+        if "sender" in event_data or "from" in event_data:
+            sender = event_data.get("sender") or event_data.get("from", "")
+            from_domain = sender.split("@")[-1] if "@" in sender else ""
+            fields = {
+                "sender": sender,
+                "recipient": event_data.get("recipient", ""),
+                "subject": event_data.get("subject", ""),
+                "from_domain": from_domain,
+                "body_preview": event_data.get("body-plain", "")[:300],
+                "attachment_count": str(event_data.get("attachment-count", 0)),
+                "message_id": event_data.get("Message-Id", ""),
+            }
+            return ConnectorEvent(
+                connector="mailgun",
+                event_type="inbound_email",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                fields=fields,
+                raw_payload=body,
+            )
+        event_type = event_data.get("event", "unknown")
+        msg_headers = event_data.get("message", {}).get("headers", {})
+        fields = {
+            "event": event_type,
+            "recipient": event_data.get("recipient", ""),
+            "message_id": msg_headers.get("message-id", ""),
+            "reason": event_data.get("reason", ""),
+            "severity": event_data.get("severity", ""),
+        }
+        return ConnectorEvent(
+            connector="mailgun",
+            event_type=event_type,
+            timestamp=str(event_data.get("timestamp", datetime.now(timezone.utc).isoformat())),
+            fields=fields,
+            raw_payload=body,
+        )
 
     async def invoke(self, action: str, params: dict[str, Any], credentials: dict[str, str]) -> dict:
         if action == "list_inbox":

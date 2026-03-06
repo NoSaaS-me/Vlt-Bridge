@@ -19,6 +19,8 @@ import {
   type Pipeline,
   type PipelineStage,
   type PipelineCard,
+  type CronbanSkill,
+  type CronbanGate,
   listPipelines,
   getPipeline,
   createPipeline,
@@ -31,7 +33,10 @@ import {
   createCard,
   advanceCard,
   deleteCard,
+  listSkills,
+  listGates,
 } from '@/services/cronban-api';
+import { type AgentSession, listSessions } from '@/services/daemon-api';
 
 // ---------------------------------------------------------------------------
 // New pipeline prompt
@@ -301,49 +306,239 @@ function StageHeader({
 // ---------------------------------------------------------------------------
 // New Card inline creator
 // ---------------------------------------------------------------------------
-function NewCardInput({ onCreate }: { onCreate: (title: string) => void }) {
-  const [open, setOpen] = useState(false);
+interface NewCardData {
+  title: string;
+  prompt_text?: string;
+  skill_id?: string;
+  gate_id?: string;
+  target_session_id?: string;
+  target_cwd?: string;
+}
+
+function NewCardDialog({
+  open,
+  onClose,
+  onCreate,
+  projectId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreate: (data: NewCardData) => void;
+  projectId?: string;
+}) {
   const [title, setTitle] = useState('');
+  const [promptText, setPromptText] = useState('');
+  const [skillId, setSkillId] = useState('');
+  const [gateId, setGateId] = useState('');
+  const [skills, setSkills] = useState<CronbanSkill[]>([]);
+  const [gates, setGates] = useState<CronbanGate[]>([]);
+  const [sessions, setSessions] = useState<AgentSession[]>([]);
+  const [targetSessionId, setTargetSessionId] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setTitle('');
+    setPromptText('');
+    setSkillId('');
+    setGateId('');
+    setTargetSessionId('');
+    setTimeout(() => inputRef.current?.focus(), 0);
+    Promise.all([listSkills(projectId), listGates(projectId), listSessions()])
+      .then(([s, g, sess]) => {
+        setSkills(s);
+        setGates(g);
+        setSessions(sess.filter((s) => s.status !== 'dead'));
+      })
+      .catch(console.error);
+  }, [open, projectId]);
+
+  if (!open) return null;
 
   const handleCreate = () => {
     const t = title.trim();
     if (!t) return;
-    onCreate(t);
-    setTitle('');
-    setOpen(false);
+    onCreate({
+      title: t,
+      prompt_text: promptText.trim() || undefined,
+      skill_id: skillId || undefined,
+      gate_id: gateId || undefined,
+      target_session_id: targetSessionId || undefined,
+    });
+    onClose();
   };
 
-  if (!open) {
-    return (
-      <button
-        className="w-full text-left px-2 py-1.5 text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1.5 rounded hover:bg-muted/30 transition-colors"
-        onClick={() => { setOpen(true); setTimeout(() => inputRef.current?.focus(), 0); }}
-      >
-        <Plus className="h-3 w-3" /> Add card
-      </button>
-    );
-  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-full max-w-sm rounded-lg border border-border bg-popover shadow-2xl">
+        <div className="flex items-center justify-between px-4 pt-4 pb-3">
+          <h2 className="text-sm font-semibold">New Card</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="px-4 pb-4 space-y-3">
+          {/* Title */}
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Title</label>
+            <Input
+              ref={inputRef}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') onClose(); }}
+              placeholder="What needs to be done?"
+              className="h-8 text-sm"
+            />
+          </div>
+
+          {/* Action: prompt or skill */}
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">
+              Action <span className="text-muted-foreground/60">(prompt sent to Claude when card enters a stage)</span>
+            </label>
+            {skills.length > 0 && (
+              <select
+                value={skillId}
+                onChange={(e) => setSkillId(e.target.value)}
+                className="w-full h-8 text-xs bg-background border border-border rounded px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-ring mb-1"
+              >
+                <option value="">— Use custom prompt below —</option>
+                {skills.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+            <textarea
+              value={promptText}
+              onChange={(e) => setPromptText(e.target.value)}
+              placeholder={skillId ? 'Override with custom prompt (optional)…' : 'Describe what Claude should do…'}
+              rows={3}
+              className="w-full text-xs bg-background border border-border rounded px-2 py-1.5 resize-y text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+
+          {/* Gate */}
+          {gates.length > 0 && (
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">
+                Gate <span className="text-muted-foreground/60">(completion criterion)</span>
+              </label>
+              <select
+                value={gateId}
+                onChange={(e) => setGateId(e.target.value)}
+                className="w-full h-8 text-xs bg-background border border-border rounded px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="">— None —</option>
+                {gates.map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Session target */}
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">
+              Session <span className="text-muted-foreground/60">(relay or SDK target)</span>
+            </label>
+            <select
+              value={targetSessionId}
+              onChange={(e) => setTargetSessionId(e.target.value)}
+              className="w-full h-8 text-xs bg-background border border-border rounded px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="">— Any available session —</option>
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id.slice(0, 8)} [{s.source}]
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button size="sm" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button size="sm" onClick={handleCreate} disabled={!title.trim()}>Create</Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stage column — owns newCardOpen state so header + and bottom link both work
+// ---------------------------------------------------------------------------
+function StageColumn({
+  stage,
+  stageCards,
+  stages,
+  advancingIds,
+  projectId,
+  onNewCard,
+  onAdvanceCard,
+  onDeleteCard,
+  onRenameStage,
+  onDeleteStage,
+  onToggleTerminal,
+}: {
+  stage: PipelineStage;
+  stageCards: PipelineCard[];
+  stages: PipelineStage[];
+  advancingIds: Set<string>;
+  projectId?: string;
+  onNewCard: (stageId: string, data: NewCardData) => void;
+  onAdvanceCard: (cardId: string, stageId?: string) => void;
+  onDeleteCard: (cardId: string) => void;
+  onRenameStage: (stageId: string, name: string) => void;
+  onDeleteStage: (stageId: string) => void;
+  onToggleTerminal: (stageId: string, isTerminal: boolean) => void;
+}) {
+  const [newCardOpen, setNewCardOpen] = useState(false);
 
   return (
-    <div className="flex items-center gap-1 p-1">
-      <Input
-        ref={inputRef}
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') handleCreate();
-          if (e.key === 'Escape') { setOpen(false); setTitle(''); }
-        }}
-        placeholder="Card title…"
-        className="h-7 text-xs flex-1"
+    <div className={cn(
+      'flex flex-col w-72 shrink-0 rounded-lg border border-border overflow-hidden',
+      stage.is_terminal ? 'bg-emerald-500/5' : 'bg-muted/20',
+    )}>
+      <NewCardDialog
+        open={newCardOpen}
+        onClose={() => setNewCardOpen(false)}
+        onCreate={(data) => onNewCard(stage.id, data)}
+        projectId={projectId}
       />
-      <Button size="sm" className="h-7 px-2" onClick={handleCreate} disabled={!title.trim()}>
-        <Check className="h-3.5 w-3.5" />
-      </Button>
-      <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => { setOpen(false); setTitle(''); }}>
-        <X className="h-3.5 w-3.5" />
-      </Button>
+      <StageHeader
+        stage={stage}
+        count={stageCards.length}
+        onNewCard={() => setNewCardOpen(true)}
+        onRename={(name) => onRenameStage(stage.id, name)}
+        onDelete={() => onDeleteStage(stage.id)}
+        onToggleTerminal={() => onToggleTerminal(stage.id, stage.is_terminal)}
+      />
+      <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-24">
+        {stageCards.length === 0 && (
+          <div className="border-2 border-dashed border-border rounded-md p-3 text-center text-muted-foreground text-xs">
+            No cards
+          </div>
+        )}
+        {stageCards.map((card) => (
+          <KanbanCard
+            key={card.id}
+            card={card}
+            stages={stages}
+            isAdvancing={advancingIds.has(card.id)}
+            onAdvance={onAdvanceCard}
+            onDelete={onDeleteCard}
+          />
+        ))}
+        {!stage.is_terminal && (
+          <button
+            className="w-full text-left px-2 py-1.5 text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1.5 rounded hover:bg-muted/30 transition-colors"
+            onClick={() => setNewCardOpen(true)}
+          >
+            <Plus className="h-3 w-3" /> Add card
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -545,14 +740,18 @@ export function KanbanBoard({
   }, []);
 
   // ─── Card operations ───────────────────────────────────────────────────
-  const handleNewCard = useCallback(async (stageId: string, title: string) => {
+  const handleNewCard = useCallback(async (stageId: string, data: NewCardData) => {
     if (!selected) return;
     try {
       const card = await createCard({
         pipeline_id: selected.id,
         project_id: projectId,
-        title,
+        title: data.title,
         stage_id: stageId,
+        prompt_text: data.prompt_text,
+        skill_id: data.skill_id,
+        gate_id: data.gate_id,
+        target_session_id: data.target_session_id,
       });
       setCards((prev) => [...prev, card]);
     } catch (e) {
@@ -685,47 +884,22 @@ export function KanbanBoard({
       {/* Board */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden p-4">
         <div className="flex gap-3 h-full items-start">
-          {sortedStages.map((stage) => {
-            const stageCards = cards.filter((c) => c.current_stage_id === stage.id);
-            return (
-              <div
-                key={stage.id}
-                className={cn(
-                  'flex flex-col w-72 shrink-0 rounded-lg border border-border overflow-hidden',
-                  stage.is_terminal ? 'bg-emerald-500/5' : 'bg-muted/20',
-                )}
-              >
-                <StageHeader
-                  stage={stage}
-                  count={stageCards.length}
-                  onNewCard={() => undefined}
-                  onRename={(name) => handleRenameStage(stage.id, name)}
-                  onDelete={() => handleDeleteStage(stage.id)}
-                  onToggleTerminal={() => handleToggleTerminal(stage.id, stage.is_terminal)}
-                />
-                <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-24">
-                  {stageCards.length === 0 && (
-                    <div className="border-2 border-dashed border-border rounded-md p-3 text-center text-muted-foreground text-xs">
-                      No cards
-                    </div>
-                  )}
-                  {stageCards.map((card) => (
-                    <KanbanCard
-                      key={card.id}
-                      card={card}
-                      stages={sortedStages}
-                      isAdvancing={advancingIds.has(card.id)}
-                      onAdvance={handleAdvanceCard}
-                      onDelete={handleDeleteCard}
-                    />
-                  ))}
-                  {!stage.is_terminal && (
-                    <NewCardInput onCreate={(title) => handleNewCard(stage.id, title)} />
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {sortedStages.map((stage) => (
+            <StageColumn
+              key={stage.id}
+              stage={stage}
+              stageCards={cards.filter((c) => c.current_stage_id === stage.id)}
+              stages={sortedStages}
+              advancingIds={advancingIds}
+              projectId={projectId}
+              onNewCard={handleNewCard}
+              onAdvanceCard={handleAdvanceCard}
+              onDeleteCard={handleDeleteCard}
+              onRenameStage={handleRenameStage}
+              onDeleteStage={handleDeleteStage}
+              onToggleTerminal={handleToggleTerminal}
+            />
+          ))}
 
           {/* New stage button */}
           <div className="shrink-0 flex items-start pt-1">

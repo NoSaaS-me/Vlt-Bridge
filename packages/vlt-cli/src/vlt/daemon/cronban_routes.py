@@ -116,6 +116,9 @@ def _card_to_dict(c: PipelineCard) -> dict:
         "color": c.color,
         "current_stage_id": c.current_stage_id,
         "status": c.status,
+        "skill_id": c.skill_id,
+        "has_prompt": bool(c.prompt_text),
+        "gate_id": c.gate_id,
         "target_session_id": c.target_session_id,
         "target_cwd": c.target_cwd,
         "gate_eval_pending": bool(c.gate_eval_pending),
@@ -139,6 +142,7 @@ def _cron_to_dict(c: CronTrigger) -> dict:
         "pipeline_id": c.pipeline_id,
         "skill_id": c.skill_id,
         "has_prompt": bool(c.prompt_text),
+        "gate_id": c.gate_id,
         "cron_expression": c.cron_expression,
         "rrule_str": c.rrule_str,
         "next_fire_at": c.next_fire_at,
@@ -162,11 +166,15 @@ def _webhook_to_dict(w: WebhookListener) -> dict:
         "status": w.status,
         "pipeline_id": w.pipeline_id,
         "skill_id": w.skill_id,
+        "prompt_text": w.prompt_text,
         "has_prompt": bool(w.prompt_text),
         "has_secret": bool(w.webhook_secret),
         "target_session_id": w.target_session_id,
         "target_cwd": w.target_cwd,
         "create_new_session": bool(w.create_new_session),
+        "connector_name": w.connector_name,
+        "pattern_filter_json": w.pattern_filter_json,
+        "backend_user_id": w.backend_user_id,
         "fire_count": w.fire_count,
         "last_fired_at": w.last_fired_at,
         "created_at": w.created_at,
@@ -216,13 +224,10 @@ async def _dispatch_to_session(
     create_new: bool,
 ) -> Optional[str]:
     """
-    Send a prompt to a session via the SDK subprocess path.
-
-    Cron/webhook dispatch NEVER uses relay inject (_session_inject_queues) because
-    that mechanism types keystrokes into the user's interactive PTY terminal.
-    All automated messages go through SDK sessions (persistent subprocesses).
+    Send a prompt to a session.
 
     Routing:
+      0. Relay session active → inject via _session_inject_queues (PTY stdin).
       1. SDK session already running → write to stdin directly.
       2. Session exists in DB → spawn SDK session with --resume.
       3. create_new=True → spawn fresh session via /api/sessions/spawn.
@@ -240,6 +245,13 @@ async def _dispatch_to_session(
         _spawn_sdk_session = _srv._spawn_sdk_session
 
         if target_session_id:
+            # 0. Relay session — inject text into the PTY queue
+            _relay_queues = getattr(_srv, '_session_inject_queues', {})
+            if target_session_id in _relay_queues:
+                await _relay_queues[target_session_id].put((prompt + "\n").encode())
+                logger.info(f"_dispatch: relay inject for {target_session_id}")
+                return target_session_id
+
             # 1. Already running — write to stdin directly
             sdk = _sdk_sessions.get(target_session_id)
             if sdk and sdk["proc"].returncode is None:
@@ -883,6 +895,9 @@ async def create_card(request: Request):
             color=body.get("color"),
             current_stage_id=stage_id,
             status="active",
+            skill_id=body.get("skill_id"),
+            prompt_text=body.get("prompt_text"),
+            gate_id=body.get("gate_id"),
             target_session_id=body.get("target_session_id"),
             target_cwd=body.get("target_cwd"),
         )
@@ -908,7 +923,8 @@ async def update_card(card_id: str, request: Request):
         c = db.get(PipelineCard, card_id)
         if not c:
             raise HTTPException(404, "Card not found")
-        for field in ("title", "color", "status", "target_session_id", "target_cwd"):
+        for field in ("title", "color", "status", "skill_id", "prompt_text", "gate_id",
+                      "target_session_id", "target_cwd"):
             if field in body:
                 setattr(c, field, body[field])
         c.updated_at = _now()
@@ -1031,6 +1047,7 @@ async def create_cron(request: Request):
             pipeline_id=body.get("pipeline_id"),
             skill_id=body.get("skill_id"),
             prompt_text=body.get("prompt_text"),
+            gate_id=body.get("gate_id"),
             cron_expression=cron_expr,
             rrule_str=rrule,
             next_fire_at=next_fire,
@@ -1063,8 +1080,8 @@ async def update_cron(cron_id: str, request: Request):
         if not t:
             raise HTTPException(404, "Cron trigger not found")
         for field in ("title", "status", "color", "pipeline_id", "skill_id", "prompt_text",
-                      "cron_expression", "rrule_str", "timezone", "target_session_id",
-                      "target_cwd"):
+                      "gate_id", "cron_expression", "rrule_str", "timezone",
+                      "target_session_id", "target_cwd"):
             if field in body:
                 setattr(t, field, body[field])
         if "create_new_session" in body:
@@ -1145,6 +1162,9 @@ async def create_webhook(request: Request):
             target_session_id=body.get("target_session_id"),
             target_cwd=body.get("target_cwd"),
             create_new_session=bool(body.get("create_new_session", False)),
+            connector_name=body.get("connector_name"),
+            pattern_filter_json=body.get("pattern_filter_json"),
+            backend_user_id=body.get("backend_user_id"),
         )
         db.add(w)
         db.commit()
@@ -1169,7 +1189,8 @@ async def update_webhook(webhook_id: str, request: Request):
         if not w:
             raise HTTPException(404, "Webhook listener not found")
         for field in ("name", "status", "pipeline_id", "skill_id", "prompt_text",
-                      "webhook_secret", "target_session_id", "target_cwd"):
+                      "webhook_secret", "target_session_id", "target_cwd",
+                      "connector_name", "pattern_filter_json", "backend_user_id"):
             if field in body:
                 setattr(w, field, body[field])
         if "create_new_session" in body:

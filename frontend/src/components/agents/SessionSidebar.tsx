@@ -69,10 +69,10 @@ export function SessionSidebar({
     .filter((s) => s.status !== 'dead')
     .sort((a, b) => new Date(b.last_activity).getTime() - new Date(a.last_activity).getTime());
 
-  // When history is hidden, only show actively running sessions.
+  // When history is hidden, show actively running sessions + all relay sessions (always visible).
   const liveSessions = showHistory
     ? allSessions
-    : allSessions.filter((s) => s.status === 'thinking' || s.status === 'executing');
+    : allSessions.filter((s) => s.status === 'thinking' || s.status === 'executing' || s.source === 'relay');
 
   return (
     <div className="h-full flex flex-col bg-background/50 border-r border-border">

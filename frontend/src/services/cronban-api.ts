@@ -66,6 +66,9 @@ export interface PipelineCard {
   color: string | null;
   current_stage_id: string;
   status: 'active' | 'completed' | 'paused' | 'failed';
+  skill_id: string | null;
+  has_prompt: boolean;
+  gate_id: string | null;
   target_session_id: string | null;
   target_cwd: string | null;
   gate_eval_pending: boolean;
@@ -91,6 +94,7 @@ export interface CronTrigger {
   pipeline_id: string | null;
   skill_id: string | null;
   has_prompt: boolean;
+  gate_id: string | null;
   fire_once: boolean;
   cron_expression: string | null;
   rrule_str: string | null;
@@ -113,6 +117,7 @@ export interface WebhookListener {
   pipeline_id: string | null;
   skill_id: string | null;
   has_prompt: boolean;
+  prompt_text: string | null;
   has_secret: boolean;
   target_session_id: string | null;
   target_cwd: string | null;
@@ -121,6 +126,10 @@ export interface WebhookListener {
   last_fired_at: string | null;
   created_at: string;
   updated_at: string;
+  // Connector binding
+  connector_name: string | null;
+  pattern_filter_json: string | null;
+  backend_user_id: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +288,9 @@ export const createCard = (data: {
   title: string;
   color?: string;
   stage_id?: string;
+  skill_id?: string;
+  prompt_text?: string;
+  gate_id?: string;
   target_session_id?: string;
   target_cwd?: string;
 }) =>
