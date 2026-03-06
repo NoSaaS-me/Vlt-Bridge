@@ -12,6 +12,12 @@ from ..connectors.base import BaseConnector
 
 logger = logging.getLogger(__name__)
 
+# OAuth2 token keys that must always be encrypted regardless of credential_fields
+_ALWAYS_SECRET_KEYS: frozenset[str] = frozenset({
+    "__oauth_access_token",
+    "__oauth_refresh_token",
+})
+
 
 class ConnectorService:
     def __init__(self, db_service: Optional[DatabaseService] = None):
@@ -64,12 +70,19 @@ class ConnectorService:
         finally:
             conn.close()
 
-        secret_fields = self._get_secret_field_names(connector_name)
+        secret_fields = self._get_secret_field_names(connector_name) | _ALWAYS_SECRET_KEYS
         fernet = self._get_fernet()
 
         result: dict[str, str] = {}
         for key, value in raw.items():
-            if key in secret_fields and value and not key.startswith("__"):
+            # Decrypt if this key is secret. For regular credential fields we skip __ prefixed
+            # keys (internal control flags), but _ALWAYS_SECRET_KEYS are __ prefixed by design
+            # so we treat them as secret unconditionally.
+            is_secret = (
+                (key in secret_fields and not key.startswith("__"))
+                or key in _ALWAYS_SECRET_KEYS
+            )
+            if is_secret and value:
                 from vlt_connectors.encryption import decrypt_value
                 try:
                     result[key] = decrypt_value(value, fernet)
@@ -90,13 +103,19 @@ class ConnectorService:
         Secret fields are encrypted before storage. Empty values for secret
         fields are stored as-is (empty string) so callers can clear a credential.
         """
-        secret_fields = self._get_secret_field_names(connector_name)
+        secret_fields = self._get_secret_field_names(connector_name) | _ALWAYS_SECRET_KEYS
         fernet = self._get_fernet()
 
         conn = self.db.connect()
         try:
             for key, value in updates.items():
-                if key in secret_fields and value and not key.startswith("__"):
+                # Encrypt regular secret credential fields (not __ internal flags),
+                # plus the OAuth token keys which are always secret.
+                should_encrypt = (
+                    (key in secret_fields and not key.startswith("__"))
+                    or key in _ALWAYS_SECRET_KEYS
+                )
+                if should_encrypt and value:
                     from vlt_connectors.encryption import encrypt_value
                     stored_value = encrypt_value(value, fernet)
                 else:

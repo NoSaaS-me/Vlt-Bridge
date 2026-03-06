@@ -34,3 +34,4 @@ class ConnectorInfo(BaseModel):
     actions: list[ConnectorAction] = Field(default_factory=list)
     enabled: bool = False
     configured: bool = False
+    auth_type: str = "api_key"        # "api_key" | "oauth2"

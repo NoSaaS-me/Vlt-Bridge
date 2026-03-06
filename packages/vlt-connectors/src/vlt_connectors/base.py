@@ -24,6 +24,7 @@ class BaseConnector(ABC):
             actions=self.actions,
             enabled=enabled,
             configured=configured,
+            auth_type=getattr(self, "auth_type", "api_key"),
         )
 
 

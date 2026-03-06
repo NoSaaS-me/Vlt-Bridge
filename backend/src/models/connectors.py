@@ -40,6 +40,7 @@ class ConnectorInfo(BaseModel):
     actions: list[ConnectorAction]
     enabled: bool = False
     configured: bool = False
+    auth_type: str = "api_key"        # "api_key" | "oauth2"
 
 
 class ConnectorListResponse(BaseModel):

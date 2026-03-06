@@ -38,6 +38,7 @@ async def list_connectors(
             actions=connector.actions,
             enabled=enabled,
             configured=configured,
+            auth_type=getattr(connector, "auth_type", "api_key"),
         ))
     return ConnectorListResponse(connectors=infos)
 

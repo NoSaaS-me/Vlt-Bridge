@@ -1,5 +1,5 @@
 """HTTP API route handlers."""
 
-from . import auth, index, notes, search, graph, demo, tts, models, oracle, oracle_context, threads, coderag, notifications, assets, connectors
+from . import auth, index, notes, search, graph, demo, tts, models, oracle, oracle_context, threads, coderag, notifications, assets, connectors, connector_oauth
 
-__all__ = ["auth", "notes", "search", "index", "graph", "demo", "tts", "models", "oracle", "oracle_context", "threads", "coderag", "notifications", "assets", "connectors"]
+__all__ = ["auth", "notes", "search", "index", "graph", "demo", "tts", "models", "oracle", "oracle_context", "threads", "coderag", "notifications", "assets", "connectors", "connector_oauth"]
