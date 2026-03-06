@@ -18,6 +18,8 @@ class MailgunConnector(BaseConnector):
         CredentialField(name="api_key", label="API Key", secret=True, placeholder="key-..."),
         CredentialField(name="domain", label="Mailgun Domain", secret=False, placeholder="mg.yourdomain.com"),
         CredentialField(name="from_address", label="Default From Address", secret=False, placeholder="noreply@mg.yourdomain.com"),
+        CredentialField(name="from_whitelist", label="Inbox: Allowed Senders (comma-separated)", secret=False, placeholder="alice@example.com, bob@company.com"),
+        CredentialField(name="subject_whitelist", label="Inbox: Allowed Subject Keywords (comma-separated)", secret=False, placeholder="invoice, support, order"),
     ]
     actions = [
         ConnectorAction(
@@ -132,11 +134,34 @@ class MailgunConnector(BaseConnector):
                 detail = resp.text[:200]
             return {"success": False, "error": f"Mailgun error {resp.status_code}: {detail}"}
 
+        # Build whitelist filters from credentials (empty = allow all)
+        from_whitelist = [
+            f.strip().lower()
+            for f in credentials.get("from_whitelist", "").split(",")
+            if f.strip()
+        ]
+        subject_whitelist = [
+            s.strip().lower()
+            for s in credentials.get("subject_whitelist", "").split(",")
+            if s.strip()
+        ]
+
         items = resp.json().get("items", [])
         messages = []
         for item in items:
             headers = item.get("message", {}).get("headers", {})
             storage = item.get("storage", {})
+            sender = headers.get("from", "").lower()
+            subject = headers.get("subject", "").lower()
+
+            # Apply from whitelist (if configured)
+            if from_whitelist and not any(allowed in sender for allowed in from_whitelist):
+                continue
+
+            # Apply subject whitelist (if configured)
+            if subject_whitelist and not any(kw in subject for kw in subject_whitelist):
+                continue
+
             messages.append({
                 "subject": headers.get("subject", "(no subject)"),
                 "from": headers.get("from", ""),
