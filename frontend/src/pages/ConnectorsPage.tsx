@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Settings2, Plug, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Settings2, Plug, CheckCircle2, AlertCircle, Link, Unlink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
@@ -16,6 +16,7 @@ import {
   listConnectors,
   getConnectorConfig,
   saveConnectorConfig,
+  revokeOAuth,
   type ConnectorInfo,
 } from '@/services/connectors';
 
@@ -142,11 +143,107 @@ function ConnectorSettingsDialog({
   );
 }
 
+function OAuthConnectorCard({
+  connector,
+  onChanged,
+}: {
+  connector: ConnectorInfo;
+  onChanged: () => void;
+}) {
+  const [revoking, setRevoking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleConnect = () => {
+    // Full page redirect to backend OAuth authorize endpoint
+    window.location.href = `/api/connectors/${connector.name}/oauth/authorize`;
+  };
+
+  const handleDisconnect = async () => {
+    setRevoking(true);
+    setError(null);
+    try {
+      await revokeOAuth(connector.name);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Disconnect failed');
+    } finally {
+      setRevoking(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-start justify-between">
+          <div className="space-y-1">
+            <CardTitle className="text-base">{connector.display_name}</CardTitle>
+            <CardDescription className="text-xs">{connector.description}</CardDescription>
+          </div>
+          <div className="flex gap-2 flex-shrink-0 ml-2">
+            {connector.configured ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDisconnect}
+                disabled={revoking}
+                className="text-red-600 border-red-300 hover:bg-red-50"
+              >
+                <Unlink className="h-4 w-4 mr-1" />
+                {revoking ? 'Disconnecting…' : 'Disconnect'}
+              </Button>
+            ) : (
+              <Button variant="default" size="sm" onClick={handleConnect}>
+                <Link className="h-4 w-4 mr-1" />
+                Connect
+              </Button>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        {error && (
+          <p className="text-xs text-red-500 mb-2">{error}</p>
+        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {connector.configured ? (
+            <Badge variant="default" className="bg-green-600 text-xs gap-1">
+              <CheckCircle2 className="h-3 w-3" />
+              Connected
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="text-xs">
+              Not connected
+            </Badge>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ConnectorsPage() {
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [settingsFor, setSettingsFor] = useState<ConnectorInfo | null>(null);
+  const [oauthMessage, setOauthMessage] = useState<string | null>(null);
+
+  // Handle OAuth2 callback redirects: ?connected=<name> or ?oauth_error=<msg>
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    const oauthError = params.get('oauth_error');
+    if (connected) {
+      setOauthMessage(`Successfully connected ${connected}`);
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (oauthError) {
+      setError(`OAuth2 error: ${oauthError}`);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -174,6 +271,13 @@ export function ConnectorsPage() {
         </div>
       </div>
 
+      {oauthMessage && (
+        <Alert>
+          <CheckCircle2 className="h-4 w-4" />
+          <AlertDescription>{oauthMessage}</AlertDescription>
+        </Alert>
+      )}
+
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
@@ -184,49 +288,57 @@ export function ConnectorsPage() {
         <p className="text-sm text-muted-foreground">Loading connectors…</p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {connectors.map((connector) => (
-            <Card key={connector.name}>
-              <CardHeader className="pb-2">
-                <div className="flex items-start justify-between">
-                  <div className="space-y-1">
-                    <CardTitle className="text-base">{connector.display_name}</CardTitle>
-                    <CardDescription className="text-xs">{connector.description}</CardDescription>
+          {connectors.map((connector) =>
+            connector.auth_type === 'oauth2' ? (
+              <OAuthConnectorCard
+                key={connector.name}
+                connector={connector}
+                onChanged={load}
+              />
+            ) : (
+              <Card key={connector.name}>
+                <CardHeader className="pb-2">
+                  <div className="flex items-start justify-between">
+                    <div className="space-y-1">
+                      <CardTitle className="text-base">{connector.display_name}</CardTitle>
+                      <CardDescription className="text-xs">{connector.description}</CardDescription>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-shrink-0 ml-2"
+                      onClick={() => setSettingsFor(connector)}
+                    >
+                      <Settings2 className="h-4 w-4 mr-1" />
+                      Settings
+                    </Button>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-shrink-0 ml-2"
-                    onClick={() => setSettingsFor(connector)}
-                  >
-                    <Settings2 className="h-4 w-4 mr-1" />
-                    Settings
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  {connector.enabled && connector.configured ? (
-                    <Badge variant="default" className="bg-green-600 text-xs gap-1">
-                      <CheckCircle2 className="h-3 w-3" />
-                      Enabled
-                    </Badge>
-                  ) : connector.enabled && !connector.configured ? (
-                    <Badge variant="outline" className="text-amber-600 border-amber-600 text-xs gap-1">
-                      <AlertCircle className="h-3 w-3" />
-                      Needs config
-                    </Badge>
-                  ) : (
-                    <Badge variant="secondary" className="text-xs">
-                      Disabled
-                    </Badge>
-                  )}
-                  <span className="text-xs text-muted-foreground">
-                    {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {connector.enabled && connector.configured ? (
+                      <Badge variant="default" className="bg-green-600 text-xs gap-1">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Enabled
+                      </Badge>
+                    ) : connector.enabled && !connector.configured ? (
+                      <Badge variant="outline" className="text-amber-600 border-amber-600 text-xs gap-1">
+                        <AlertCircle className="h-3 w-3" />
+                        Needs config
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-xs">
+                        Disabled
+                      </Badge>
+                    )}
+                    <span className="text-xs text-muted-foreground">
+                      {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          )}
         </div>
       )}
 

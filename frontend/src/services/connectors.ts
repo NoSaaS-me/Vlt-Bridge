@@ -28,6 +28,8 @@ export interface ConnectorInfo {
   name: string;
   display_name: string;
   description: string;
+  connector_type?: string;   // "action" | "service"
+  auth_type?: string;        // "api_key" | "oauth2"  (defaults to "api_key")
   credential_fields: CredentialField[];
   actions: ConnectorAction[];
   enabled: boolean;
@@ -73,6 +75,24 @@ export async function saveConnectorConfig(
     body: JSON.stringify({ config }),
   });
   if (!resp.ok) throw new Error(`Failed to save connector config (${resp.status})`);
+}
+
+export async function getOAuthStatus(
+  connectorName: string
+): Promise<{ connected: boolean; expires_at: string; scope: string }> {
+  const resp = await fetch(`/api/connectors/${connectorName}/oauth/status`, {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(`Failed to get OAuth status (${resp.status})`);
+  return resp.json();
+}
+
+export async function revokeOAuth(connectorName: string): Promise<void> {
+  const resp = await fetch(`/api/connectors/${connectorName}/oauth/revoke`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(`Failed to revoke OAuth (${resp.status})`);
 }
 
 export async function invokeConnector(
