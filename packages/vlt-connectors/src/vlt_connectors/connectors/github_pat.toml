@@ -1,7 +1,7 @@
 [connector]
-name = "github"
-display_name = "GitHub"
-description = "GitHub repository, issue, and pull request management via the GitHub REST API."
+name = "github_pat"
+display_name = "GitHub (Personal Access Token)"
+description = "GitHub repository and issue management using a Personal Access Token."
 auth_type = "api_key"
 
 [[credential_fields]]

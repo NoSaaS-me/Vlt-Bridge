@@ -34,6 +34,11 @@ class ConnectorRegistry:
         if connectors_dir.exists():
             for c in load_connectors_from_dir(connectors_dir):
                 self.register_action(c)
+        try:
+            from .connectors.github_oauth import GitHubOAuthConnector
+            self.register_action(GitHubOAuthConnector())
+        except ImportError as e:
+            logger.warning("Could not load GitHubOAuthConnector: %s", e)
 
     def register_action(self, connector: "ActionConnector") -> None:
         self._action[connector.name] = connector
