@@ -12,6 +12,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   listConnectors,
   getConnectorConfig,
@@ -19,6 +20,13 @@ import {
   revokeOAuth,
   type ConnectorInfo,
 } from '@/services/connectors';
+import {
+  getComposioStatus,
+  listApps,
+  connectApp,
+  disconnectApp,
+  type ComposioApp,
+} from '@/services/composio-hub';
 
 function ConnectorSettingsDialog({
   connector,
@@ -224,6 +232,164 @@ function OAuthConnectorCard({
   );
 }
 
+function HubTab() {
+  const [apps, setApps] = useState<ComposioApp[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [statusRes, appsRes] = await Promise.all([
+        getComposioStatus(),
+        listApps().catch(() => ({ apps: [], total: 0 })),
+      ]);
+      setConfigured(statusRes.configured);
+      setApps(appsRes.apps);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load');
+      setConfigured(false);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleConnect = async (app: ComposioApp) => {
+    setConnecting(app.name);
+    try {
+      const res = await connectApp(app.name);
+      window.open(res.redirect_url, '_blank', 'noopener,noreferrer');
+      setTimeout(load, 3000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Connect failed');
+    } finally {
+      setConnecting(null);
+    }
+  };
+
+  const handleDisconnect = async (app: ComposioApp) => {
+    setDisconnecting(app.name);
+    try {
+      await disconnectApp(app.name);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Disconnect failed');
+    } finally {
+      setDisconnecting(null);
+    }
+  };
+
+  const filtered = apps.filter(
+    (a) =>
+      a.name.toLowerCase().includes(search.toLowerCase()) ||
+      a.display_name.toLowerCase().includes(search.toLowerCase()) ||
+      a.categories.some((c) => c.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  if (!configured && !loading) {
+    return (
+      <div className="p-6 text-center">
+        <p className="text-muted-foreground text-sm mb-2">
+          Composio is not configured. Set{' '}
+          <code className="font-mono bg-muted px-1 rounded">COMPOSIO_API_KEY</code>{' '}
+          in your backend environment.
+        </p>
+        <a
+          href="https://app.composio.dev/settings"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-blue-500 hover:underline"
+        >
+          Get your API key →
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      <div className="flex items-center gap-2">
+        <Input
+          placeholder="Search apps…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="max-w-sm"
+        />
+        <span className="text-xs text-muted-foreground">
+          {filtered.length} apps
+        </span>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-muted-foreground py-8 text-center">Loading integration catalog…</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {filtered.map((app) => (
+            <Card key={app.name} className={app.connected ? 'border-green-300' : ''}>
+              <CardHeader className="pb-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <CardTitle className="text-sm truncate">{app.display_name}</CardTitle>
+                    <CardDescription className="text-xs line-clamp-2 mt-0.5">
+                      {app.description || app.categories.join(', ')}
+                    </CardDescription>
+                  </div>
+                  {app.connected && (
+                    <Badge variant="outline" className="shrink-0 text-green-600 border-green-400 text-xs">
+                      Connected
+                    </Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {app.connected ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full text-red-600 border-red-300 hover:bg-red-50"
+                    onClick={() => handleDisconnect(app)}
+                    disabled={disconnecting === app.name}
+                  >
+                    {disconnecting === app.name ? 'Disconnecting…' : 'Disconnect'}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => handleConnect(app)}
+                    disabled={connecting === app.name}
+                  >
+                    {connecting === app.name ? 'Opening…' : 'Connect'}
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+          {filtered.length === 0 && !loading && (
+            <p className="col-span-full text-center text-sm text-muted-foreground py-8">
+              No apps match &ldquo;{search}&rdquo;
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ConnectorsPage() {
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -260,7 +426,7 @@ export function ConnectorsPage() {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
+    <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div className="flex items-center gap-3">
         <Plug className="h-6 w-6 text-muted-foreground" />
         <div>
@@ -284,63 +450,76 @@ export function ConnectorsPage() {
         </Alert>
       )}
 
-      {loading ? (
-        <p className="text-sm text-muted-foreground">Loading connectors…</p>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {connectors.map((connector) =>
-            connector.auth_type === 'oauth2' ? (
-              <OAuthConnectorCard
-                key={connector.name}
-                connector={connector}
-                onChanged={load}
-              />
-            ) : (
-              <Card key={connector.name}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between">
-                    <div className="space-y-1">
-                      <CardTitle className="text-base">{connector.display_name}</CardTitle>
-                      <CardDescription className="text-xs">{connector.description}</CardDescription>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-shrink-0 ml-2"
-                      onClick={() => setSettingsFor(connector)}
-                    >
-                      <Settings2 className="h-4 w-4 mr-1" />
-                      Settings
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {connector.enabled && connector.configured ? (
-                      <Badge variant="default" className="bg-green-600 text-xs gap-1">
-                        <CheckCircle2 className="h-3 w-3" />
-                        Enabled
-                      </Badge>
-                    ) : connector.enabled && !connector.configured ? (
-                      <Badge variant="outline" className="text-amber-600 border-amber-600 text-xs gap-1">
-                        <AlertCircle className="h-3 w-3" />
-                        Needs config
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary" className="text-xs">
-                        Disabled
-                      </Badge>
-                    )}
-                    <span className="text-xs text-muted-foreground">
-                      {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-            )
+      <Tabs defaultValue="native">
+        <TabsList>
+          <TabsTrigger value="native">Native</TabsTrigger>
+          <TabsTrigger value="hub">Integration Hub</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="native" className="mt-4">
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading connectors…</p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {connectors.map((connector) =>
+                connector.auth_type === 'oauth2' ? (
+                  <OAuthConnectorCard
+                    key={connector.name}
+                    connector={connector}
+                    onChanged={load}
+                  />
+                ) : (
+                  <Card key={connector.name}>
+                    <CardHeader className="pb-2">
+                      <div className="flex items-start justify-between">
+                        <div className="space-y-1">
+                          <CardTitle className="text-base">{connector.display_name}</CardTitle>
+                          <CardDescription className="text-xs">{connector.description}</CardDescription>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-shrink-0 ml-2"
+                          onClick={() => setSettingsFor(connector)}
+                        >
+                          <Settings2 className="h-4 w-4 mr-1" />
+                          Settings
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {connector.enabled && connector.configured ? (
+                          <Badge variant="default" className="bg-green-600 text-xs gap-1">
+                            <CheckCircle2 className="h-3 w-3" />
+                            Enabled
+                          </Badge>
+                        ) : connector.enabled && !connector.configured ? (
+                          <Badge variant="outline" className="text-amber-600 border-amber-600 text-xs gap-1">
+                            <AlertCircle className="h-3 w-3" />
+                            Needs config
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary" className="text-xs">
+                            Disabled
+                          </Badge>
+                        )}
+                        <span className="text-xs text-muted-foreground">
+                          {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )
+              )}
+            </div>
           )}
-        </div>
-      )}
+        </TabsContent>
+
+        <TabsContent value="hub" className="mt-4">
+          <HubTab />
+        </TabsContent>
+      </Tabs>
 
       {settingsFor && (
         <ConnectorSettingsDialog
