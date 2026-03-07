@@ -175,12 +175,16 @@ async def invoke_composio_action(
     Lowercase names are normalized to uppercase automatically.
     """
     svc = _get_composio_service()
-    result = svc.execute(
-        app_name=app_name.lower(),
-        action_name=body.action,
-        params=body.params,
-        entity_id=auth.user_id,
-    )
+    try:
+        result = svc.execute(
+            app_name=app_name.lower(),
+            action_name=body.action,
+            params=body.params,
+            entity_id=auth.user_id,
+        )
+    except Exception as exc:
+        logger.exception("Composio action failed: %s/%s", app_name, body.action)
+        raise HTTPException(502, f"Composio action failed: {exc}")
     if not result.get("success"):
         raise HTTPException(502, result.get("error", "Composio action failed"))
     return {"success": True, "data": result.get("data", {})}
