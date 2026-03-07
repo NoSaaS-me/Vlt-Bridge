@@ -478,6 +478,10 @@ def apply_pipeline_migrations():
             conn.execute(text("ALTER TABLE pipeline_cards ADD COLUMN gate_id TEXT"))
         except Exception:
             pass
+        try:
+            conn.execute(text("ALTER TABLE pipeline_cards ADD COLUMN use_helper_session INTEGER NOT NULL DEFAULT 0"))
+        except Exception:
+            pass
 
         # WebhookListener connector columns (idempotent)
         for col in ["connector_name TEXT", "pattern_filter_json TEXT", "backend_user_id TEXT"]:

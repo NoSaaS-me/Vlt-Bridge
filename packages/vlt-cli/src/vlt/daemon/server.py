@@ -1234,6 +1234,7 @@ async def deregister_session(request: Request):
 async def list_sessions(
     project_id: Optional[str] = None,
     include_all: bool = False,
+    helper: bool = False,
 ):
     """
     List Claude Code agent sessions.
@@ -1266,6 +1267,14 @@ async def list_sessions(
 
         # Step 2: Build the filtered query
         query = select(AgentSession)
+        if helper:
+            # Helper sessions only
+            query = query.where(AgentSession.is_cronban_helper == True)  # noqa: E712
+        else:
+            # Exclude helper sessions from the normal session list
+            query = query.where(
+                (AgentSession.is_cronban_helper == None) | (AgentSession.is_cronban_helper == False)  # noqa: E711, E712
+            )
         if not include_all:
             query = query.where(AgentSession.status != "dead")
         if project_id:
@@ -1286,6 +1295,7 @@ async def list_sessions(
             "pid": s.pid,
             "bypass_perms": s.bypass_perms,
             "source": s.source,
+            "is_cronban_helper": bool(getattr(s, "is_cronban_helper", False)),
             "created_at": s.created_at,
             "last_activity": s.last_activity,
         })
@@ -1628,6 +1638,11 @@ async def claude_hook(request: Request):
 
     # Notify live stream clients of status change
     _push_status_to_live(session_id, new_status or "idle", event)
+
+    # Gate evaluations: trigger when a relay session goes idle (Stop hook)
+    # SDK sessions trigger via _sdk_stdout_reader on "result" lines.
+    if event == "Stop" and session_id not in _sdk_sessions and session_id in _session_inject_queues:
+        asyncio.create_task(_trigger_gate_evaluations(session_id))
 
     # Context injection: return queued messages on UserPromptSubmit
     if event == "UserPromptSubmit" and session_id in _injection_queues:
@@ -2140,6 +2155,10 @@ async def inject_context(session_id: str, request: Request):
 
 _sdk_sessions: Dict[str, dict] = {}  # session_id → {proc, cwd, is_new}
 
+# Completion events for helper sessions — set by _sdk_stdout_reader when "result" arrives.
+# cronban_evaluator awaits these to know when the helper's turn is done.
+_helper_completion_events: Dict[str, asyncio.Event] = {}
+
 
 async def _spawn_sdk_session(
     session_id: str,
@@ -2227,7 +2246,11 @@ async def _sdk_stdout_reader(session_id: str, proc) -> None:
             etype = event.get("type")
             if etype == "result":
                 _push_status_to_live(session_id, "idle", "SDKResult")
-                asyncio.create_task(_trigger_gate_evaluations(session_id))
+                # Helper sessions signal their waiting evaluator; other sessions trigger gate evals
+                if session_id in _helper_completion_events:
+                    _helper_completion_events[session_id].set()
+                else:
+                    asyncio.create_task(_trigger_gate_evaluations(session_id))
             elif etype == "assistant":
                 _push_status_to_live(session_id, "thinking", "SDKAssistant")
     except Exception as e:

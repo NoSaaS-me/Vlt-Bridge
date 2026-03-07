@@ -9,16 +9,16 @@ Flow (triggered when an agent's turn ends):
        - Agent's most recent output (last N assistant messages from transcript)
        - Gate eval criteria (from CronbanGate.prompt_markdown)
   4. Spawn / resume the project's dedicated "helper" Claude session.
-  5. Wait for helper's response (direct subprocess call via _run_claude_message).
+  5. Wait for helper's response via asyncio.Event signaled by _sdk_stdout_reader.
   6. Parse GATE_RESULT: PASS / GATE_RESULT: FAIL from the response.
   7. Update card gate_last_result; if PASS + stage.auto_advance → advance to next stage.
 
 Helper session design:
-  - One per project (keyed by project_id).
+  - Pool per project (keyed by project_id). LIFO: reuse most-recently-used idle session.
   - Marked with is_cronban_helper=True in agent_sessions.
   - Persists across evaluations via --resume, building up project context.
   - Does NOT trigger further gate evaluations when it goes idle (checked in
-    server.py's _trigger_gate_evaluations).
+    server.py's _trigger_gate_evaluations via _helper_completion_events dict).
 """
 from __future__ import annotations
 
@@ -197,6 +197,98 @@ def _parse_gate_result(text: str) -> dict:
     after = text[m.end():].strip()
     reasoning = after[:500] if after else ("Task completed." if met else "Task not yet complete.")
     return {"met": met, "reasoning": reasoning}
+
+
+# ---------------------------------------------------------------------------
+# Helper session dispatch (async, waits for result via _helper_completion_events)
+# ---------------------------------------------------------------------------
+
+async def _dispatch_helper_and_wait(
+    helper_id: str,
+    is_new: bool,
+    cwd: str,
+    model_id: str,
+    prompt: str,
+    timeout: float = 180.0,
+) -> bool:
+    """
+    Spawn or resume a helper SDK session, send prompt, wait for completion.
+
+    Uses server._helper_completion_events as the synchronisation primitive:
+    _sdk_stdout_reader signals the event when it sees a "result" event on
+    the helper's stdout, so this function blocks until the turn is done.
+
+    Returns True on success, False on error/timeout.
+    """
+    import sys
+    import json as _json
+    import asyncio as _asyncio
+
+    _srv = sys.modules["__main__"]
+    _sdk_sessions = _srv._sdk_sessions
+    _spawn_sdk_session = _srv._spawn_sdk_session
+
+    # Ensure the events dict exists (graceful if server hasn't initialised it yet)
+    if not hasattr(_srv, "_helper_completion_events"):
+        _srv._helper_completion_events = {}
+    _events = _srv._helper_completion_events
+
+    event = _asyncio.Event()
+    _events[helper_id] = event
+
+    # Mark helper as thinking in DB
+    from vlt.db import engine as _engine
+    from vlt.core.models import AgentSession as _AgentSession
+    from sqlmodel import Session as _Session
+
+    with _Session(_engine) as db:
+        h = db.get(_AgentSession, helper_id)
+        if h:
+            h.status = "thinking"
+            db.add(h)
+            db.commit()
+
+    try:
+        # Spawn or resume the subprocess
+        sdk = _sdk_sessions.get(helper_id)
+        if not (sdk and sdk["proc"].returncode is None):
+            ok = await _spawn_sdk_session(helper_id, cwd, is_new=is_new, model=model_id)
+            if not ok:
+                logger.error(f"Helper dispatch: failed to spawn session {helper_id}")
+                return False
+
+        # Send the evaluation prompt
+        user_msg = _json.dumps({
+            "type": "user",
+            "message": {"role": "user", "content": prompt},
+            "session_id": "default",
+        }) + "\n"
+        _sdk_sessions[helper_id]["proc"].stdin.write(user_msg.encode())
+        await _sdk_sessions[helper_id]["proc"].stdin.drain()
+
+        # Wait for result event (set by _sdk_stdout_reader when "result" arrives)
+        await _asyncio.wait_for(event.wait(), timeout=timeout)
+
+        # Give the Stop hook ~1s to write transcript_path into the DB
+        await _asyncio.sleep(1.0)
+        return True
+
+    except _asyncio.TimeoutError:
+        logger.error(f"Helper dispatch: timeout ({timeout}s) for session {helper_id}")
+        return False
+    except Exception as exc:
+        logger.error(f"Helper dispatch: error for session {helper_id}: {exc}")
+        return False
+    finally:
+        _events.pop(helper_id, None)
+        # Always return helper to idle in DB
+        with _Session(_engine) as db:
+            h = db.get(_AgentSession, helper_id)
+            if h:
+                h.status = "idle"
+                h.last_activity = datetime.utcnow().isoformat()
+                db.add(h)
+                db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -382,26 +474,31 @@ async def run_gate_evaluation(card_id: str, agent_session_id: str) -> None:
             logger.warning(f"Gate eval: stage {card.current_stage_id!r} not found for card {card_id}")
             return
 
-        if not stage.gate_id:
-            logger.info(f"Gate eval: stage {stage.name!r} has no gate — auto-passing")
+        # Card-level gate/skill/prompt override stage values
+        effective_gate_id = card.gate_id or stage.gate_id
+        effective_skill_id = card.skill_id or stage.skill_id
+        effective_prompt_text = card.prompt_text or stage.prompt_text
+
+        if not effective_gate_id:
+            logger.info(f"Gate eval: card {card_id!r} / stage {stage.name!r} has no gate — auto-passing")
             if stage.auto_advance:
                 _advance_card(card_id, stage.id, card.pipeline_id)
             return
 
         # Resolve gate eval criteria
         from vlt.core.models import CronbanGate
-        gate = db.get(CronbanGate, stage.gate_id)
+        gate = db.get(CronbanGate, effective_gate_id)
         if not gate:
-            logger.warning(f"Gate eval: gate {stage.gate_id!r} not found — skipping")
+            logger.warning(f"Gate eval: gate {effective_gate_id!r} not found — skipping")
             return
 
         eval_instructions = gate.prompt_markdown
 
         # Resolve task prompt (what the working agent was told to do)
-        prompt_text: Optional[str] = stage.prompt_text
-        if not prompt_text and stage.skill_id:
+        prompt_text: Optional[str] = effective_prompt_text
+        if not prompt_text and effective_skill_id:
             from vlt.core.models import CronbanSkill
-            skill = db.get(CronbanSkill, stage.skill_id)
+            skill = db.get(CronbanSkill, effective_skill_id)
             if skill:
                 prompt_text = skill.prompt_markdown
 
@@ -462,27 +559,16 @@ async def run_gate_evaluation(card_id: str, agent_session_id: str) -> None:
             f"model={model_id} cwd={cwd}"
         )
 
-        try:
-            from vlt.daemon.server import _run_claude_message
+        success = await _dispatch_helper_and_wait(
+            helper_id=helper_id,
+            is_new=is_new,
+            cwd=cwd,
+            model_id=model_id,
+            prompt=eval_prompt,
+        )
 
-            await _run_claude_message(
-                cwd=cwd,
-                message=eval_prompt,
-                session_id=helper_id,
-                is_first=is_new,
-                model=model_id,
-            )
-
-            if is_new:
-                with Session(engine) as db:
-                    h = db.get(AgentSession, helper_id)
-                    if h:
-                        h.status = "idle"
-                        db.add(h)
-                        db.commit()
-
-        except Exception as e:
-            logger.error(f"Gate eval: helper invocation failed: {e}")
+        if not success:
+            logger.error(f"Gate eval: helper dispatch failed for card {card_id}")
             with Session(engine) as db:
                 c = db.get(PipelineCard, card_id)
                 if c:

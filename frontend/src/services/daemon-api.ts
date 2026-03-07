@@ -14,6 +14,7 @@ export interface AgentSession {
   pid: number;
   bypass_perms: boolean;
   source: string;
+  is_cronban_helper: boolean;
   created_at: string;
   last_activity: string;
 }
@@ -35,6 +36,29 @@ export async function listSessions(projectId?: string): Promise<AgentSession[]> 
   if (!response.ok) throw new Error(`Daemon error: ${response.status} ${response.statusText}`);
   const data = await response.json();
   return Array.isArray(data) ? data : (data.sessions ?? []);
+}
+
+/**
+ * List helper sessions (is_cronban_helper=true), optionally including dead ones.
+ */
+export async function listHelperSessions(includeAll = false): Promise<AgentSession[]> {
+  const params = new URLSearchParams({ helper: 'true' });
+  if (includeAll) params.set('include_all', 'true');
+  const response = await fetch(`/vlt/api/sessions?${params}`, { signal: AbortSignal.timeout(4000) });
+  if (!response.ok) throw new Error(`Daemon error: ${response.status}`);
+  const data = await response.json();
+  return Array.isArray(data) ? data : (data.sessions ?? []);
+}
+
+/**
+ * Terminate a session (kills subprocess if running, marks dead in DB).
+ */
+export async function terminateSession(sessionId: string): Promise<void> {
+  const response = await fetch(`/vlt/api/sessions/${sessionId}`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!response.ok) throw new Error(`Terminate failed: ${response.status}`);
 }
 
 /**

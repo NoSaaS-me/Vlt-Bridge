@@ -4,7 +4,7 @@
  * Shows title, gate evaluation status, and hover actions (advance / delete).
  */
 import { useState } from 'react';
-import { ChevronDown, ChevronUp, ChevronRight, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, ChevronRight, Trash2, Play, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { GateStatusBadge } from './GateStatusBadge';
@@ -16,11 +16,13 @@ export interface KanbanCardProps {
   isAdvancing: boolean;
   onAdvance: (cardId: string, stageId?: string) => void;
   onDelete: (cardId: string) => void;
+  onFire: (cardId: string) => Promise<void>;
 }
 
-export function KanbanCard({ card, stages, isAdvancing, onAdvance, onDelete }: KanbanCardProps) {
+export function KanbanCard({ card, stages, isAdvancing, onAdvance, onDelete, onFire }: KanbanCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [showMoveMenu, setShowMoveMenu] = useState(false);
+  const [firing, setFiring] = useState(false);
 
   const borderColor = card.color ?? '#3b82f6';
 
@@ -79,6 +81,26 @@ export function KanbanCard({ card, stages, isAdvancing, onAdvance, onDelete }: K
 
           {/* Hover action row */}
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Fire (play) button — dispatches prompt to target session */}
+            {(card.has_prompt || card.skill_id) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-1.5 text-[10px] gap-1 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setFiring(true);
+                  try { await onFire(card.id); } finally { setFiring(false); }
+                }}
+                disabled={firing}
+                title="Fire card — send prompt to session"
+              >
+                {firing
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <Play className="h-3 w-3" />}
+              </Button>
+            )}
+
             {/* Advance button */}
             {advanceableStages.length > 0 && (
               <div className="relative">

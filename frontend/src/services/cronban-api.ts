@@ -71,6 +71,7 @@ export interface PipelineCard {
   gate_id: string | null;
   target_session_id: string | null;
   target_cwd: string | null;
+  use_helper_session: boolean;
   gate_eval_pending: boolean;
   gate_last_result: { met: boolean; reasoning: string } | null;
   gate_last_checked_at: string | null;
@@ -293,6 +294,7 @@ export const createCard = (data: {
   gate_id?: string;
   target_session_id?: string;
   target_cwd?: string;
+  use_helper_session?: boolean;
 }) =>
   req<PipelineCard>('/cards', {
     method: 'POST',
@@ -316,6 +318,12 @@ export const advanceCard = (id: string, stageId?: string) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(stageId ? { stage_id: stageId } : {}),
   });
+
+export const fireCard = (id: string) =>
+  req<{ fired: boolean; session_id: string | null; log_id: string | null }>(
+    `/cards/${id}/fire`,
+    { method: 'POST' },
+  );
 
 // ---------------------------------------------------------------------------
 // Cron Triggers

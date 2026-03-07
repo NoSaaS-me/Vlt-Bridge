@@ -650,6 +650,7 @@ class PipelineCard(Base):
     # Agent target
     target_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     target_cwd: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    use_helper_session: Mapped[bool] = mapped_column(Boolean, default=False)  # dispatch to helper pool
     # Gate evaluation state (for current stage)
     gate_eval_pending: Mapped[bool] = mapped_column(Boolean, default=False)
     gate_last_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)    # JSON {met, reasoning}

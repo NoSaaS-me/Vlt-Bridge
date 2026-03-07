@@ -121,6 +121,7 @@ def _card_to_dict(c: PipelineCard) -> dict:
         "gate_id": c.gate_id,
         "target_session_id": c.target_session_id,
         "target_cwd": c.target_cwd,
+        "use_helper_session": bool(c.use_helper_session),
         "gate_eval_pending": bool(c.gate_eval_pending),
         "gate_last_result": json.loads(c.gate_last_result) if c.gate_last_result else None,
         "gate_last_checked_at": c.gate_last_checked_at,
@@ -900,6 +901,7 @@ async def create_card(request: Request):
             gate_id=body.get("gate_id"),
             target_session_id=body.get("target_session_id"),
             target_cwd=body.get("target_cwd"),
+            use_helper_session=bool(body.get("use_helper_session", False)),
         )
         db.add(card)
         db.commit()
@@ -924,7 +926,7 @@ async def update_card(card_id: str, request: Request):
         if not c:
             raise HTTPException(404, "Card not found")
         for field in ("title", "color", "status", "skill_id", "prompt_text", "gate_id",
-                      "target_session_id", "target_cwd"):
+                      "target_session_id", "target_cwd", "use_helper_session"):
             if field in body:
                 setattr(c, field, body[field])
         c.updated_at = _now()
@@ -943,6 +945,88 @@ async def delete_card(card_id: str):
         db.delete(c)
         db.commit()
     return {"ok": True}
+
+
+@router.post("/cards/{card_id}/fire")
+async def fire_card(card_id: str):
+    """
+    Manually fire a PipelineCard — resolves its prompt (card-level overrides stage)
+    and dispatches it to the card's target session (or spawns one if needed).
+    """
+    log_id = str(uuid.uuid4())
+    now_iso = _now()
+    result_status = "success"
+    error_msg: Optional[str] = None
+    used_session_id: Optional[str] = None
+
+    with Session(engine) as db:
+        card = db.get(PipelineCard, card_id)
+        if not card:
+            raise HTTPException(404, "Card not found")
+
+        stage = db.get(PipelineStage, card.current_stage_id) if card.current_stage_id else None
+
+        # Card-level overrides take priority over stage values
+        effective_skill_id = card.skill_id or (stage.skill_id if stage else None)
+        effective_prompt_text = card.prompt_text or (stage.prompt_text if stage else None)
+        target_sid = card.target_session_id
+        target_cwd = card.target_cwd
+        project_id = card.project_id or "default"
+        use_helper = bool(card.use_helper_session)
+        title = card.title
+
+    try:
+        prompt = await _resolve_prompt(effective_skill_id, effective_prompt_text)
+        if not prompt:
+            raise RuntimeError("No prompt resolved for card fire")
+
+        if use_helper:
+            # Route through the helper session pool (LIFO, creates if all busy)
+            from vlt.daemon.cronban_evaluator import _get_available_helper, _dispatch_helper_and_wait
+            import os
+            cwd = target_cwd or os.path.expanduser("~")
+            helper_id, is_new = _get_available_helper(project_id, cwd, "sonnet")
+            success = await _dispatch_helper_and_wait(
+                helper_id=helper_id, is_new=is_new, cwd=cwd,
+                model_id="claude-sonnet-4-6", prompt=prompt,
+            )
+            used_session_id = helper_id if success else None
+            if not success:
+                raise RuntimeError("Helper session dispatch failed")
+        else:
+            used_session_id = await _dispatch_to_session(prompt, target_sid, target_cwd, bool(target_cwd))
+            if not used_session_id:
+                raise RuntimeError("No session available")
+
+        with Session(engine) as db:
+            c = db.get(PipelineCard, card_id)
+            if c:
+                c.fire_count = (c.fire_count or 0) + 1
+                c.last_fired_at = now_iso
+                c.target_session_id = used_session_id
+                c.updated_at = now_iso
+                db.add(c)
+                db.commit()
+
+    except Exception as exc:
+        result_status = "error"
+        error_msg = str(exc)
+        logger.error(f"fire_card {card_id}: {exc}")
+
+    with Session(engine) as db:
+        db.add(CronbanFireLog(
+            id=log_id,
+            entry_id=card_id,
+            fired_at=now_iso,
+            trigger_type="card_manual",
+            target_session_id=used_session_id,
+            prompt_sent=None,
+            result=result_status,
+            error_message=error_msg,
+        ))
+        db.commit()
+
+    return {"fired": result_status == "success", "session_id": used_session_id, "log_id": log_id}
 
 
 @router.post("/cards/{card_id}/advance")

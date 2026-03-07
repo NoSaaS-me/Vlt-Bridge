@@ -33,10 +33,12 @@ import {
   createCard,
   advanceCard,
   deleteCard,
+  fireCard,
   listSkills,
   listGates,
 } from '@/services/cronban-api';
 import { type AgentSession, listSessions } from '@/services/daemon-api';
+import { type ChainItem, assembleChain, PromptChainBuilder } from './PromptChainBuilder';
 
 // ---------------------------------------------------------------------------
 // New pipeline prompt
@@ -313,7 +315,11 @@ interface NewCardData {
   gate_id?: string;
   target_session_id?: string;
   target_cwd?: string;
+  use_helper_session?: boolean;
 }
+
+const DIALOG_TABS = ['Action', 'Gate', 'Session'] as const;
+type DialogTab = typeof DIALOG_TABS[number];
 
 function NewCardDialog({
   open,
@@ -327,138 +333,239 @@ function NewCardDialog({
   projectId?: string;
 }) {
   const [title, setTitle] = useState('');
-  const [promptText, setPromptText] = useState('');
-  const [skillId, setSkillId] = useState('');
+  const [chainItems, setChainItems] = useState<ChainItem[]>([]);
   const [gateId, setGateId] = useState('');
   const [skills, setSkills] = useState<CronbanSkill[]>([]);
   const [gates, setGates] = useState<CronbanGate[]>([]);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
+  // Session mode: 'new' | 'helper' | 'specific'
+  const [sessionMode, setSessionMode] = useState<'new' | 'helper' | 'specific'>('new');
   const [targetSessionId, setTargetSessionId] = useState('');
+  const [targetCwd, setTargetCwd] = useState('');
+  const [tab, setTab] = useState<DialogTab>('Action');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     setTitle('');
-    setPromptText('');
-    setSkillId('');
+    setChainItems([]);
     setGateId('');
+    setSessionMode('new');
     setTargetSessionId('');
+    setTargetCwd('');
+    setTab('Action');
     setTimeout(() => inputRef.current?.focus(), 0);
     Promise.all([listSkills(projectId), listGates(projectId), listSessions()])
       .then(([s, g, sess]) => {
         setSkills(s);
         setGates(g);
-        setSessions(sess.filter((s) => s.status !== 'dead'));
+        // Sort: relay first, then managed/hook; prefer sessions matching projectId cwd
+        const alive = sess.filter((s) => s.status !== 'dead');
+        alive.sort((a, b) => {
+          const aRelay = a.source === 'relay' ? 0 : 1;
+          const bRelay = b.source === 'relay' ? 0 : 1;
+          if (aRelay !== bRelay) return aRelay - bRelay;
+          // Project match (cwd contains project cwd path heuristic)
+          if (projectId) {
+            const aMatch = a.project_id === projectId ? 0 : 1;
+            const bMatch = b.project_id === projectId ? 0 : 1;
+            if (aMatch !== bMatch) return aMatch - bMatch;
+          }
+          return (b.last_activity ?? '').localeCompare(a.last_activity ?? '');
+        });
+        setSessions(alive);
       })
       .catch(console.error);
   }, [open, projectId]);
 
   if (!open) return null;
 
+  const assembledPrompt = assembleChain(chainItems, skills);
+
   const handleCreate = () => {
     const t = title.trim();
     if (!t) return;
+    // If chain has a single pure-skill item, use skill_id; else use assembled text
+    const singleSkill = chainItems.length === 1 && chainItems[0].type === 'skill'
+      ? chainItems[0].skillId : undefined;
     onCreate({
       title: t,
-      prompt_text: promptText.trim() || undefined,
-      skill_id: skillId || undefined,
+      prompt_text: singleSkill ? undefined : (assembledPrompt || undefined),
+      skill_id: singleSkill,
       gate_id: gateId || undefined,
-      target_session_id: targetSessionId || undefined,
+      target_session_id: sessionMode === 'specific' ? (targetSessionId || undefined) : undefined,
+      target_cwd: sessionMode === 'new' ? (targetCwd.trim() || undefined) : undefined,
+      use_helper_session: sessionMode === 'helper' ? true : undefined,
     });
     onClose();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-sm rounded-lg border border-border bg-popover shadow-2xl">
-        <div className="flex items-center justify-between px-4 pt-4 pb-3">
+      <div className="w-full max-w-md rounded-lg border border-border bg-popover shadow-2xl flex flex-col max-h-[90vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 pt-4 pb-0">
           <h2 className="text-sm font-semibold">New Card</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="px-4 pb-4 space-y-3">
-          {/* Title */}
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Title</label>
-            <Input
-              ref={inputRef}
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') onClose(); }}
-              placeholder="What needs to be done?"
-              className="h-8 text-sm"
-            />
-          </div>
 
-          {/* Action: prompt or skill */}
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">
-              Action <span className="text-muted-foreground/60">(prompt sent to Claude when card enters a stage)</span>
-            </label>
-            {skills.length > 0 && (
-              <select
-                value={skillId}
-                onChange={(e) => setSkillId(e.target.value)}
-                className="w-full h-8 text-xs bg-background border border-border rounded px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-ring mb-1"
-              >
-                <option value="">— Use custom prompt below —</option>
-                {skills.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            )}
-            <textarea
-              value={promptText}
-              onChange={(e) => setPromptText(e.target.value)}
-              placeholder={skillId ? 'Override with custom prompt (optional)…' : 'Describe what Claude should do…'}
-              rows={3}
-              className="w-full text-xs bg-background border border-border rounded px-2 py-1.5 resize-y text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-            />
-          </div>
+        {/* Title */}
+        <div className="px-4 pt-3 pb-2">
+          <Input
+            ref={inputRef}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
+            placeholder="What needs to be done?"
+            className="h-8 text-sm"
+          />
+        </div>
 
-          {/* Gate */}
-          {gates.length > 0 && (
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">
-                Gate <span className="text-muted-foreground/60">(completion criterion)</span>
-              </label>
-              <select
-                value={gateId}
-                onChange={(e) => setGateId(e.target.value)}
-                className="w-full h-8 text-xs bg-background border border-border rounded px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-              >
-                <option value="">— None —</option>
-                {gates.map((g) => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
-                ))}
-              </select>
+        {/* Tabs */}
+        <div className="flex border-b border-border px-4">
+          {DIALOG_TABS.map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={cn(
+                'px-3 py-2 text-xs font-medium border-b-2 -mb-px transition-colors',
+                tab === t
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {t}
+              {t === 'Gate' && gateId && <span className="ml-1 text-[9px] text-purple-400">●</span>}
+              {t === 'Session' && (sessionMode === 'helper' || (sessionMode === 'specific' && targetSessionId) || (sessionMode === 'new' && targetCwd.trim())) && <span className="ml-1 text-[9px] text-blue-400">●</span>}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab body */}
+        <div className="px-4 py-3 overflow-y-auto flex-1">
+          {tab === 'Action' && (
+            <div className="space-y-1.5">
+              <p className="text-[10px] text-muted-foreground">
+                Build the prompt Claude receives when this card fires.
+              </p>
+              <PromptChainBuilder
+                items={chainItems}
+                skills={skills}
+                onChange={setChainItems}
+              />
             </div>
           )}
 
-          {/* Session target */}
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">
-              Session <span className="text-muted-foreground/60">(relay or SDK target)</span>
-            </label>
-            <select
-              value={targetSessionId}
-              onChange={(e) => setTargetSessionId(e.target.value)}
-              className="w-full h-8 text-xs bg-background border border-border rounded px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-            >
-              <option value="">— Any available session —</option>
-              {sessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name || s.id.slice(0, 8)} [{s.source}]
-                </option>
-              ))}
-            </select>
-          </div>
+          {tab === 'Gate' && (
+            <div className="space-y-2">
+              <p className="text-[10px] text-muted-foreground">
+                A gate runs a helper Claude session to check the work after the agent goes idle.
+              </p>
+              {gates.length === 0 ? (
+                <p className="text-xs text-muted-foreground/60 italic">
+                  No gates defined — create some in the Gates tab.
+                </p>
+              ) : (
+                <select
+                  value={gateId}
+                  onChange={(e) => setGateId(e.target.value)}
+                  className="w-full h-8 text-xs bg-background border border-border rounded px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="">— No gate —</option>
+                  {gates.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              )}
+              {gateId && gates.find((g) => g.id === gateId)?.description && (
+                <p className="text-[10px] text-muted-foreground/70 italic">
+                  {gates.find((g) => g.id === gateId)!.description}
+                </p>
+              )}
+            </div>
+          )}
 
-          <div className="flex justify-end gap-2 pt-1">
-            <Button size="sm" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button size="sm" onClick={handleCreate} disabled={!title.trim()}>Create</Button>
-          </div>
+          {tab === 'Session' && (
+            <div className="space-y-3">
+              {/* Mode selector — three buttons side by side */}
+              <div className="grid grid-cols-3 gap-1.5">
+                {(
+                  [
+                    { mode: 'new', label: 'New Session', desc: 'Spawn a fresh Claude Code session' },
+                    { mode: 'helper', label: 'Helper Session', desc: 'System-managed helper pool' },
+                    { mode: 'specific', label: 'Specific Session', desc: 'Target a running relay/managed session' },
+                  ] as const
+                ).map(({ mode, label, desc }) => (
+                  <button
+                    key={mode}
+                    onClick={() => setSessionMode(mode)}
+                    className={cn(
+                      'flex flex-col items-center justify-center gap-0.5 rounded-md border px-2 py-2 text-center transition-colors',
+                      sessionMode === mode
+                        ? 'border-primary bg-primary/10 text-foreground'
+                        : 'border-border text-muted-foreground hover:border-border/80 hover:bg-muted/30',
+                    )}
+                  >
+                    <span className="text-[11px] font-medium leading-tight">{label}</span>
+                    <span className="text-[9px] leading-tight opacity-70">{desc}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Mode-specific content */}
+              {sessionMode === 'new' && (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-muted-foreground">
+                    Working directory <span className="opacity-60">(optional — defaults to daemon cwd)</span>
+                  </label>
+                  <Input
+                    value={targetCwd}
+                    onChange={(e) => setTargetCwd(e.target.value)}
+                    placeholder="/home/user/my-project"
+                    className="h-8 text-xs font-mono"
+                  />
+                </div>
+              )}
+
+              {sessionMode === 'helper' && (
+                <p className="text-[10px] text-muted-foreground rounded-md border border-border/50 bg-muted/20 px-3 py-2 leading-relaxed">
+                  System will pick an idle helper session or spawn one automatically. No further configuration needed.
+                </p>
+              )}
+
+              {sessionMode === 'specific' && (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-muted-foreground">
+                    Running session <span className="opacity-60">(relay sessions inject directly)</span>
+                  </label>
+                  {sessions.length === 0 ? (
+                    <p className="text-[10px] text-muted-foreground/60 italic">No active sessions found.</p>
+                  ) : (
+                    <select
+                      value={targetSessionId}
+                      onChange={(e) => setTargetSessionId(e.target.value)}
+                      className="w-full h-8 text-xs bg-background border border-border rounded px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    >
+                      <option value="">— Pick a session —</option>
+                      {sessions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.source === 'relay' ? '⚡ ' : ''}{s.name || s.id.slice(0, 8)}
+                          {s.project_id === projectId ? ' ★' : ''} [{s.source}]
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 px-4 py-3 border-t border-border">
+          <Button size="sm" variant="outline" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={handleCreate} disabled={!title.trim()}>Create</Button>
         </div>
       </div>
     </div>
@@ -477,6 +584,7 @@ function StageColumn({
   onNewCard,
   onAdvanceCard,
   onDeleteCard,
+  onFireCard,
   onRenameStage,
   onDeleteStage,
   onToggleTerminal,
@@ -489,6 +597,7 @@ function StageColumn({
   onNewCard: (stageId: string, data: NewCardData) => void;
   onAdvanceCard: (cardId: string, stageId?: string) => void;
   onDeleteCard: (cardId: string) => void;
+  onFireCard: (cardId: string) => Promise<void>;
   onRenameStage: (stageId: string, name: string) => void;
   onDeleteStage: (stageId: string) => void;
   onToggleTerminal: (stageId: string, isTerminal: boolean) => void;
@@ -528,6 +637,7 @@ function StageColumn({
             isAdvancing={advancingIds.has(card.id)}
             onAdvance={onAdvanceCard}
             onDelete={onDeleteCard}
+            onFire={onFireCard}
           />
         ))}
         {!stage.is_terminal && (
@@ -752,6 +862,8 @@ export function KanbanBoard({
         skill_id: data.skill_id,
         gate_id: data.gate_id,
         target_session_id: data.target_session_id,
+        target_cwd: data.target_cwd,
+        use_helper_session: data.use_helper_session,
       });
       setCards((prev) => [...prev, card]);
     } catch (e) {
@@ -781,6 +893,19 @@ export function KanbanBoard({
       setCards((prev) => prev.filter((c) => c.id !== cardId));
     } catch (e) {
       console.error('Delete card failed:', e);
+    }
+  }, []);
+
+  const handleFireCard = useCallback(async (cardId: string) => {
+    try {
+      const result = await fireCard(cardId);
+      if (result.session_id) {
+        setCards((prev) => prev.map((c) =>
+          c.id === cardId ? { ...c, target_session_id: result.session_id } : c
+        ));
+      }
+    } catch (e) {
+      console.error('Fire card failed:', e);
     }
   }, []);
 
@@ -895,6 +1020,7 @@ export function KanbanBoard({
               onNewCard={handleNewCard}
               onAdvanceCard={handleAdvanceCard}
               onDeleteCard={handleDeleteCard}
+              onFireCard={handleFireCard}
               onRenameStage={handleRenameStage}
               onDeleteStage={handleDeleteStage}
               onToggleTerminal={handleToggleTerminal}
