@@ -109,6 +109,8 @@ app.add_typer(daemon_app, name="daemon")
 app.add_typer(profile_app, name="profile")
 app.add_typer(cron_app, name="cron")
 app.add_typer(connectors_app, name="connectors")
+hub_app = typer.Typer(name="hub", help="Composio Integration Hub — browse and connect 100+ app integrations.", no_args_is_help=True)
+connectors_app.add_typer(hub_app, name="hub")
 
 service = SqliteVaultService()
 
@@ -5237,6 +5239,279 @@ def _connectors_client():
 
     headers = {"Authorization": f"Bearer {sync_token}"}
     return vault_url, headers
+
+
+def _composio_client():
+    """Return (base_url, headers) for the Composio Hub API."""
+    vault_url, headers = _connectors_client()
+    return f"{vault_url}/api/composio", headers
+
+
+# ---------------------------------------------------------------------------
+# Hub commands
+# ---------------------------------------------------------------------------
+
+@hub_app.command("status")
+def hub_status():
+    """Check if Composio is configured on the backend."""
+    import httpx
+
+    base_url, headers = _composio_client()
+    try:
+        resp = httpx.get(f"{base_url}/status", headers=headers, timeout=10.0)
+    except httpx.ConnectError:
+        console.print("[red]Error: Cannot connect to backend.[/red]")
+        raise typer.Exit(1)
+    data = resp.json()
+    if data.get("configured"):
+        console.print("[green]✓ Composio is configured.[/green]")
+    else:
+        console.print("[yellow]⚠ Composio is not configured. Set COMPOSIO_API_KEY on the backend.[/yellow]")
+        console.print("  Get your key at: https://app.composio.dev/settings")
+
+
+@hub_app.command("list")
+def hub_list(
+    search: str = typer.Option("", "--search", "-s", help="Filter by name or category"),
+    connected_only: bool = typer.Option(False, "--connected", help="Show only connected apps"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """List available Composio integrations."""
+    import httpx
+    import json as json_lib
+    from rich.table import Table
+
+    base_url, headers = _composio_client()
+    try:
+        resp = httpx.get(f"{base_url}/apps", headers=headers, timeout=15.0)
+    except httpx.ConnectError:
+        console.print("[red]Error: Cannot connect to backend.[/red]")
+        raise typer.Exit(1)
+
+    if resp.status_code != 200:
+        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
+        raise typer.Exit(1)
+
+    apps = resp.json().get("apps", [])
+
+    if search:
+        apps = [a for a in apps if search.lower() in a["name"].lower() or search.lower() in a["display_name"].lower() or any(search.lower() in c.lower() for c in a.get("categories", []))]
+    if connected_only:
+        apps = [a for a in apps if a.get("connected")]
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(apps, indent=2) + "\n")
+        return
+
+    if not apps:
+        console.print("[yellow]No apps found.[/yellow]")
+        return
+
+    table = Table(title=f"Composio Apps ({len(apps)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Display Name")
+    table.add_column("Categories")
+    table.add_column("Status")
+
+    for a in apps:
+        status = "[green]Connected[/green]" if a.get("connected") else "[dim]—[/dim]"
+        cats = ", ".join(a.get("categories", [])[:3])
+        table.add_row(a["name"], a["display_name"], cats, status)
+
+    console.print(table)
+
+
+@hub_app.command("connected")
+def hub_connected(
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """Show your connected Composio apps."""
+    import httpx
+    import json as json_lib
+    from rich.table import Table
+
+    base_url, headers = _composio_client()
+    try:
+        resp = httpx.get(f"{base_url}/connected", headers=headers, timeout=10.0)
+    except httpx.ConnectError:
+        console.print("[red]Error: Cannot connect to backend.[/red]")
+        raise typer.Exit(1)
+
+    if resp.status_code != 200:
+        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
+        raise typer.Exit(1)
+
+    connections = resp.json().get("connections", [])
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(connections, indent=2) + "\n")
+        return
+
+    if not connections:
+        console.print("[yellow]No apps connected. Run [bold]vlt connectors hub connect <app>[/bold] to get started.[/yellow]")
+        return
+
+    table = Table(title="Connected Apps")
+    table.add_column("App", style="cyan")
+    table.add_column("Status")
+    table.add_column("Connection ID", style="dim")
+
+    for c in connections:
+        table.add_row(c["app_name"], c.get("status", "active"), c.get("connection_id", "")[:12] + "…")
+
+    console.print(table)
+
+
+@hub_app.command("connect")
+def hub_connect(
+    app: str = typer.Argument(..., help="App name e.g. gmail, slack, linear"),
+):
+    """Connect a Composio app via OAuth. Opens the authorization URL."""
+    import httpx
+
+    base_url, headers = _composio_client()
+    try:
+        resp = httpx.post(f"{base_url}/connect/{app}", headers=headers, timeout=15.0)
+    except httpx.ConnectError:
+        console.print("[red]Error: Cannot connect to backend.[/red]")
+        raise typer.Exit(1)
+
+    if resp.status_code != 200:
+        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
+        raise typer.Exit(1)
+
+    data = resp.json()
+    url = data.get("redirect_url", "")
+    console.print(f"\n[green]Open this URL to connect {app}:[/green]")
+    console.print(f"  [link={url}]{url}[/link]")
+    console.print("\n[dim]After authorizing, run [bold]vlt connectors hub connected[/bold] to verify.[/dim]")
+
+
+@hub_app.command("disconnect")
+def hub_disconnect(
+    app: str = typer.Argument(..., help="App name to disconnect"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+):
+    """Disconnect a Composio app."""
+    import httpx
+
+    if not yes:
+        confirmed = typer.confirm(f"Disconnect {app} from Composio?")
+        if not confirmed:
+            raise typer.Exit()
+
+    base_url, headers = _composio_client()
+    try:
+        resp = httpx.delete(f"{base_url}/{app}", headers=headers, timeout=10.0)
+    except httpx.ConnectError:
+        console.print("[red]Error: Cannot connect to backend.[/red]")
+        raise typer.Exit(1)
+
+    if resp.status_code != 200:
+        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓ {app} disconnected.[/green]")
+
+
+@hub_app.command("call")
+def hub_call(
+    app: str = typer.Argument(..., help="App name e.g. gmail"),
+    action: str = typer.Argument(..., help="Action name e.g. GMAIL_SEND_EMAIL"),
+    params: str = typer.Argument("{}", help="JSON params string"),
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """Invoke a Composio action.
+
+    Examples:
+
+        vlt connectors hub call gmail GMAIL_SEND_EMAIL '{"recipient_email":"you@test.com","subject":"Hi","body":"Hello"}'
+    """
+    import httpx
+    import json as json_lib
+
+    try:
+        params_dict = json_lib.loads(params)
+    except json_lib.JSONDecodeError as e:
+        console.print(f"[red]Error: params must be valid JSON: {e}[/red]")
+        raise typer.Exit(1)
+
+    base_url, headers = _composio_client()
+    try:
+        resp = httpx.post(
+            f"{base_url}/{app}/invoke",
+            json={"action": action, "params": params_dict},
+            headers=headers,
+            timeout=30.0,
+        )
+    except httpx.ConnectError:
+        console.print("[red]Error: Cannot connect to backend.[/red]")
+        raise typer.Exit(1)
+
+    if resp.status_code >= 400:
+        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
+        raise typer.Exit(1)
+
+    data = resp.json()
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(data, indent=2) + "\n")
+        return
+
+    if data.get("success"):
+        console.print("[green]✓ Success[/green]")
+        result = data.get("data", {})
+        if result:
+            console.print(json_lib.dumps(result, indent=2))
+    else:
+        console.print("[red]✗ Failed[/red]")
+        raise typer.Exit(1)
+
+
+@hub_app.command("actions")
+def hub_actions(
+    app: str = typer.Argument(..., help="App name e.g. gmail"),
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """List available actions for a Composio app."""
+    import httpx
+    import json as json_lib
+    from rich.table import Table
+
+    base_url, headers = _composio_client()
+    try:
+        resp = httpx.get(f"{base_url}/{app}/actions", headers=headers, timeout=15.0)
+    except httpx.ConnectError:
+        console.print("[red]Error: Cannot connect to backend.[/red]")
+        raise typer.Exit(1)
+
+    if resp.status_code != 200:
+        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
+        raise typer.Exit(1)
+
+    actions = resp.json().get("actions", [])
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(actions, indent=2) + "\n")
+        return
+
+    if not actions:
+        console.print(f"[yellow]No actions found for {app}.[/yellow]")
+        return
+
+    table = Table(title=f"{app} Actions ({len(actions)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Display Name")
+    table.add_column("Description")
+
+    for a in actions:
+        table.add_row(a["name"], a.get("display_name", ""), (a.get("description", "") or "")[:60])
+
+    console.print(table)
 
 
 @connectors_app.command("list")
