@@ -37,6 +37,7 @@ dependencies = [
     "Pillow>=10.0.0",
     "python-magic>=0.4.27",
     "vlt-connectors",
+    "composio-core>=0.7",
 ]
 
 [dependency-groups]
