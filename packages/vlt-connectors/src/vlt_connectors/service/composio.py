@@ -49,14 +49,20 @@ class ComposioService(ServiceConnector):
         return key
 
     def _toolset(self):
-        """Return a ComposioToolSet instance. Import is lazy to avoid dep errors if composio not installed."""
-        try:
-            from composio import ComposioToolSet
-        except ImportError:
-            raise RuntimeError(
-                "composio-core is not installed. Run: uv pip install composio-core"
-            )
-        return ComposioToolSet(api_key=self._api_key())
+        """Return a ComposioToolSet instance. Import is lazy to avoid dep errors if composio not installed.
+
+        The instance is cached on self._toolset_instance to avoid rebuilding the SDK client
+        on every call.
+        """
+        if not hasattr(self, "_toolset_instance") or self._toolset_instance is None:
+            try:
+                from composio import ComposioToolSet
+            except ImportError:
+                raise RuntimeError(
+                    "composio-core is not installed. Run: uv pip install composio-core"
+                )
+            self._toolset_instance = ComposioToolSet(api_key=self._api_key())
+        return self._toolset_instance
 
     def is_configured(self) -> bool:
         """True if COMPOSIO_API_KEY is set."""
@@ -96,7 +102,7 @@ class ComposioService(ServiceConnector):
             return [
                 {
                     "app_name": getattr(c, "appName", "") or getattr(c, "app_name", ""),
-                    "status": getattr(c, "status", "active"),
+                    "status": getattr(c, "status", "unknown"),
                     "connection_id": getattr(c, "id", ""),
                 }
                 for c in connections
@@ -137,6 +143,12 @@ class ComposioService(ServiceConnector):
                         toolset.client.connected_accounts.delete(connection_id=conn_id)
                         return
             # No connection found — silently succeed (already disconnected)
+            logger.debug(
+                "Composio disconnect: no active connection for app=%s entity=%s (already disconnected)",
+                app_name,
+                entity_id,
+            )
+            return
         except Exception as exc:
             logger.exception("Composio disconnect(%s, %s) failed", app_name, entity_id)
             raise RuntimeError(f"Failed to disconnect app: {exc}") from exc
@@ -173,11 +185,14 @@ class ComposioService(ServiceConnector):
         """Execute a Composio action on behalf of a user.
 
         Returns dict with keys: success (bool), data (dict), error (str|None).
+
+        Note: Unlike other methods, this never raises — exceptions are caught and
+        returned as {"success": False, "data": {}, "error": str(exc)}.
         """
         toolset = self._toolset()
         try:
             result = toolset.execute_action(
-                action=action_name.upper(),
+                action=action_name.upper(),  # Composio uses UPPER_SNAKE_CASE action names
                 params=params,
                 entity_id=entity_id,
             )

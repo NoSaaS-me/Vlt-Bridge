@@ -36,8 +36,8 @@ class ConnectorRegistry:
         try:
             from .service.composio import ComposioService
             self.register_service(ComposioService())
-        except ImportError as e:
-            logger.warning("Could not load ComposioService: %s", e)
+        except ImportError:
+            pass
         # Load built-in declarative TOML connectors
         from pathlib import Path
         from .declarative import load_connectors_from_dir
