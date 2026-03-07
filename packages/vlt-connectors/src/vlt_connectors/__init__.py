@@ -6,6 +6,7 @@ from .encryption import encrypt_value, decrypt_value, get_fernet, generate_key
 from .daemon_client import CredentialCache
 from .declarative import DeclarativeConnector, load_connector_from_toml, load_connectors_from_dir
 from .webhook_models import PatternFilter, PatternCondition, match_pattern
+from .service.composio import ComposioService
 
 __all__ = [
     "BaseConnector", "ActionConnector", "ServiceConnector",
@@ -16,4 +17,5 @@ __all__ = [
     "CredentialCache",
     "DeclarativeConnector", "load_connector_from_toml", "load_connectors_from_dir",
     "PatternFilter", "PatternCondition", "match_pattern",
+    "ComposioService",
 ]

@@ -33,6 +33,11 @@ class ConnectorRegistry:
             self.register_service(OllamaConnector())
         except ImportError:
             pass
+        try:
+            from .service.composio import ComposioService
+            self.register_service(ComposioService())
+        except ImportError as e:
+            logger.warning("Could not load ComposioService: %s", e)
         # Load built-in declarative TOML connectors
         from pathlib import Path
         from .declarative import load_connectors_from_dir
