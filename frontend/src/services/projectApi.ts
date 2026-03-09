@@ -61,3 +61,13 @@ export async function deleteProject(projectId: string): Promise<void> {
 export async function fetchProjectStats(projectId: string): Promise<ProjectStats> {
   return apiFetch<ProjectStats>(`/api/projects/${encodeURIComponent(projectId)}/stats`);
 }
+
+/**
+ * Toggle the favorite status of a project. Returns the new is_favorite value.
+ */
+export async function toggleProjectFavorite(projectId: string): Promise<{ project_id: string; is_favorite: boolean }> {
+  return apiFetch<{ project_id: string; is_favorite: boolean }>(
+    `/api/projects/${encodeURIComponent(projectId)}/favorite`,
+    { method: 'PUT' },
+  );
+}

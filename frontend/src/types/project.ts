@@ -14,6 +14,7 @@ export interface Project {
   updated_at: string;   // ISO 8601 timestamp
   note_count?: number;
   thread_count?: number;
+  is_favorite?: boolean;
 }
 
 /**

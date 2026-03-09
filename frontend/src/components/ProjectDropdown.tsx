@@ -3,7 +3,7 @@
  *
  * Uses Popover (not Select) so the star icon has an independent click
  * target that doesn't trigger project selection.
- * Favorites are stored in localStorage and sorted to the top.
+ * Favorites are persisted server-side via PUT /api/projects/{id}/favorite.
  */
 
 import { useState, useCallback } from 'react';
@@ -16,21 +16,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/types/project';
-
-const FAVORITES_KEY = 'vlt-bridge-favorite-projects';
-
-function loadFavorites(): Set<string> {
-  try {
-    const raw = localStorage.getItem(FAVORITES_KEY);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-function saveFavorites(favorites: Set<string>) {
-  localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favorites]));
-}
+import { toggleProjectFavorite } from '@/services/projectApi';
 
 interface ProjectDropdownProps {
   projects: Project[];
@@ -48,32 +34,41 @@ export function ProjectDropdown({
   disabled = false,
 }: ProjectDropdownProps) {
   const [open, setOpen] = useState(false);
-  const [favorites, setFavorites] = useState<Set<string>>(loadFavorites);
+  // Local optimistic state for favorites (seeded from server data)
+  const [localFavOverrides, setLocalFavOverrides] = useState<Record<string, boolean>>({});
 
-  const toggleFavorite = useCallback((projectId: string) => {
-    setFavorites((prev) => {
-      const next = new Set(prev);
-      if (next.has(projectId)) {
-        next.delete(projectId);
-      } else {
-        next.add(projectId);
-      }
-      saveFavorites(next);
-      return next;
-    });
-  }, []);
+  const isFav = useCallback(
+    (projectId: string) => {
+      if (projectId in localFavOverrides) return localFavOverrides[projectId];
+      const p = projects.find((pr) => pr.id === projectId);
+      return p?.is_favorite ?? false;
+    },
+    [projects, localFavOverrides],
+  );
+
+  const toggleFavorite = useCallback(async (projectId: string) => {
+    const current = isFav(projectId);
+    // Optimistic update
+    setLocalFavOverrides((prev) => ({ ...prev, [projectId]: !current }));
+    try {
+      await toggleProjectFavorite(projectId);
+    } catch {
+      // Revert on failure
+      setLocalFavOverrides((prev) => ({ ...prev, [projectId]: current }));
+    }
+  }, [isFav]);
 
   // Sort: favorites first, then alphabetical within each group
   const sorted = [...projects].sort((a, b) => {
-    const aFav = favorites.has(a.id) ? 0 : 1;
-    const bFav = favorites.has(b.id) ? 0 : 1;
+    const aFav = isFav(a.id) ? 0 : 1;
+    const bFav = isFav(b.id) ? 0 : 1;
     if (aFav !== bFav) return aFav - bFav;
     return a.name.localeCompare(b.name);
   });
 
-  const hasFavorites = sorted.some((p) => favorites.has(p.id));
+  const hasFavorites = sorted.some((p) => isFav(p.id));
   const firstNonFavIdx = hasFavorites
-    ? sorted.findIndex((p) => !favorites.has(p.id))
+    ? sorted.findIndex((p) => !isFav(p.id))
     : -1;
 
   return (
@@ -97,7 +92,7 @@ export function ProjectDropdown({
       <PopoverContent align="start" className="w-[220px] p-1" sideOffset={4}>
         <div className="max-h-64 overflow-y-auto">
           {sorted.map((project, idx) => {
-            const isFav = favorites.has(project.id);
+            const fav = isFav(project.id);
             const isSelected = project.id === selectedProject?.id;
 
             return (
@@ -119,7 +114,7 @@ export function ProjectDropdown({
                     <Star
                       className={cn(
                         'h-3 w-3 transition-colors',
-                        isFav
+                        fav
                           ? 'fill-amber-400 text-amber-400'
                           : 'text-muted-foreground/30 hover:text-muted-foreground',
                       )}

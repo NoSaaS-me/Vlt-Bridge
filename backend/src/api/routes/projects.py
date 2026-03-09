@@ -135,6 +135,19 @@ async def get_project_stats(
     return stats
 
 
+@router.put("/{project_id}/favorite", response_model=dict)
+async def toggle_favorite(
+    project_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    project_service: ProjectService = Depends(get_project_service),
+):
+    """Toggle favorite status for a project."""
+    result = project_service.toggle_favorite(auth.user_id, project_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+    return {"project_id": project_id, "is_favorite": result}
+
+
 @router.post("/{project_id}/set-default", response_model=dict)
 async def set_default_project(
     project_id: str,

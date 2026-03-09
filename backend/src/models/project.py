@@ -83,6 +83,7 @@ class Project(ProjectBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
     note_count: Optional[int] = Field(0, description="Number of notes in project")
     thread_count: Optional[int] = Field(0, description="Number of threads in project")
+    is_favorite: bool = Field(False, description="Whether the project is a user favorite")
 
     @field_validator("id")
     @classmethod

@@ -55,6 +55,7 @@ class ProjectService:
                     p.description,
                     p.created_at,
                     p.updated_at,
+                    COALESCE(p.is_favorite, 0) as is_favorite,
                     COALESCE(nm.note_count, 0) as note_count,
                     COALESCE(t.thread_count, 0) as thread_count
                 FROM projects p
@@ -69,7 +70,7 @@ class ProjectService:
                     GROUP BY user_id, project_id
                 ) t ON p.user_id = t.user_id AND p.project_id = t.project_id
                 WHERE p.user_id = ?
-                ORDER BY p.updated_at DESC
+                ORDER BY p.is_favorite DESC, p.updated_at DESC
                 """,
                 (user_id,)
             )
@@ -95,6 +96,7 @@ class ProjectService:
                     updated_at=updated_at,
                     note_count=row["note_count"],
                     thread_count=row["thread_count"],
+                    is_favorite=bool(row["is_favorite"]),
                 ))
 
             return projects
@@ -483,6 +485,34 @@ class ProjectService:
 
         except Exception as e:
             logger.error(f"Failed to get stats for project {project_id}: {e}")
+            return None
+        finally:
+            conn.close()
+
+    def toggle_favorite(self, user_id: str, project_id: str) -> Optional[bool]:
+        """Toggle the favorite status of a project.
+
+        Returns the new is_favorite value, or None if project not found.
+        """
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT COALESCE(is_favorite, 0) as is_favorite FROM projects WHERE user_id = ? AND project_id = ?",
+                (user_id, project_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            new_val = 0 if row["is_favorite"] else 1
+            with conn:
+                conn.execute(
+                    "UPDATE projects SET is_favorite = ? WHERE user_id = ? AND project_id = ?",
+                    (new_val, user_id, project_id),
+                )
+            return bool(new_val)
+        except Exception as e:
+            logger.error(f"Failed to toggle favorite for {project_id}: {e}")
             return None
         finally:
             conn.close()

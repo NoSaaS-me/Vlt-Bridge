@@ -411,6 +411,8 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_oauth_states_user ON oauth_states(user_id, connector_name)",
     # Add pkce_verifier column to existing oauth_states tables (023-connectors Phase 5 fix)
     "ALTER TABLE oauth_states ADD COLUMN pkce_verifier TEXT",
+    # Add is_favorite column to projects table (server-side favorites)
+    "ALTER TABLE projects ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
 )
 
 
