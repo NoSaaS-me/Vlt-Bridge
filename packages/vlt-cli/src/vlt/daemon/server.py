@@ -1562,7 +1562,10 @@ async def claude_hook(request: Request):
     from vlt.db import engine
     from vlt.core.models import AgentSession
 
-    payload = await request.json()
+    body = await request.body()
+    if not body or not body.strip():
+        return {}
+    payload = json.loads(body)
     event = payload.get("hook_event_name", "")
     session_id = payload.get("session_id")
     cwd = payload.get("cwd", "")
