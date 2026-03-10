@@ -8,7 +8,7 @@
  *   - "New Card" button in each stage, "New Stage" at the end
  *   - Pipeline can be renamed/deleted via header menu
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Plus, Check, X, Pencil, Trash2, ChevronDown, MoreVertical, Flag } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -588,6 +588,8 @@ function StageColumn({
   onRenameStage,
   onDeleteStage,
   onToggleTerminal,
+  sessionStatuses,
+  onViewSession,
 }: {
   stage: PipelineStage;
   stageCards: PipelineCard[];
@@ -601,14 +603,32 @@ function StageColumn({
   onRenameStage: (stageId: string, name: string) => void;
   onDeleteStage: (stageId: string) => void;
   onToggleTerminal: (stageId: string, isTerminal: boolean) => void;
+  sessionStatuses: Record<string, string>;
+  onViewSession?: (sessionId: string) => void;
 }) {
   const [newCardOpen, setNewCardOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   return (
-    <div className={cn(
-      'flex flex-col w-72 shrink-0 rounded-lg border border-border overflow-hidden',
-      stage.is_terminal ? 'bg-emerald-500/5' : 'bg-muted/20',
-    )}>
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const cardId = e.dataTransfer.getData('text/plain');
+        if (cardId) onAdvanceCard(cardId, stage.id);
+      }}
+      className={cn(
+        'flex flex-col w-72 shrink-0 rounded-lg border border-border overflow-hidden transition-colors',
+        stage.is_terminal ? 'bg-emerald-500/5' : 'bg-muted/20',
+        dragOver && 'border-blue-400/60 bg-blue-500/5',
+      )}
+    >
       <NewCardDialog
         open={newCardOpen}
         onClose={() => setNewCardOpen(false)}
@@ -638,6 +658,8 @@ function StageColumn({
             onAdvance={onAdvanceCard}
             onDelete={onDeleteCard}
             onFire={onFireCard}
+            sessionStatuses={sessionStatuses}
+            onViewSession={onViewSession}
           />
         ))}
         {!stage.is_terminal && (
@@ -710,10 +732,12 @@ function NewStageInput({ onCreate }: { onCreate: (name: string) => void }) {
 export function KanbanBoard({
   projectId,
   refreshKey = 0,
+  onViewSession,
 }: {
   projectId?: string;
   onNewEntry?: (columnId: string) => void; // kept for backwards compat, unused
   refreshKey?: number;
+  onViewSession?: (sessionId: string) => void;
 }) {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [selected, setSelected] = useState<Pipeline | null>(null);
@@ -722,6 +746,34 @@ export function KanbanBoard({
   const [error, setError] = useState<string | null>(null);
   const [advancingIds, setAdvancingIds] = useState<Set<string>>(new Set());
   const [showNewPipeline, setShowNewPipeline] = useState(false);
+  const [sessionStatuses, setSessionStatuses] = useState<Record<string, string>>({});
+
+  // Poll session statuses for cards that have target_session_id
+  const trackedSessionIds = useMemo(
+    () => [...new Set(cards.map((c) => c.target_session_id).filter(Boolean) as string[])],
+    [cards],
+  );
+
+  useEffect(() => {
+    if (trackedSessionIds.length === 0) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const sessions = await listSessions();
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const s of sessions) {
+          if (trackedSessionIds.includes(s.id)) {
+            map[s.id] = s.status;
+          }
+        }
+        setSessionStatuses(map);
+      } catch { /* daemon may be down */ }
+    };
+    poll();
+    const iv = setInterval(poll, 5000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [trackedSessionIds]);
 
   // ─── Load pipelines ────────────────────────────────────────────────────
   const loadPipelines = useCallback(async () => {
@@ -899,7 +951,11 @@ export function KanbanBoard({
   const handleFireCard = useCallback(async (cardId: string) => {
     try {
       const result = await fireCard(cardId);
-      if (result.session_id) {
+      // Refresh card data to pick up fire_count, last_fired_at, target_session_id
+      if (selected) {
+        const cs = await listCards({ pipeline_id: selected.id });
+        setCards(cs);
+      } else if (result.session_id) {
         setCards((prev) => prev.map((c) =>
           c.id === cardId ? { ...c, target_session_id: result.session_id } : c
         ));
@@ -907,7 +963,7 @@ export function KanbanBoard({
     } catch (e) {
       console.error('Fire card failed:', e);
     }
-  }, []);
+  }, [selected]);
 
   // ─── Pipeline rename inline ────────────────────────────────────────────
   const [renamingPipeline, setRenamingPipeline] = useState(false);
@@ -1024,6 +1080,8 @@ export function KanbanBoard({
               onRenameStage={handleRenameStage}
               onDeleteStage={handleDeleteStage}
               onToggleTerminal={handleToggleTerminal}
+              sessionStatuses={sessionStatuses}
+              onViewSession={onViewSession}
             />
           ))}
 

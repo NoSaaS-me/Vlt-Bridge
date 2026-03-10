@@ -5,26 +5,26 @@ Wraps the `claude` CLI so the vlt daemon can relay terminal I/O to the web UI.
 The user experience is identical to running `claude` directly.
 
 Platform support:
-  Linux/macOS: os.openpty() + select (stdlib only)
-  Windows:     pywinpty ConPTY (if available), else graceful fallback
+  Linux/macOS: os.openpty() + select + termios (stdlib only)
+  Windows:     pywinpty ConPTY + WebSocket streaming (pywinpty required)
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import platform
-import shlex
 import shutil
 import signal
 import struct
 import sys
-import termios
-import tty
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# POSIX-only imports — deferred to avoid ImportError on Windows
+if platform.system() != "Windows":
+    import termios
+    import tty
 
 
 def find_real_claude() -> str:
@@ -44,13 +44,20 @@ def find_real_claude() -> str:
 
 
 def _which_all(name: str) -> list[str]:
-    """Return all PATH entries for a command name."""
+    """Return all PATH entries for a command name (Windows-aware)."""
     results = []
     path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    # On Windows, check common executable extensions
+    if platform.system() == "Windows":
+        pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
+        suffixes = [""] + [ext.lower() for ext in pathext]
+    else:
+        suffixes = [""]
     for d in path_dirs:
-        full = os.path.join(d, name)
-        if os.path.isfile(full) and os.access(full, os.X_OK):
-            results.append(full)
+        for suffix in suffixes:
+            full = os.path.join(d, name + suffix)
+            if os.path.isfile(full) and os.access(full, os.X_OK):
+                results.append(full)
     return results
 
 
@@ -349,53 +356,245 @@ def _relay_posix(claude_bin: str, args: list[str], session_id: str) -> int:
 def _relay_windows(claude_bin: str, args: list[str], session_id: str) -> int:
     """
     Windows relay using pywinpty ConPTY.
-    Falls back to subprocess without relay if pywinpty not available.
+
+    Creates a ConPTY pseudo-terminal pair:
+      PtyProcess wraps claude's stdin/stdout/stderr
+
+    The user's console is bridged:
+      user stdin  -> PtyProcess.write() -> claude's stdin
+      claude's stdout -> PtyProcess.read() -> user stdout + daemon stream
+
+    WebSocket streaming, scrollback, inject, and resize all mirror the POSIX
+    implementation. Falls back to plain subprocess (no relay) if pywinpty is
+    not installed.
     """
     try:
         from winpty import PtyProcess
     except ImportError:
-        # Graceful fallback: just run claude directly, no relay
+        print(
+            "vlt session-relay: pywinpty not installed — running claude without relay.\n"
+            "Install with: pip install pywinpty",
+            file=sys.stderr,
+        )
         import subprocess
         proc = subprocess.run([claude_bin] + args)
         return proc.returncode
 
-    import threading
+    import ctypes
     import msvcrt
+    import queue as _relay_queue
+    import threading
+    import time
 
     cols, rows = os.get_terminal_size()
+
+    env = os.environ.copy()
+    env["VLT_SESSION_ID"] = session_id
+
     relay_args = args[:]
     if "--session-id" not in relay_args and "--resume" not in relay_args:
         relay_args = ["--session-id", session_id] + relay_args
-    proc = PtyProcess.spawn([claude_bin] + relay_args, dimensions=(rows, cols))
+
+    proc = PtyProcess.spawn(
+        [claude_bin] + relay_args,
+        dimensions=(rows, cols),
+        env=env,
+    )
 
     register_session(session_id, os.getcwd(), os.getpid(), args)
 
+    # Pre-allocate write queue so PTY output is captured from the first byte.
+    ws_write_queue: _relay_queue.Queue = _relay_queue.Queue(maxsize=8192)
+
+    # Relay-side scrollback (survives daemon restarts, replayed on reconnect)
+    _MAX_RELAY_SCROLLBACK = 2 * 1024 * 1024  # 2 MiB
+    relay_scrollback: bytearray = bytearray()
+    relay_scrollback_lock: threading.Lock = threading.Lock()
+
+    _relay_active = threading.Event()
+    _relay_active.set()
+
+    # ── WebSocket relay thread (mirrors POSIX start_ws_relay) ─────────
+
+    def start_ws_relay():
+        nonlocal ws_write_queue
+        try:
+            import websocket  # websocket-client
+        except ImportError:
+            return  # No streaming without websocket-client
+
+        daemon_base = get_daemon_url().replace("http://", "ws://").replace("https://", "wss://")
+        ws_url = f"{daemon_base}/ws/relay/{session_id}"
+        backoff = 1.0
+        first_connection = True
+        is_reconnect = False
+
+        while _relay_active.is_set():
+            if first_connection:
+                q = ws_write_queue
+                first_connection = False
+                is_reconnect = False
+            else:
+                q = _relay_queue.Queue(maxsize=8192)
+                ws_write_queue = q
+                is_reconnect = True
+
+            def on_message(ws, message):
+                """Handle inject (keystroke forwarding) and resize from browser."""
+                try:
+                    data = json.loads(message)
+                    if data.get("type") == "inject":
+                        proc.write(data.get("data", ""))
+                    elif data.get("type") == "resize":
+                        new_cols = data.get("cols", 80)
+                        new_rows = data.get("rows", 24)
+                        try:
+                            proc.setwinsize(new_rows, new_cols)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            def ws_send_loop(ws):
+                while True:
+                    chunk = q.get()
+                    if chunk is None:
+                        break
+                    try:
+                        ws.send_bytes(chunk)
+                    except Exception:
+                        break
+
+            try:
+                ws = websocket.WebSocketApp(ws_url, on_message=on_message)
+
+                def on_open(ws):
+                    nonlocal backoff
+                    backoff = 1.0
+                    register_session(session_id, os.getcwd(), os.getpid(), args)
+                    if is_reconnect:
+                        with relay_scrollback_lock:
+                            snapshot = bytes(relay_scrollback) if relay_scrollback else None
+                        if snapshot:
+                            try:
+                                ws.send_bytes(snapshot)
+                            except Exception:
+                                pass
+                    send_thread = threading.Thread(
+                        target=ws_send_loop, args=(ws,), daemon=True,
+                    )
+                    send_thread.start()
+
+                ws.on_open = on_open
+                ws.run_forever(ping_interval=30)
+                q.put(None)  # stop send thread
+            except Exception:
+                pass
+
+            if not _relay_active.is_set():
+                break
+            time.sleep(min(backoff, 30.0))
+            backoff = min(backoff * 2, 30.0)
+
+    ws_thread = threading.Thread(target=start_ws_relay, daemon=True)
+    ws_thread.start()
+
+    # ── Enable Windows virtual terminal processing for ANSI sequences ─
+
+    _ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+    _ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
+    kernel32 = ctypes.windll.kernel32
+    # stdout: enable ANSI escape rendering
+    stdout_handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+    mode = ctypes.c_ulong()
+    kernel32.GetConsoleMode(stdout_handle, ctypes.byref(mode))
+    old_stdout_mode = mode.value
+    kernel32.SetConsoleMode(stdout_handle, mode.value | _ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+    # stdin: enable virtual terminal input for raw key capture
+    stdin_handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+    kernel32.GetConsoleMode(stdin_handle, ctypes.byref(mode))
+    old_stdin_mode = mode.value
+    kernel32.SetConsoleMode(stdin_handle, mode.value | _ENABLE_VIRTUAL_TERMINAL_INPUT)
+
+    # ── I/O bridge threads ────────────────────────────────────────────
+
     def stdin_to_pty():
-        while proc.isalive():
+        """Read user keystrokes and forward to the ConPTY."""
+        while _relay_active.is_set() and proc.isalive():
             try:
                 if msvcrt.kbhit():
                     ch = msvcrt.getwch()
                     proc.write(ch)
+                else:
+                    time.sleep(0.01)  # Avoid busy-wait
             except Exception:
                 break
 
     def pty_to_stdout():
-        while proc.isalive():
+        """Read ConPTY output, display locally, buffer for WebSocket."""
+        nonlocal ws_write_queue
+        while _relay_active.is_set() and proc.isalive():
             try:
                 data = proc.read(4096)
-                if data:
-                    sys.stdout.write(data)
-                    sys.stdout.flush()
+                if not data:
+                    time.sleep(0.01)
+                    continue
+                # Write to local console
+                sys.stdout.write(data)
+                sys.stdout.flush()
+                # Encode for scrollback + WebSocket (ConPTY returns str)
+                raw = data.encode("utf-8", errors="replace")
+                # Maintain relay-side scrollback
+                with relay_scrollback_lock:
+                    relay_scrollback.extend(raw)
+                    if len(relay_scrollback) > _MAX_RELAY_SCROLLBACK:
+                        del relay_scrollback[:len(relay_scrollback) - _MAX_RELAY_SCROLLBACK]
+                # Forward to WebSocket stream
+                if ws_write_queue is not None:
+                    try:
+                        ws_write_queue.put_nowait(raw)
+                    except Exception:
+                        pass
             except Exception:
                 break
 
-    t1 = threading.Thread(target=stdin_to_pty, daemon=True)
-    t2 = threading.Thread(target=pty_to_stdout, daemon=True)
-    t1.start()
-    t2.start()
+    t_in = threading.Thread(target=stdin_to_pty, daemon=True)
+    t_out = threading.Thread(target=pty_to_stdout, daemon=True)
+    t_in.start()
+    t_out.start()
 
-    proc.wait()
-    deregister_session(session_id)
+    # ── Console resize polling (Windows has no SIGWINCH) ──────────────
+
+    def resize_poll():
+        """Poll terminal size every 500ms and propagate changes to ConPTY."""
+        last_size = (cols, rows)
+        while _relay_active.is_set() and proc.isalive():
+            try:
+                cur = os.get_terminal_size()
+                if (cur.columns, cur.lines) != last_size:
+                    last_size = (cur.columns, cur.lines)
+                    proc.setwinsize(cur.lines, cur.columns)
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+    t_resize = threading.Thread(target=resize_poll, daemon=True)
+    t_resize.start()
+
+    # ── Wait for process exit ─────────────────────────────────────────
+
+    try:
+        proc.wait()
+    finally:
+        _relay_active.clear()
+        # Restore original console modes
+        try:
+            kernel32.SetConsoleMode(stdout_handle, old_stdout_mode)
+            kernel32.SetConsoleMode(stdin_handle, old_stdin_mode)
+        except Exception:
+            pass
+        deregister_session(session_id)
+
     return proc.exitstatus or 0
 
 

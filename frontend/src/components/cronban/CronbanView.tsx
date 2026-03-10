@@ -18,7 +18,7 @@ import { KanbanBoard } from './KanbanBoard';
 import { WebhooksPanel } from './WebhooksPanel';
 import { HelperSessionsPanel } from './HelperSessionsPanel';
 
-export function CronbanView({ projectId }: { projectId?: string }) {
+export function CronbanView({ projectId, onViewSession }: { projectId?: string; onViewSession?: (sessionId: string) => void }) {
   return (
     <Tabs defaultValue="kanban" className="h-full flex flex-col">
       <TabsList className="shrink-0 rounded-none border-b border-border bg-transparent px-4 justify-start gap-1 h-10">
@@ -52,7 +52,7 @@ export function CronbanView({ projectId }: { projectId?: string }) {
         <CalendarView projectId={projectId} />
       </TabsContent>
       <TabsContent value="kanban" className="flex-1 overflow-hidden mt-0">
-        <KanbanBoard projectId={projectId} />
+        <KanbanBoard projectId={projectId} onViewSession={onViewSession} />
       </TabsContent>
       <TabsContent value="webhooks" className="flex-1 overflow-hidden mt-0">
         <WebhooksPanel projectId={projectId} />

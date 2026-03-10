@@ -826,7 +826,15 @@ def daemon_install(
     hook_url = f"http://localhost:{daemon_port}/api/hooks"
 
     # ── Detect shell ──────────────────────────────────────────────────────
-    detected_shell = shell or Path(os.environ.get("SHELL", "")).name or "bash"
+    if shell:
+        detected_shell = shell
+    elif os.environ.get("SHELL"):
+        detected_shell = Path(os.environ["SHELL"]).name
+    elif sys.platform == "win32":
+        # Windows: check for PowerShell via PSModulePath, else assume cmd
+        detected_shell = "powershell" if os.environ.get("PSModulePath") else "cmd"
+    else:
+        detected_shell = "bash"
 
     console = Console()
 
@@ -850,26 +858,83 @@ claude() { vlt session-relay "$@"; }
 """
         _install_shell_snippet(rc_file, bash_snippet, force, console, detected_shell)
 
+    # ── PowerShell ────────────────────────────────────────────────────────
+    elif detected_shell in ("powershell", "pwsh"):
+        # PowerShell profile path: $PROFILE → usually Documents/PowerShell/Microsoft.PowerShell_profile.ps1
+        ps_profile = Path(os.environ.get(
+            "PROFILE",
+            Path.home() / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1",
+        ))
+        ps_snippet = """
+# vlt session-relay — installed by `vlt daemon install`
+function claude { vlt session-relay @Args }
+"""
+        ps_profile.parent.mkdir(parents=True, exist_ok=True)
+        _install_shell_snippet(ps_profile, ps_snippet, force, console, "PowerShell")
+
+    # ── CMD (doskey) ──────────────────────────────────────────────────────
+    elif detected_shell == "cmd":
+        console.print("[green]✓[/green] CMD detected — installing doskey macro")
+        # doskey macros persist via AutoRun registry key
+        doskey_cmd = "doskey claude=vlt session-relay $*"
+        reg_key = r"HKCU\Software\Microsoft\Command Processor"
+        reg_value = "AutoRun"
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Command Processor",
+                                0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                try:
+                    existing, _ = winreg.QueryValueEx(key, reg_value)
+                except FileNotFoundError:
+                    existing = ""
+                if "vlt session-relay" in existing and not force:
+                    console.print("[yellow]![/yellow] CMD AutoRun already has vlt relay (use --force to overwrite)")
+                else:
+                    # Append our doskey command, separated by & if existing content
+                    if existing and "vlt session-relay" not in existing:
+                        new_val = f"{existing} & {doskey_cmd}"
+                    else:
+                        new_val = doskey_cmd
+                    winreg.SetValueEx(key, reg_value, 0, winreg.REG_SZ, new_val)
+                    console.print(f"[green]✓[/green] CMD doskey macro written to registry ({reg_key}\\{reg_value})")
+        except Exception as e:
+            console.print(f"[yellow]![/yellow] Could not write CMD registry AutoRun: {e}")
+            console.print(f"[dim]  Manual: Run in CMD: {doskey_cmd}[/dim]")
+
     else:
         console.print(f"[yellow]![/yellow] Unknown shell '{detected_shell}'. Skipping shell function install.")
-        console.print("[dim]Supported: fish, bash, zsh. You can manually add: claude() { vlt session-relay \"$@\"; }[/dim]")
+        console.print("[dim]Supported: fish, bash, zsh, powershell, cmd. You can manually alias: claude -> vlt session-relay[/dim]")
 
-    # ── vlt-claude binary symlink (shell-agnostic, survives claude self-update) ──
+    # ── vlt-claude binary wrapper (shell-agnostic, survives claude self-update) ──
     import shutil as _shutil
     vlt_claude_bin = _shutil.which("vlt-claude")
     if vlt_claude_bin:
-        safe_dir = Path.home() / ".local" / "share" / "vlt" / "bin"
-        safe_dir.mkdir(parents=True, exist_ok=True)
-        link = safe_dir / "claude"
-        if link.is_symlink() or link.exists():
-            link.unlink()
-        link.symlink_to(vlt_claude_bin)
-        console.print(f"[green]✓[/green] Binary wrapper: {link} → {vlt_claude_bin}")
-        console.print(f"[dim]  Prepend to PATH so it takes precedence over ~/.local/bin/claude:[/dim]")
-        if detected_shell == "fish":
-            console.print(f"[dim]  fish_add_path {safe_dir}[/dim]")
+        if sys.platform == "win32":
+            # Windows: copy to a bin dir (symlinks require admin privileges)
+            safe_dir = Path.home() / "AppData" / "Local" / "vlt" / "bin"
+            safe_dir.mkdir(parents=True, exist_ok=True)
+            link = safe_dir / "claude.exe"
+            _shutil.copy2(vlt_claude_bin, link)
+            console.print(f"[green]✓[/green] Binary wrapper: {link} (copied from {vlt_claude_bin})")
+            console.print(f"[dim]  Add to PATH so it takes precedence:[/dim]")
+            if detected_shell in ("powershell", "pwsh"):
+                console.print(f'[dim]  $env:Path = "{safe_dir};$env:Path"[/dim]')
+            else:
+                console.print(f'[dim]  set PATH={safe_dir};%PATH%[/dim]')
         else:
-            console.print(f'[dim]  export PATH="{safe_dir}:$PATH"[/dim]')
+            safe_dir = Path.home() / ".local" / "share" / "vlt" / "bin"
+            safe_dir.mkdir(parents=True, exist_ok=True)
+            link = safe_dir / "claude"
+            if link.is_symlink() or link.exists():
+                link.unlink()
+            link.symlink_to(vlt_claude_bin)
+            console.print(f"[green]✓[/green] Binary wrapper: {link} → {vlt_claude_bin}")
+            console.print(f"[dim]  Prepend to PATH so it takes precedence over ~/.local/bin/claude:[/dim]")
+            if detected_shell == "fish":
+                console.print(f"[dim]  fish_add_path {safe_dir}[/dim]")
+            else:
+                console.print(f'[dim]  export PATH="{safe_dir}:$PATH"[/dim]')
     else:
         console.print("[yellow]![/yellow] vlt-claude not found — run 'uv pip install -e packages/vlt-cli' first")
 
@@ -885,7 +950,18 @@ claude() { vlt session-relay "$@"; }
 
     hooks = claude_settings.setdefault("hooks", {})
 
-    hook_cmd = f"curl -s -X POST {hook_url} -H 'Content-Type: application/json' -d @- &"
+    # Prefer HTTP hooks (cross-platform, handled natively by Claude Code).
+    # Fall back to shell command for environments where HTTP hooks aren't supported.
+    if sys.platform == "win32":
+        # Windows: use PowerShell Invoke-RestMethod as command fallback
+        hook_cmd = (
+            f'powershell -NoProfile -Command "'
+            f"$input | Invoke-RestMethod -Uri '{hook_url}' -Method POST "
+            f"-ContentType 'application/json' -Body ($input | Out-String)"
+            f'"'
+        )
+    else:
+        hook_cmd = f"curl -s -X POST {hook_url} -H 'Content-Type: application/json' -d @- &"
     # New Claude Code hook format: {"hooks": [{"type": "command", "command": "..."}]}
     hook_entry = {"hooks": [{"type": "command", "command": hook_cmd}]}
 

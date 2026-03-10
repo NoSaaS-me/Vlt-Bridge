@@ -36,8 +36,8 @@ const NAV_ITEMS: { id: NavSection; icon: React.ElementType; label: string }[] = 
 // Placeholder sections (unchanged from original)
 // ---------------------------------------------------------------------------
 
-function CronbanView({ projectId }: { projectId?: string }) {
-  return <CronbanViewReal projectId={projectId} />;
+function CronbanView({ projectId, onViewSession }: { projectId?: string; onViewSession?: (sessionId: string) => void }) {
+  return <CronbanViewReal projectId={projectId} onViewSession={onViewSession} />;
 }
 
 function ConnectorsView() {
@@ -176,6 +176,7 @@ export function AgentsPage() {
               ctx_pct: null,
               pid: 0,
               bypass_perms: true,
+              is_cronban_helper: false,
               source: 'managed',
               created_at: new Date().toISOString(),
               last_activity: new Date().toISOString(),
@@ -245,7 +246,36 @@ export function AgentsPage() {
             onRenameSession={handleRenameSession}
           />
         )}
-        {activeSection === 'cronban' && <CronbanView projectId={selectedProjectId ?? undefined} />}
+        {activeSection === 'cronban' && (
+          <CronbanView
+            projectId={selectedProjectId ?? undefined}
+            onViewSession={(sessionId) => {
+              // Switch to agents tab and open the live session
+              const session = polling.sessions.find((s) => s.id === sessionId);
+              if (session) {
+                setLiveSession(session);
+              } else {
+                // Session might not be in current polling data — create minimal ref
+                setLiveSession({
+                  id: sessionId,
+                  project_id: selectedProjectId,
+                  name: sessionId.slice(0, 8),
+                  cwd: '',
+                  status: 'idle',
+                  model: null,
+                  ctx_pct: null,
+                  pid: 0,
+                  bypass_perms: false,
+                  source: 'managed',
+                  is_cronban_helper: false,
+                  created_at: new Date().toISOString(),
+                  last_activity: new Date().toISOString(),
+                });
+              }
+              setActiveSection('agents');
+            }}
+          />
+        )}
         {activeSection === 'connectors' && <ConnectorsView />}
       </div>
     </div>

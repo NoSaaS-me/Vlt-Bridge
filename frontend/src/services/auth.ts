@@ -4,7 +4,7 @@
 import type { User } from '@/types/user';
 import type { TokenResponse } from '@/types/auth';
 import type { DemoTokenResponse } from '@/services/api';
-import { getDemoToken } from '@/services/api';
+import { getDemoToken, registerTokenRefresher } from '@/services/api';
 
 const AUTH_TOKEN_KEY = 'auth_token';
 const AUTH_TOKEN_SOURCE_KEY = 'auth_token_source';
@@ -163,9 +163,21 @@ export async function ensureDemoToken(): Promise<boolean> {
     return true;
   }
 
-  // If we have a demo token that hasn't expired, reuse it
+  // If we have a demo token that hasn't locally expired, validate it
+  // against the backend. The token may be stale (e.g. backend restarted
+  // with a new JWT secret) even though the local expiry hasn't passed.
   if (isAuthenticated() && isDemoSession() && !demoTokenExpired()) {
-    return true;
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    try {
+      const res = await fetch('/api/me', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) return true;
+      // Token rejected — fall through to get a fresh one
+      console.warn('Stored demo token rejected by backend, refreshing');
+    } catch {
+      // Network error — fall through to try refreshing
+    }
   }
 
   try {
@@ -178,4 +190,24 @@ export async function ensureDemoToken(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Force-refresh the demo token. Called by apiFetch on 401 responses
+ * so that stale tokens self-heal without a page reload.
+ * Returns the new token string or null on failure.
+ */
+export async function refreshDemoToken(): Promise<string | null> {
+  if (!isDemoSession()) return null;
+  try {
+    const demoResponse = await requestDemoToken();
+    storeAuthToken(demoResponse.token, 'demo', demoResponse.expires_at);
+    return demoResponse.token;
+  } catch {
+    clearStoredAuthToken();
+    return null;
+  }
+}
+
+// Wire up the 401 auto-retry in apiFetch (breaks circular import)
+registerTokenRefresher(refreshDemoToken, isDemoSession);
 

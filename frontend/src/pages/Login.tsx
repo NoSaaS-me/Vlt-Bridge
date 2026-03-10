@@ -12,12 +12,10 @@ export function Login() {
   };
 
   const handleLocalDev = () => {
-    // Set a per-session random token for local development.
-    // Using a random value instead of the well-known literal 'local-dev-token'
-    // reduces the predictability of the bypass credential. The backend in local
-    // mode accepts any non-empty token when LOCAL_USER_ID is configured.
-    const devToken = `local-dev-${crypto.randomUUID()}`;
-    localStorage.setItem('auth_token', devToken);
+    // Backend StaticTokenValidator does exact equality against LOCAL_DEV_TOKEN
+    // (defaults to 'local-dev-token'). Use the known literal so API calls succeed.
+    localStorage.setItem('auth_token', 'local-dev-token');
+    localStorage.setItem('auth_token_source', 'user');
     window.location.href = '/';
   };
 

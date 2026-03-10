@@ -29,28 +29,26 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if (!isAuthenticated()) {
+      // Always run ensureDemoToken — it validates existing demo tokens
+      // against the backend and refreshes stale ones automatically.
+      if (!isAuthenticated() || isDemoSession()) {
         const demoReady = await ensureDemoToken();
         if (!demoReady) {
           setHasToken(false);
           setIsChecking(false);
           return;
         }
-      }
-
-      setHasToken(true);
-
-      if (isDemoSession()) {
+        setHasToken(true);
         setIsChecking(false);
         return;
       }
 
+      setHasToken(true);
+
       const token = localStorage.getItem('auth_token');
-      // Skip server-side validation for local dev tokens.
-      // Local dev tokens start with 'local-dev-' prefix; the well-known literal
-      // 'local-dev-token' is also accepted for backwards compatibility with
-      // existing local development sessions.
-      if (token === 'local-dev-token' || token?.startsWith('local-dev-')) {
+      // Skip server-side validation for the local dev token.
+      // The backend StaticTokenValidator only accepts the exact 'local-dev-token' literal.
+      if (token === 'local-dev-token') {
         setIsChecking(false);
         return;
       }
