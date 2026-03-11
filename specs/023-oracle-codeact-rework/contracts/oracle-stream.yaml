@@ -1,0 +1,217 @@
+openapi: "3.1.0"
+info:
+  title: Oracle Stream API (Existing — Backward Compatible)
+  version: "2.0.0"
+  description: >
+    Existing Oracle streaming endpoint. The request format and SSE chunk types
+    are UNCHANGED by the 023-oracle-codeact-rework feature.
+
+    Frontend requirements: zero changes required.
+
+    The only behavioral change is the meaning of context_id:
+    - Previously: ephemeral context tree identifier (OracleBridge/context_nodes)
+    - Now: durable LangGraph thread_id (oracle_threads + AsyncSqliteSaver checkpoint)
+
+    If context_id is provided and exists, the conversation resumes with full history.
+    If context_id is omitted or unknown, a new thread is created and the done chunk
+    returns the new thread_id as context_id.
+
+paths:
+  /api/oracle/stream:
+    post:
+      operationId: oracleStream
+      summary: Stream an Oracle response via SSE
+      description: >
+        Submits a query to the Oracle agent and streams the response as
+        Server-Sent Events. Each event is a JSON-encoded OracleStreamChunk.
+
+        To continue an existing conversation, pass context_id from the previous
+        done chunk. To start a new conversation, omit context_id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OracleRequest"
+      responses:
+        "200":
+          description: SSE stream of OracleStreamChunk events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: >
+                  Newline-delimited SSE events. Each event data field is a
+                  JSON-encoded OracleStreamChunk. Stream ends with a done chunk.
+              examples:
+                streaming_response:
+                  summary: Example stream sequence
+                  value: |
+                    data: {"type":"tool_call","content":"search_code(query='auth middleware')","metadata":{}}
+
+                    data: {"type":"tool_result","content":"Found: src/api/middleware/auth_middleware.py","metadata":{}}
+
+                    data: {"type":"content","content":"The authentication middleware is located at...","metadata":{}}
+
+                    data: {"type":"done","content":null,"context_id":"550e8400-e29b-41d4-a716-446655440000","metadata":{}}
+        "400":
+          description: Invalid request body
+        "401":
+          description: Missing or invalid authentication token
+
+  /api/oracle:
+    post:
+      operationId: oracleQuery
+      summary: Non-streaming Oracle query
+      description: >
+        Same as /api/oracle/stream but returns the full response in a single
+        JSON object rather than an SSE stream. Used for non-streaming clients.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OracleRequest"
+      responses:
+        "200":
+          description: Complete Oracle response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OracleResponse"
+        "400":
+          description: Invalid request body
+        "401":
+          description: Missing or invalid authentication token
+
+  /api/oracle/cancel/{context_id}:
+    post:
+      operationId: cancelOracleStream
+      summary: Cancel an active Oracle stream
+      description: >
+        Cancels an in-flight Oracle stream. The active asyncio task is cancelled
+        via asyncio.Task.cancel(). The thread state remains consistent and
+        resumable after cancellation.
+      parameters:
+        - name: context_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Thread ID (context_id from done chunk) to cancel
+      responses:
+        "200":
+          description: Cancellation accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cancelled:
+                    type: boolean
+                  thread_id:
+                    type: string
+        "404":
+          description: No active stream found for this context_id
+
+components:
+  schemas:
+    OracleRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+          description: The user's question or task
+        sources:
+          type: array
+          items:
+            type: string
+          default: []
+          description: Source filter hints (e.g. ["code", "vault", "threads"])
+        explain:
+          type: boolean
+          default: false
+          description: Request additional explanation in the response
+        model:
+          type: string
+          nullable: true
+          description: Override model for this request (defaults to user settings)
+        thinking:
+          type: boolean
+          default: false
+          description: Enable extended thinking mode
+        max_tokens:
+          type: integer
+          default: 16000
+          description: Maximum tokens for the response
+        context_id:
+          type: string
+          nullable: true
+          format: uuid
+          description: >
+            Thread ID to continue an existing conversation. Omit or null for a
+            new thread. On completion, the done chunk's context_id contains the
+            active thread ID (new or existing).
+        project_id:
+          type: string
+          nullable: true
+          description: Project scope for code search and memory retrieval
+        deep_research:
+          type: boolean
+          default: false
+          description: >
+            Enable multi-step web research (requires user's search provider configured).
+            Controlled by frontend toggle per FR-023.
+
+    OracleStreamChunk:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum:
+            - thinking      # Extended thinking tokens (only when thinking=true)
+            - content       # Streamed answer text (maps to on_chat_model_stream)
+            - source        # Source citation
+            - tool_call     # Tool invocation start (maps to on_tool_start)
+            - tool_result   # Tool result (maps to on_tool_end)
+            - done          # Stream complete; context_id field set to thread_id
+            - error         # Error message
+            - system        # ANS system notification
+            - context_update # context_id newly created (first turn of new thread)
+            - progress      # REPL stdout / step progress (maps to repl_stdout custom event)
+        content:
+          type: string
+          nullable: true
+          description: Text payload for the chunk
+        context_id:
+          type: string
+          nullable: true
+          format: uuid
+          description: >
+            Set on "done" and "context_update" chunks with the active thread_id.
+            Frontend should store this and pass as context_id on the next request
+            to continue the conversation.
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+          description: Chunk-type-specific metadata
+
+    OracleResponse:
+      type: object
+      description: Non-streaming complete response (from /api/oracle)
+      properties:
+        answer:
+          type: string
+        context_id:
+          type: string
+          format: uuid
+        sources:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object

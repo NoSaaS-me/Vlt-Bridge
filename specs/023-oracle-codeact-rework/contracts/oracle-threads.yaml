@@ -1,0 +1,229 @@
+openapi: "3.1.0"
+info:
+  title: Oracle Thread Management API
+  version: "1.0.0"
+  description: >
+    New endpoints for managing persistent Oracle conversation threads.
+    These endpoints are added alongside the existing /api/oracle/stream endpoint,
+    which remains unchanged (see oracle-stream.yaml).
+
+paths:
+  /api/oracle/threads:
+    get:
+      operationId: listOracleThreads
+      summary: List conversation threads for the authenticated user
+      description: >
+        Returns all Oracle conversation threads for the current user,
+        optionally filtered by project. Ordered by last_active_at descending.
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter threads to a specific project
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+          description: Maximum number of threads to return
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+          description: Pagination offset
+      responses:
+        "200":
+          description: Thread list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OracleThreadListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/oracle/threads/{thread_id}:
+    get:
+      operationId: getOracleThread
+      summary: Get metadata for a single thread
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "200":
+          description: Thread metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OracleThreadSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    delete:
+      operationId: deleteOracleThread
+      summary: Delete a conversation thread
+      description: >
+        Removes the thread from the oracle_threads index table. LangGraph checkpoint
+        data is retained for data safety (reaped on a separate schedule).
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "204":
+          description: Thread deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    patch:
+      operationId: updateOracleThread
+      summary: Update thread metadata (title)
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OracleThreadUpdate"
+      responses:
+        "200":
+          description: Updated thread metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OracleThreadSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/oracle/threads/{thread_id}/history:
+    get:
+      operationId: getOracleThreadHistory
+      summary: Get message history for a thread
+      description: >
+        Returns the message history from the LangGraph checkpoint state for the
+        given thread. Used by the frontend to restore conversation display on load.
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "200":
+          description: Message history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OracleThreadHistoryResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  parameters:
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Unique thread identifier (UUID)
+
+  schemas:
+    OracleThreadSummary:
+      type: object
+      required: [thread_id, created_at, last_active_at]
+      properties:
+        thread_id:
+          type: string
+          format: uuid
+          description: Unique thread identifier
+        project_id:
+          type: string
+          description: Project this thread belongs to
+        title:
+          type: string
+          nullable: true
+          maxLength: 120
+          description: Auto-derived from first user message; null until first message
+        created_at:
+          type: string
+          format: date-time
+          description: Thread creation timestamp (ISO 8601 UTC)
+        last_active_at:
+          type: string
+          format: date-time
+          description: Timestamp of the last turn in this thread (ISO 8601 UTC)
+
+    OracleThreadListResponse:
+      type: object
+      required: [threads, total]
+      properties:
+        threads:
+          type: array
+          items:
+            $ref: "#/components/schemas/OracleThreadSummary"
+        total:
+          type: integer
+          description: Total count of threads matching the filter (before limit/offset)
+
+    OracleThreadUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+          maxLength: 120
+          description: New title for the thread
+
+    OracleThreadHistoryResponse:
+      type: object
+      required: [thread_id, messages]
+      properties:
+        thread_id:
+          type: string
+          format: uuid
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/OracleHistoryMessage"
+
+    OracleHistoryMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+          description: Message text content
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+    NotFound:
+      description: Thread not found or does not belong to authenticated user
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string

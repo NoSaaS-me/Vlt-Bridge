@@ -116,7 +116,29 @@ def require_auth_context(
             detail={"error": exc.error, "message": exc.message, "detail": exc.detail},
         ) from exc
 
-    return AuthContext(user_id=payload.sub, token=token, payload=payload)
+    auth_context = AuthContext(user_id=payload.sub, token=token, payload=payload)
+
+    # Role-based access control (only when user approval is required)
+    config = get_config()
+    if config.require_user_approval and not config.enable_local_mode:
+        from ...services.user_service import UserService
+
+        user_svc = UserService()
+        user = user_svc.get_user(auth_context.user_id)
+        if user:
+            if user.role == "blocked":
+                raise _forbidden(
+                    "Your account has been blocked by an administrator",
+                    "account_blocked",
+                )
+            if user.role == "pending":
+                raise _forbidden(
+                    "Your account is pending admin approval",
+                    "account_pending",
+                )
+        # If user not in table at all, allow through (backwards compat)
+
+    return auth_context
 
 
 def require_admin_context(
@@ -136,12 +158,20 @@ def require_admin_context(
     # First, enforce strict authentication
     auth_context = require_auth_context(authorization)
 
-    # Then, check if the user is an admin
+    # Check admin from env var OR users table
     config = get_config()
-    if auth_context.user_id not in config.admin_user_ids:
+    is_admin = auth_context.user_id in config.admin_user_ids
+    if not is_admin:
+        from ...services.user_service import UserService
+
+        user_svc = UserService()
+        user = user_svc.get_user(auth_context.user_id)
+        is_admin = user is not None and user.role == "admin"
+
+    if not is_admin:
         raise _forbidden(
             "Admin privileges required",
-            error="insufficient_permissions"
+            error="insufficient_permissions",
         )
 
     return auth_context

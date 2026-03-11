@@ -75,11 +75,6 @@ function AgentsCompositorView({
   onResumeSession: (session: AgentSession) => void;
   onRenameSession: (id: string, name: string) => void;
 }) {
-  const hasRelaySessions = useMemo(
-    () => polling.sessions.some((s) => s.source === 'relay' && s.status !== 'dead'),
-    [polling.sessions],
-  );
-
   return (
     <div className="h-full flex">
       {/* Session sidebar */}
@@ -108,12 +103,6 @@ function AgentsCompositorView({
             <LiveSessionPanel
               session={liveSession}
               onClose={onCloseLiveSession}
-            />
-          ) : hasRelaySessions ? (
-            <TerminalCompositor
-              sessions={polling.sessions}
-              focusedSessionId={focusedSessionId}
-              onFocusSession={onSelectSession}
             />
           ) : (
             <TerminalCompositor
@@ -162,30 +151,16 @@ export function AgentsPage() {
 
   const handleStartFresh = useCallback(
     (prompt: string) => {
-      spawnSession(spawnCwd, { prompt })
+      spawnSession(spawnCwd, { prompt, mode: 'relay' })
         .then((result) => {
           setTimeout(() => polling.refresh(), 2000);
           if (result.session_id) {
-            setLiveSession({
-              id: result.session_id,
-              project_id: selectedProjectId,
-              name: 'New Session',
-              cwd: result.cwd,
-              status: 'thinking',
-              model: null,
-              ctx_pct: null,
-              pid: 0,
-              bypass_perms: true,
-              is_cronban_helper: false,
-              source: 'managed',
-              created_at: new Date().toISOString(),
-              last_activity: new Date().toISOString(),
-            });
+            setFocusedSessionId(result.session_id);
           }
         })
         .catch((err) => console.error('Spawn failed:', err));
     },
-    [polling, spawnCwd, selectedProjectId],
+    [polling, spawnCwd],
   );
 
   const handleResumeSession = useCallback((session: AgentSession) => {

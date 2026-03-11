@@ -406,6 +406,83 @@ export async function updateOracleSettings(enabled: boolean): Promise<OracleSett
   });
 }
 
+// ============ Oracle V2 Thread & Memory API ============
+
+export interface OracleThreadSummary {
+  thread_id: string;
+  project_id: string | null;
+  title: string | null;
+  created_at: string;
+  last_active_at: string;
+}
+
+export interface OracleThreadListResponse {
+  threads: OracleThreadSummary[];
+  total: number;
+}
+
+export interface OracleThreadHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface OracleThreadHistoryResponse {
+  thread_id: string;
+  messages: OracleThreadHistoryMessage[];
+}
+
+export interface OracleMemorySearchResponse {
+  facts: string[];
+  available: boolean;
+  message?: string;
+  error?: string;
+}
+
+export async function listOracleThreads(
+  limit = 50,
+  offset = 0,
+): Promise<OracleThreadListResponse> {
+  return apiFetch<OracleThreadListResponse>(
+    `/api/oracle/threads?limit=${limit}&offset=${offset}`,
+  );
+}
+
+export async function getOracleThreadHistory(
+  threadId: string,
+): Promise<OracleThreadHistoryResponse> {
+  return apiFetch<OracleThreadHistoryResponse>(
+    `/api/oracle/threads/${encodeURIComponent(threadId)}/history`,
+  );
+}
+
+export async function deleteOracleThread(threadId: string): Promise<void> {
+  await apiFetch<void>(`/api/oracle/threads/${encodeURIComponent(threadId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function renameOracleThread(
+  threadId: string,
+  title: string,
+): Promise<OracleThreadSummary> {
+  return apiFetch<OracleThreadSummary>(
+    `/api/oracle/threads/${encodeURIComponent(threadId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    },
+  );
+}
+
+export async function searchOracleMemory(
+  query: string,
+  projectId = 'default',
+  limit = 20,
+): Promise<OracleMemorySearchResponse> {
+  const params = new URLSearchParams({ query, project_id: projectId, limit: String(limit) });
+  return apiFetch<OracleMemorySearchResponse>(`/api/oracle/memory?${params}`);
+}
+
 // ============ Asset API ============
 
 export async function listAssets(folder?: string, projectId?: string): Promise<AssetSummary[]> {

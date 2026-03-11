@@ -58,20 +58,8 @@ export function logout(): void {
  * Get current authenticated user
  */
 export async function getCurrentUser(): Promise<User> {
-  const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  
-  const response = await fetch(`${API_BASE}/api/me`, {
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to get current user');
-  }
-
-  return response.json();
+  const { apiFetch } = await import('@/services/api');
+  return apiFetch<User>('/api/me');
 }
 
 /**

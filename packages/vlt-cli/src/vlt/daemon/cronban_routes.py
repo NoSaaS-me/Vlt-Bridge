@@ -287,13 +287,17 @@ async def _dispatch_to_session(
                     return target_session_id
 
         if create_new and target_cwd:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    "http://127.0.0.1:8765/api/sessions/spawn",
-                    json={"cwd": target_cwd, "prompt": prompt},
-                )
-                resp.raise_for_status()
-                return resp.json().get("session_id")
+            # Spawn as relay session (full PTY) via direct call — avoids self-HTTP
+            # roundtrip and works regardless of daemon port.
+            _spawn_relay = getattr(_srv, '_spawn_relay_session', None)
+            if _spawn_relay is None:
+                logger.error("_spawn_relay_session not found on __main__")
+                return None
+            new_sid = str(uuid.uuid4())
+            ok = await _spawn_relay(new_sid, target_cwd, prompt=prompt)
+            if ok:
+                return new_sid
+            return None
 
     except Exception as exc:
         logger.error(f"_dispatch_to_session error: {exc}")
@@ -994,7 +998,12 @@ async def fire_card(card_id: str):
             if not success:
                 raise RuntimeError("Helper session dispatch failed")
         else:
-            used_session_id = await _dispatch_to_session(prompt, target_sid, target_cwd, bool(target_cwd))
+            # If no target_session_id and no target_cwd, default CWD to ~ so
+            # a new session can be spawned (create_new requires a truthy cwd).
+            import os
+            effective_cwd = target_cwd or (os.path.expanduser("~") if not target_sid else None)
+            create_new = bool(effective_cwd) and not target_sid
+            used_session_id = await _dispatch_to_session(prompt, target_sid, effective_cwd, create_new)
             if not used_session_id:
                 raise RuntimeError("No session available")
 

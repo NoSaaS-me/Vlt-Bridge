@@ -20,8 +20,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
 import { NotificationSettings as NotificationSettingsComponent } from '@/components/NotificationSettings';
 import { RuleSettings } from '@/components/RuleSettings';
+import { AdminUsers } from '@/pages/AdminUsers';
 import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
-import { getIndexHealth, rebuildIndex, type RebuildResponse, getOracleSettings, updateOracleSettings } from '@/services/api';
+import { apiFetch, getIndexHealth, rebuildIndex, type RebuildResponse, getOracleSettings, updateOracleSettings } from '@/services/api';
 import { getModels, getModelSettings, saveModelSettings, testTavilyConnection } from '@/services/models';
 import { getContextSettings, updateContextSettings } from '@/services/context';
 import type { User } from '@/types/user';
@@ -35,6 +36,7 @@ import { getGitHubStatus, getGitHubConnectUrl } from '@/services/github';
 import { SystemLogs } from '@/components/SystemLogs';
 import { CronbanSettings } from '@/components/cronban/CronbanSettings';
 import { TtsSettings } from '@/components/TtsSettings';
+import { OracleMemorySettings } from '@/components/OracleMemorySettings';
 import { useProjectContext } from '@/contexts/ProjectContext';
 
 const SHOW_HISTORY_KEY = 'vlt:livechat:showHistory';
@@ -123,6 +125,14 @@ export function Settings() {
   const [oracleMcpEnabled, setOracleMcpEnabled] = useState<boolean>(true);
   const [isSavingOracle, setIsSavingOracle] = useState(false);
   const [oracleSaved, setOracleSaved] = useState(false);
+
+  // Admin detection: probe /api/admin/users to see if current user is admin
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    apiFetch('/api/admin/users')
+      .then(() => setIsAdmin(true))
+      .catch(() => setIsAdmin(false));
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -547,9 +557,11 @@ export function Settings() {
             <TabsTrigger value="rules">Rules</TabsTrigger>
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
             <TabsTrigger data-tour="settings-oracle-tab" value="oracle">Oracle</TabsTrigger>
+            <TabsTrigger value="memory">Memory</TabsTrigger>
             <TabsTrigger value="cronban">Cronban</TabsTrigger>
             <TabsTrigger value="tts">TTS</TabsTrigger>
             <TabsTrigger value="agents">Agents</TabsTrigger>
+            {isAdmin && <TabsTrigger value="users">Users</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="account" className="space-y-6 mt-6">
@@ -1485,6 +1497,10 @@ export function Settings() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="memory" className="space-y-6 mt-6">
+            <OracleMemorySettings />
+          </TabsContent>
+
           <TabsContent value="cronban" className="space-y-6 mt-6">
             <CronbanSettings />
           </TabsContent>
@@ -1496,6 +1512,12 @@ export function Settings() {
           <TabsContent value="agents" className="space-y-6 mt-6">
             <AgentsSettings />
           </TabsContent>
+
+          {isAdmin && (
+            <TabsContent value="users" className="space-y-6 mt-6">
+              <AdminUsers />
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </div>

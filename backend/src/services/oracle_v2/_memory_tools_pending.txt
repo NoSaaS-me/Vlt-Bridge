@@ -1,0 +1,6 @@
+T028/T027 pending: After Worker A completes graph.py, add:
+1. Import make_memory_tools from .tools.memory_tools
+2. Import memory_loader_node, memory_writer_node from .nodes
+3. Pass graphiti via config["configurable"]["graphiti"] in OracleV2Wrapper
+4. Add memory nodes to graph before/after CodeAct agent
+5. Add memory tools to build_oracle_tools() output

@@ -21,11 +21,26 @@ from starlette.responses import Response
 from fastmcp.server.http import StreamableHTTPSessionManager, set_http_request
 from fastapi.responses import FileResponse
 
-from .routes import auth, index, notes, search, graph, demo, system, rag, tts, models, oracle, oracle_context, threads, projects, coderag, notifications, rules, settings, assets, connectors, connector_oauth, connector_webhooks, composio_hub
+from .routes import auth, index, notes, search, graph, demo, system, rag, tts, models, oracle, oracle_context, threads, projects, coderag, notifications, rules, settings, assets, connectors, connector_oauth, connector_webhooks, composio_hub, admin
 from .middleware import SecurityHeadersMiddleware
 from ..mcp.server import mcp
 from ..services.seed import init_and_seed
 from ..services.config import get_config
+
+# Oracle V2 imports (023-oracle-codeact-rework) — conditional on package availability
+try:
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver as _AsyncSqliteSaver
+    _ORACLE_V2_AVAILABLE = True
+except ImportError:
+    _AsyncSqliteSaver = None
+    _ORACLE_V2_AVAILABLE = False
+
+try:
+    from graphiti_core import Graphiti as _Graphiti
+    _GRAPHITI_AVAILABLE = True
+except ImportError:
+    _Graphiti = None
+    _GRAPHITI_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +74,43 @@ async def lifespan(app: FastAPI):
         logger.warning("NEVER enable this in production or publicly accessible deployments.")
         logger.warning("=" * 80)
 
+    # Oracle V2: Initialize AsyncSqliteSaver (LangGraph thread checkpointer)
+    if _ORACLE_V2_AVAILABLE:
+        try:
+            _checkpointer_cm = _AsyncSqliteSaver.from_conn_string(config.oracle_checkpoint_db)
+            app.state.oracle_checkpointer = await _checkpointer_cm.__aenter__()
+            logger.info("OracleV2: AsyncSqliteSaver initialized (%s)", config.oracle_checkpoint_db)
+        except Exception as exc:
+            logger.warning("OracleV2: AsyncSqliteSaver init failed — oracle_v2 disabled: %s", exc)
+            app.state.oracle_checkpointer = None
+            _checkpointer_cm = None
+    else:
+        app.state.oracle_checkpointer = None
+        _checkpointer_cm = None
+        logger.info("OracleV2: langgraph-checkpoint-sqlite not installed, oracle_v2 disabled")
+
+    # Oracle V2: Initialize Graphiti client (cross-session memory)
+    if _GRAPHITI_AVAILABLE:
+        try:
+            app.state.graphiti = _Graphiti(config.falkordb_url, "", "")
+            logger.info("OracleV2: Graphiti client connected (%s)", config.falkordb_url)
+        except Exception as exc:
+            logger.warning("OracleV2: Graphiti init failed — memory disabled: %s", exc)
+            app.state.graphiti = None
+    else:
+        app.state.graphiti = None
+        logger.info("OracleV2: graphiti-core not installed, memory disabled")
+
     # Initialize FastMCP session manager task group
     async with session_manager.run():
         yield
+
+    # Oracle V2 cleanup
+    if _checkpointer_cm is not None:
+        try:
+            await _checkpointer_cm.__aexit__(None, None, None)
+        except Exception as exc:
+            logger.warning("OracleV2: AsyncSqliteSaver cleanup error: %s", exc)
 
 
 app = FastAPI(
@@ -151,6 +200,7 @@ app.include_router(connectors.router, tags=["connectors"])
 app.include_router(connector_oauth.router, tags=["connector-oauth"])
 app.include_router(connector_webhooks.router, tags=["webhooks"])
 app.include_router(composio_hub.router, tags=["composio-hub"])
+app.include_router(admin.router, tags=["admin"])
 
 
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"])

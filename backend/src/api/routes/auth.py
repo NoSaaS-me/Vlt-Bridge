@@ -186,6 +186,16 @@ async def callback(
                 extra={"user_id": user_id},
             )
 
+        # Ensure user exists in users table (auto-admin if first user)
+        from ...services.user_service import UserService
+
+        user_svc = UserService()
+        display_name = github_username.replace("-", " ").title()
+        avatar_url = f"https://github.com/{github_username}.png"
+        user_svc.ensure_user(
+            user_id, display_name=display_name, avatar_url=avatar_url
+        )
+
         # Create JWT for our application
         import jwt
         from datetime import timedelta
