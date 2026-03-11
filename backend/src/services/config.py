@@ -28,7 +28,7 @@ class AppConfig(BaseModel):
     )
     local_dev_token: Optional[str] = Field(
         default="local-dev-token",
-        description="Static token accepted in local mode (maps to 'demo-user')",
+        description="Static token accepted in local mode (maps to 'local-dev' user_id)",
     )
     chatgpt_service_token: Optional[str] = Field(
         default=None,
@@ -40,7 +40,7 @@ class AppConfig(BaseModel):
     )
     enable_noauth_mcp: bool = Field(
         default=False,
-        description="DANGEROUS: Allow unauthenticated MCP access as demo-user (for hackathon)",
+        description="DANGEROUS: Allow unauthenticated MCP access as local-dev (for hackathon)",
     )
     google_api_key: Optional[str] = Field(
         default=None,

@@ -21,8 +21,6 @@ from ...services.ans.subscriber import SubscriberLoader
 from ...services.ans.bus import get_event_bus
 from ...services.ans.event import Event, Severity
 
-DEMO_USER_ID = "demo-user"
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
@@ -279,17 +277,9 @@ async def test_subscriber(
     """
     Emit a test event for a subscriber.
 
-    This endpoint is only available for demo users.
-    It emits a test event that the specified subscriber will catch,
+    Emits a test event that the specified subscriber will catch,
     useful for verifying that the notification system is working.
     """
-    # Only allow demo users to trigger test notifications
-    if auth.user_id != DEMO_USER_ID:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Test notifications are only available for demo users"
-        )
-
     # Check if subscriber exists
     subscriber = loader.get_subscriber(subscriber_id)
     if subscriber is None:

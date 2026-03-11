@@ -2,7 +2,7 @@
  * RuleSettings component (T069-T071, T088)
  *
  * Displays a list of all rules with their enabled/disabled status,
- * toggle switches for non-core rules, test buttons for demo users,
+ * toggle switches for non-core rules, test buttons,
  * and a plugin section showing installed plugins.
  */
 
@@ -22,7 +22,7 @@ import type { RuleInfo, RuleTestResponse, HookPoint, PluginInfo } from '@/types/
 import { HOOK_POINT_LABELS } from '@/types/rules';
 
 interface RuleSettingsProps {
-  isDemoMode: boolean;
+  isDemoMode?: boolean;
   canTestRules?: boolean;
 }
 
@@ -30,7 +30,7 @@ interface GroupedRules {
   [key: string]: RuleInfo[];
 }
 
-export function RuleSettings({ isDemoMode, canTestRules = false }: RuleSettingsProps) {
+export function RuleSettings({ canTestRules = true }: RuleSettingsProps) {
   const [rules, setRules] = useState<RuleInfo[]>([]);
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -80,11 +80,6 @@ export function RuleSettings({ isDemoMode, canTestRules = false }: RuleSettingsP
   }, [loadRules, loadPlugins]);
 
   const handleToggle = async (ruleId: string, newEnabled: boolean) => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to modify rule settings.');
-      return;
-    }
-
     setTogglingRule(ruleId);
     setError(null);
 
@@ -315,7 +310,7 @@ export function RuleSettings({ isDemoMode, canTestRules = false }: RuleSettingsP
                                       checked={rule.enabled}
                                       onCheckedChange={(checked) => handleToggle(rule.id, checked)}
                                       disabled={
-                                        rule.core || isDemoMode || togglingRule === rule.id
+                                        rule.core || togglingRule === rule.id
                                       }
                                     />
                                   </div>
@@ -323,8 +318,6 @@ export function RuleSettings({ isDemoMode, canTestRules = false }: RuleSettingsP
                                 <TooltipContent>
                                   {rule.core ? (
                                     <p>Core rules cannot be disabled</p>
-                                  ) : isDemoMode ? (
-                                    <p>Sign in to modify rule settings</p>
                                   ) : (
                                     <p>{rule.enabled ? 'Disable' : 'Enable'} this rule</p>
                                   )}

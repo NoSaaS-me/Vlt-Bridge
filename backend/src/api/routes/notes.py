@@ -16,28 +16,12 @@ from ...models.project import DEFAULT_PROJECT_ID
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
 from ...services.vault import VaultService
-from ...services.config import get_config
 from ..middleware import AuthContext, require_auth_context
 
 router = APIRouter()
 
-DEMO_USER_ID = "demo-user"
-
-
 def _ensure_write_allowed(user_id: str) -> None:
-    # Allow writes in local development mode
-    config = get_config()
-    if config.enable_local_mode:
-        return
-
-    if user_id == DEMO_USER_ID:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "demo_read_only",
-                "message": "Demo mode is read-only. Sign in with GitHub to make changes.",
-            },
-        )
+    pass
 
 
 class ConflictError(Exception):

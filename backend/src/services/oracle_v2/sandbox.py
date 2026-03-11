@@ -11,7 +11,8 @@ Security model:
     - Shell commands restricted to SHELL_ALLOWLIST
     - git subcommands restricted to GIT_SUBCOMMAND_ALLOWLIST
     - Thread-based 30s timeout kills runaway REPL code
-    - new_vars extraction skips non-pickle-safe values to avoid checkpoint corruption
+    - new_vars extraction skips non-JSON-serializable values (functions, classes, modules)
+      to prevent LangGraph checkpoint serde and astream_events JSON streaming failures
 
 Known constraint (Issue #6447):
     Use sync eval_fn — async get_stream_writer() silently drops custom events.
@@ -21,9 +22,10 @@ Known constraint (Issue #6447):
 from __future__ import annotations
 
 import concurrent.futures
+import inspect
 import io
+import json
 import logging
-import pickle
 import re
 import shlex
 import subprocess
@@ -161,8 +163,9 @@ def _make_restricted_import(original_import: Callable) -> Callable:
 def _extract_new_vars(local_ns: dict[str, Any], prev_context: dict[str, Any]) -> dict[str, Any]:
     """Extract variables added or changed in local_ns relative to prev_context.
 
-    Skips values that are not pickle-safe to avoid corrupting the LangGraph
-    checkpoint (AsyncSqliteSaver serializes state via pickle).
+    Skips non-JSON-serializable values (functions, classes, modules, etc.) to
+    avoid corrupting LangGraph state in both the checkpoint serde path and the
+    astream_events JSON streaming path.
     """
     new_vars: dict[str, Any] = {}
     for key, value in local_ns.items():
@@ -170,11 +173,16 @@ def _extract_new_vars(local_ns: dict[str, Any], prev_context: dict[str, Any]) ->
             continue
         if key in prev_context and prev_context[key] is value:
             continue
+        # Skip types that are never JSON-serializable and would break
+        # LangGraph's astream_events event stream serialization.
+        if callable(value) or isinstance(value, type) or inspect.ismodule(value):
+            logger.debug("Skipping non-JSON-safe REPL var %r (type=%s)", key, type(value).__name__)
+            continue
         try:
-            pickle.dumps(value)
+            json.dumps(value)
             new_vars[key] = value
-        except Exception:
-            logger.debug("Skipping non-pickle-safe REPL var %r (type=%s)", key, type(value).__name__)
+        except (TypeError, ValueError):
+            logger.debug("Skipping non-JSON-safe REPL var %r (type=%s)", key, type(value).__name__)
     return new_vars
 
 

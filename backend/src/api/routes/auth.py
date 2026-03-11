@@ -64,17 +64,31 @@ def get_base_url(request: Request) -> str:
     """
     Get the base URL for OAuth redirects.
 
-    Uses the actual request URL scheme and hostname from FastAPI's request.url.
-    HF Spaces doesn't set X-Forwarded-Host, but the 'host' header is correct.
+    Priority order:
+    1. BASE_URL env var — explicit override (required in dev when Vite proxy is used,
+       and in production deployments where the public URL differs from the server address)
+    2. X-Forwarded-Host / X-Forwarded-Proto — set by reverse proxies
+    3. Request URL — fallback from the raw FastAPI request
     """
-    # Get scheme from X-Forwarded-Proto or request
+    config = get_config()
+
+    # 1. Explicit BASE_URL config (dev override or production deployment URL)
+    if config.base_url and config.base_url != "http://localhost:8000":
+        logger.info(f"OAuth base URL from BASE_URL config: {config.base_url}")
+        return config.base_url.rstrip("/")
+
+    # 2. Reverse-proxy forwarded headers (nginx, Vite with headers, HF Spaces)
+    forwarded_host = request.headers.get("x-forwarded-host")
     forwarded_proto = request.headers.get("x-forwarded-proto")
+    if forwarded_host:
+        scheme = forwarded_proto or "https"
+        base_url = f"{scheme}://{forwarded_host}"
+        logger.info(f"OAuth base URL from X-Forwarded-Host: {base_url}")
+        return base_url
+
+    # 3. Raw request URL (direct access, local dev hitting port 8000 directly)
     scheme = forwarded_proto if forwarded_proto else str(request.url.scheme)
-
-    # Get hostname from request URL (this comes from the 'host' header)
     hostname = str(request.url.hostname)
-
-    # Check for port (but HF Spaces uses standard 443 for HTTPS)
     port = request.url.port
     if port and port not in (80, 443):
         base_url = f"{scheme}://{hostname}:{port}"
@@ -82,15 +96,9 @@ def get_base_url(request: Request) -> str:
         base_url = f"{scheme}://{hostname}"
 
     logger.info(
-        f"OAuth base URL detected: {base_url}",
-        extra={
-            "scheme": scheme,
-            "hostname": hostname,
-            "port": port,
-            "request_url": str(request.url),
-        },
+        f"OAuth base URL from request: {base_url}",
+        extra={"request_url": str(request.url)},
     )
-
     return base_url
 
 
@@ -276,7 +284,7 @@ async def get_current_user(auth: AuthContext = Depends(require_auth_context)):
             name=username.replace("-", " ").title(),
             avatar_url=f"https://github.com/{username}.png",
         )
-    elif user_id not in {"local-dev", "demo-user"}:
+    elif user_id != "local-dev":
         # Fallback for other user types
         profile = GHProfile(
             username=user_id,

@@ -21,10 +21,10 @@ from starlette.responses import Response
 from fastmcp.server.http import StreamableHTTPSessionManager, set_http_request
 from fastapi.responses import FileResponse
 
-from .routes import auth, index, notes, search, graph, demo, system, rag, tts, models, oracle, oracle_context, threads, projects, coderag, notifications, rules, settings, assets, connectors, connector_oauth, connector_webhooks, composio_hub, admin
+from .routes import auth, index, notes, search, graph, system, rag, tts, models, oracle, oracle_context, threads, projects, coderag, notifications, rules, settings, assets, connectors, connector_oauth, connector_webhooks, composio_hub, admin
 from .middleware import SecurityHeadersMiddleware
 from ..mcp.server import mcp
-from ..services.seed import init_and_seed
+from ..services.database import DatabaseService
 from ..services.config import get_config
 
 # Oracle V2 imports (023-oracle-codeact-rework) — conditional on package availability
@@ -55,13 +55,13 @@ session_manager = StreamableHTTPSessionManager(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan handler to run startup tasks."""
-    logger.info("Running startup: initializing database and seeding demo vault...")
+    logger.info("Running startup: initializing database...")
     try:
-        init_and_seed(user_id="demo-user")
-        logger.info("Startup complete: database and demo vault ready")
+        DatabaseService().initialize()
+        logger.info("Startup complete: database ready")
     except Exception as exc:
         logger.exception("Startup failed: %s", exc)
-        logger.error("App starting without demo data due to initialization error")
+        logger.error("App starting with database initialization error")
 
     # Security warning for ENABLE_NOAUTH_MCP
     if config.enable_noauth_mcp:
@@ -77,8 +77,12 @@ async def lifespan(app: FastAPI):
     # Oracle V2: Initialize AsyncSqliteSaver (LangGraph thread checkpointer)
     if _ORACLE_V2_AVAILABLE:
         try:
+            from ..services.oracle_v2.graph import _PickleSerde
             _checkpointer_cm = _AsyncSqliteSaver.from_conn_string(config.oracle_checkpoint_db)
             app.state.oracle_checkpointer = await _checkpointer_cm.__aenter__()
+            # Override serde: CodeAct stores function objects in REPL context
+            # which msgpack (default) can't serialize — pickle handles them.
+            app.state.oracle_checkpointer.serde = _PickleSerde()
             logger.info("OracleV2: AsyncSqliteSaver initialized (%s)", config.oracle_checkpoint_db)
         except Exception as exc:
             logger.warning("OracleV2: AsyncSqliteSaver init failed — oracle_v2 disabled: %s", exc)
@@ -182,7 +186,6 @@ app.include_router(notes.router, tags=["notes"])
 app.include_router(search.router, tags=["search"])
 app.include_router(index.router, tags=["index"])
 app.include_router(graph.router, tags=["graph"])
-app.include_router(demo.router, tags=["demo"])
 app.include_router(system.router, tags=["system"])
 app.include_router(rag.router, tags=["rag"])
 app.include_router(tts.router, tags=["tts"])

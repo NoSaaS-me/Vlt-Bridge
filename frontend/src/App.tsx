@@ -6,7 +6,7 @@ import { Settings } from './pages/Settings';
 import { SetupWizard } from './pages/SetupWizard';
 import { AccountPending } from './pages/AccountPending';
 import { AccountBlocked } from './pages/AccountBlocked';
-import { isAuthenticated, getCurrentUser, setAuthTokenFromHash, ensureDemoToken, isDemoSession } from './services/auth';
+import { isAuthenticated, getCurrentUser, setAuthTokenFromHash } from './services/auth';
 import { APIException } from './services/api';
 import { AuthLoadingSkeleton } from './components/AuthLoadingSkeleton';
 import { Toaster } from './components/ui/toaster';
@@ -20,7 +20,7 @@ interface SetupStatus {
 }
 
 // Protected route wrapper with auth check
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function ProtectedRoute({ children, approvalRequired }: { children: React.ReactNode; approvalRequired: boolean }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [isChecking, setIsChecking] = useState(true);
@@ -38,29 +38,25 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Always run ensureDemoToken — it validates existing demo tokens
-      // against the backend and refreshes stale ones automatically.
-      if (!isAuthenticated() || isDemoSession()) {
-        const demoReady = await ensureDemoToken();
-        if (!demoReady) {
-          setHasToken(false);
+      // When approvalRequired is false (open/local mode), bypass server validation
+      // for the local dev token so ENABLE_LOCAL_MODE can work in future.
+      if (!approvalRequired) {
+        const token = localStorage.getItem('auth_token');
+        // Skip server-side validation for the local dev token.
+        if (token === 'local-dev-token') {
+          setHasToken(true);
           setIsChecking(false);
           return;
         }
-        setHasToken(true);
+      }
+
+      if (!isAuthenticated()) {
+        setHasToken(false);
         setIsChecking(false);
         return;
       }
 
       setHasToken(true);
-
-      const token = localStorage.getItem('auth_token');
-      // Skip server-side validation for the local dev token.
-      // The backend StaticTokenValidator only accepts the exact 'local-dev-token' literal.
-      if (token === 'local-dev-token') {
-        setIsChecking(false);
-        return;
-      }
 
       try {
         // Verify the token is valid by calling getCurrentUser
@@ -156,7 +152,7 @@ function App() {
                 <Route
                   path="/"
                   element={
-                    <ProtectedRoute>
+                    <ProtectedRoute approvalRequired={setupStatus?.approval_required ?? false}>
                       <ProjectProvider>
                         <MainApp />
                       </ProjectProvider>
@@ -166,7 +162,7 @@ function App() {
                 <Route
                   path="/settings"
                   element={
-                    <ProtectedRoute>
+                    <ProtectedRoute approvalRequired={setupStatus?.approval_required ?? false}>
                       <ProjectProvider>
                         <Settings />
                       </ProjectProvider>

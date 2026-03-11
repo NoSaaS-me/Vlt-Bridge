@@ -7,18 +7,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { login } from '@/services/auth';
 
 export function Login() {
-  const handleLogin = () => {
-    login();
-  };
-
-  const handleLocalDev = () => {
-    // Backend StaticTokenValidator does exact equality against LOCAL_DEV_TOKEN
-    // (defaults to 'local-dev-token'). Use the known literal so API calls succeed.
-    localStorage.setItem('auth_token', 'local-dev-token');
-    localStorage.setItem('auth_token_source', 'user');
-    window.location.href = '/';
-  };
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
@@ -37,30 +25,10 @@ export function Login() {
           <Button
             className="w-full"
             size="lg"
-            onClick={handleLogin}
+            onClick={() => login()}
           >
             <Github className="w-5 h-5 mr-2" />
             Sign in with GitHub
-          </Button>
-
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t" />
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-background px-2 text-muted-foreground">
-                or use local development mode
-              </span>
-            </div>
-          </div>
-
-          <Button
-            variant="outline"
-            className="w-full"
-            size="lg"
-            onClick={handleLocalDev}
-          >
-            Continue as Local Dev
           </Button>
 
           <p className="text-xs text-center text-muted-foreground mt-6">
@@ -71,4 +39,3 @@ export function Login() {
     </div>
   );
 }
-

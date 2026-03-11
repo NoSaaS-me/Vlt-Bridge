@@ -21,7 +21,7 @@ import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
 import { NotificationSettings as NotificationSettingsComponent } from '@/components/NotificationSettings';
 import { RuleSettings } from '@/components/RuleSettings';
 import { AdminUsers } from '@/pages/AdminUsers';
-import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
+import { getCurrentUser, getToken, logout, getStoredToken } from '@/services/auth';
 import { apiFetch, getIndexHealth, rebuildIndex, type RebuildResponse, getOracleSettings, updateOracleSettings } from '@/services/api';
 import { getModels, getModelSettings, saveModelSettings, testTavilyConnection } from '@/services/models';
 import { getContextSettings, updateContextSettings } from '@/services/context';
@@ -95,8 +95,6 @@ export function Settings() {
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [rebuildResult, setRebuildResult] = useState<RebuildResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
-
   // Model settings state
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
@@ -136,12 +134,6 @@ export function Settings() {
 
   useEffect(() => {
     loadData();
-  }, []);
-
-  useEffect(() => {
-    const handler = () => setIsDemoMode(isDemoSession());
-    window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, handler);
-    return () => window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, handler);
   }, []);
 
   // T046: Load CodeRAG status
@@ -195,21 +187,10 @@ export function Settings() {
     try {
       const token = getStoredToken();
 
-      // Handle local-dev-token as a special case
-      if (token === 'local-dev-token') {
-        setUser({
-          user_id: 'demo-user',
-          vault_path: '/data/vaults/demo-user',
-          created: new Date().toISOString(),
-        });
+      const userData = await getCurrentUser().catch(() => null);
+      setUser(userData);
+      if (token) {
         setApiToken(token);
-      } else {
-        // Real OAuth user
-        const userData = await getCurrentUser().catch(() => null);
-        setUser(userData);
-        if (token) {
-          setApiToken(token);
-        }
       }
 
       // Always try to load index health
@@ -536,13 +517,6 @@ export function Settings() {
 
       {/* Content */}
       <div className="max-w-4xl mx-auto p-6 space-y-6">
-        {isDemoMode && (
-          <Alert variant="destructive">
-            <AlertDescription>
-              You are viewing the shared demo vault. Sign in with GitHub from the main app to enable token generation and index management.
-            </AlertDescription>
-          </Alert>
-        )}
         {error && (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
@@ -1441,16 +1415,14 @@ export function Settings() {
           <TabsContent value="rules" className="space-y-6 mt-6">
             {/* Rule Settings */}
             <RuleSettings
-              isDemoMode={isDemoMode}
-              canTestRules={user?.user_id === 'demo-user'}
+              canTestRules={true}
             />
           </TabsContent>
 
           <TabsContent value="notifications" className="space-y-6 mt-6">
             {/* Notification Subscribers */}
             <NotificationSettingsComponent
-              isDemoMode={isDemoMode}
-              canTestNotifications={user?.user_id === 'demo-user'}
+              canTestNotifications={true}
             />
 
             {/* System Logs */}

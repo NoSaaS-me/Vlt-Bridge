@@ -85,6 +85,28 @@ except ImportError:
     MemorySaver = None  # type: ignore[assignment]
 
 
+class _PickleSerde:
+    """Pickle-based serde for MemorySaver.
+
+    CodeAct stores Python function objects in the REPL ``context`` namespace.
+    The default JsonPlusSerializer (msgpack) cannot serialize functions;
+    pickle can, and is acceptable for in-process in-memory state.
+    """
+
+    def dumps_typed(self, obj: object) -> tuple[str, bytes]:
+        import pickle
+        return ("pickle", pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL))
+
+    def loads_typed(self, data: tuple[str, bytes]) -> object:
+        import pickle
+        encoding, raw = data
+        if encoding == "pickle":
+            return pickle.loads(raw)
+        # Fallback: try JsonPlusSerializer for checkpoints written by another serde
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+        return JsonPlusSerializer().loads_typed(data)
+
+
 # ---------------------------------------------------------------------------
 # Graph builder
 # ---------------------------------------------------------------------------
@@ -122,7 +144,8 @@ def build_oracle_graph(
     # Use MemorySaver fallback if no checkpointer provided
     effective_checkpointer = checkpointer
     if effective_checkpointer is None and _MEMORY_SAVER_AVAILABLE:
-        effective_checkpointer = MemorySaver()
+        # Use pickle serde so CodeAct's function-containing REPL context can be checkpointed
+        effective_checkpointer = MemorySaver(serde=_PickleSerde())
         logger.warning("No checkpointer provided — using MemorySaver (non-persistent)")
     elif effective_checkpointer is None:
         raise ImportError(
