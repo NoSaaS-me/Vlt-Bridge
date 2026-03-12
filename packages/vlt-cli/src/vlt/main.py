@@ -122,14 +122,16 @@ def set_key(
     """
     Set the server sync token for backend authentication.
 
+    Prefer [bold]vlt login[/bold] for interactive GitHub OAuth — this command is for
+    manually pasting a token obtained from the backend settings page or /api/tokens.
+
     This saves the token to the active profile's .env file as VLT_SYNC_TOKEN so you
     don't have to export it every time. The token authenticates vlt-cli with the
     backend server for syncing threads and using server-side features like summarization.
 
-    Get your token from the backend server's settings page or via the /api/tokens endpoint.
-
     Examples:
-        vlt config set-key sk-abc123xyz
+        vlt login                                         # Preferred: GitHub OAuth
+        vlt config set-key sk-abc123xyz                   # Manual token paste
         vlt config set-key sk-abc123xyz --server https://my-vault.example.com
         vlt --profile work config set-key sk-work-token  # Set for specific profile
     """
@@ -416,7 +418,7 @@ def profile_show():
     if settings.sync_token:
         print(f"  Sync:        [green]Configured[/green] (server: {settings.vault_url})")
     else:
-        print(f"  Sync:        [dim]Not configured[/dim] (run 'vlt config set-key <token>')")
+        print(f"  Sync:        [dim]Not configured[/dim] (run 'vlt login')")
 
 
 @profile_app.command("add")
@@ -1827,7 +1829,7 @@ def run_librarian(
         # Check for sync token
         if not librarian.sync_token:
             print("[red]Error: No sync token configured.[/red]")
-            print("Run: vlt config set-key <your-sync-token>")
+            print("Run: vlt login")
             print("[dim]Or use --legacy flag to use local LLM calls (deprecated)[/dim]")
             raise typer.Exit(code=1)
 
@@ -3653,8 +3655,8 @@ def _oracle_local(
     if not settings.openrouter_api_key and not settings.sync_token:
         console.print("[red]Error: No API credentials configured for local mode.[/red]")
         console.print()
-        console.print("Option 1 (Recommended): Configure server sync token:")
-        console.print("  vlt config set-key <your-sync-token>")
+        console.print("Option 1 (Recommended): Authenticate via GitHub:")
+        console.print("  vlt login")
         console.print()
         console.print("Option 2 (Legacy): Set OpenRouter API key directly:")
         console.print("  export VLT_OPENROUTER_API_KEY=<your-api-key>")
@@ -3812,7 +3814,7 @@ def context_list(
 
     if not client.token:
         console.print("[yellow]No sync token configured. Context tree requires backend.[/yellow]")
-        console.print("[dim]Run: vlt config set-key <your-sync-token>[/dim]")
+        console.print("[dim]Run: vlt login[/dim]")
         raise typer.Exit(code=1)
 
     if not client.is_available():
@@ -3892,7 +3894,7 @@ def context_new(
 
     if not client.token:
         console.print("[yellow]No sync token configured. Context tree requires backend.[/yellow]")
-        console.print("[dim]Run: vlt config set-key <your-sync-token>[/dim]")
+        console.print("[dim]Run: vlt login[/dim]")
         raise typer.Exit(code=1)
 
     if not client.is_available():
@@ -4173,7 +4175,7 @@ def context_history(
 
     if not client.token:
         console.print("[yellow]No sync token configured.[/yellow]")
-        console.print("[dim]Run: vlt config set-key <your-sync-token>[/dim]")
+        console.print("[dim]Run: vlt login[/dim]")
         raise typer.Exit(code=1)
 
     if not client.is_available():
@@ -5293,6 +5295,218 @@ def setup_wizard(
     else:
         wiz.print("[bold green]✓ Setup complete.[/bold green] All checks passed.")
     wiz.print()
+
+
+# ---------------------------------------------------------------------------
+# Auth commands (login / logout / whoami)
+# ---------------------------------------------------------------------------
+
+@app.command("login")
+def login_cmd(
+    server: Optional[str] = typer.Argument(None, help="Backend server URL (default: from config)"),
+):
+    """
+    Authenticate with the vlt backend via GitHub OAuth.
+
+    Opens your browser to sign in with GitHub. The resulting token is
+    stored in your active profile's .env as VLT_SYNC_TOKEN.
+    """
+    import threading
+    import webbrowser
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from urllib.parse import urlparse, parse_qs
+
+    from vlt.config import settings as _settings
+    from vlt.profile import get_active_profile_dir
+
+    raw_url = (server or _settings.vault_url).rstrip("/")
+    # Accept bare host:port (e.g., "localhost:5173" → "http://localhost:5173")
+    vault_url = raw_url if raw_url.startswith("http") else f"http://{raw_url}"
+
+    # Result holder shared between server thread and main thread
+    result: dict = {}
+    server_ready = threading.Event()
+
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            params = parse_qs(parsed.query)
+
+            if parsed.path == "/callback":
+                token = params.get("token", [None])[0]
+                user_id = params.get("user_id", [None])[0]
+                error = params.get("error", [None])[0]
+
+                if token and user_id:
+                    result["token"] = token
+                    result["user_id"] = user_id
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.end_headers()
+                    self.wfile.write(b"""<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#fff">
+                    <div style="text-align:center"><h1 style="color:#22c55e">&#10003; Authenticated</h1><p>You can close this tab and return to the terminal.</p></div>
+                    </body></html>""")
+                elif error:
+                    result["error"] = error
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.end_headers()
+                    self.wfile.write(f"""<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#fff">
+                    <div style="text-align:center"><h1 style="color:#ef4444">&#10007; Login Failed</h1><p>{error}</p></div>
+                    </body></html>""".encode())
+                else:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            pass  # Suppress default HTTP server logging
+
+    # Find an available port (OS assigns by binding to port 0)
+    httpd = HTTPServer(("127.0.0.1", 0), CallbackHandler)
+    port = httpd.server_address[1]
+
+    def serve():
+        server_ready.set()
+        # Loop until we get the real /callback with token or error.
+        # Browsers may send favicon/preflight requests first.
+        while not result:
+            httpd.handle_request()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    server_ready.wait()
+
+    login_url = f"{vault_url}/auth/cli/login?port={port}"
+
+    console.print(f"\n[bold]Opening browser for GitHub authentication...[/bold]")
+    console.print(f"[dim]If the browser doesn't open, visit:[/dim]")
+    console.print(f"[blue underline]{login_url}[/blue underline]\n")
+
+    webbrowser.open(login_url)
+
+    # Wait for callback (timeout after 120 seconds)
+    console.print("[dim]Waiting for authentication...[/dim]")
+    thread.join(timeout=120)
+    httpd.server_close()
+
+    if not result:
+        console.print("[red]✗[/red] Authentication timed out (120s). Try again.")
+        raise typer.Exit(1)
+
+    if "error" in result:
+        console.print(f"[red]✗[/red] Login failed: {result['error']}")
+        raise typer.Exit(1)
+
+    token = result["token"]
+    user_id = result["user_id"]
+
+    # Store token in profile .env
+    profile_dir = get_active_profile_dir()
+    env_file = profile_dir / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Read existing .env, update or add VLT_SYNC_TOKEN and VLT_VAULT_URL
+    existing_lines = []
+    if env_file.exists():
+        existing_lines = env_file.read_text().splitlines()
+
+    new_lines = []
+    found_token = False
+    found_url = False
+    for line in existing_lines:
+        if line.startswith("VLT_SYNC_TOKEN="):
+            new_lines.append(f"VLT_SYNC_TOKEN={token}")
+            found_token = True
+        elif line.startswith("VLT_VAULT_URL="):
+            new_lines.append(f"VLT_VAULT_URL={vault_url}")
+            found_url = True
+        else:
+            new_lines.append(line)
+
+    if not found_token:
+        new_lines.append(f"VLT_SYNC_TOKEN={token}")
+    if not found_url:
+        new_lines.append(f"VLT_VAULT_URL={vault_url}")
+
+    env_file.write_text("\n".join(new_lines) + "\n")
+
+    console.print(f"[green]✓[/green] Logged in as [bold]{user_id}[/bold]")
+    console.print(f"[dim]Token saved to {env_file}[/dim]")
+    console.print(f"[dim]Server: {vault_url}[/dim]")
+
+
+@app.command("logout")
+def logout_cmd():
+    """
+    Clear stored authentication token.
+    """
+    from vlt.profile import get_active_profile_dir
+
+    profile_dir = get_active_profile_dir()
+    env_file = profile_dir / ".env"
+
+    if not env_file.exists():
+        console.print("[yellow]No credentials found.[/yellow]")
+        return
+
+    lines = env_file.read_text().splitlines()
+    new_lines = [l for l in lines if not l.startswith("VLT_SYNC_TOKEN=")]
+
+    if len(new_lines) == len(lines):
+        console.print("[yellow]No credentials found.[/yellow]")
+        return
+
+    env_file.write_text("\n".join(new_lines) + "\n")
+    console.print("[green]✓[/green] Logged out. Token removed.")
+
+
+@app.command("whoami")
+def whoami_cmd():
+    """
+    Show the currently authenticated user.
+    """
+    import httpx as _httpx
+    from vlt.config import settings as _settings
+
+    if not _settings.sync_token:
+        console.print("[yellow]Not logged in.[/yellow] Run [bold]vlt login[/bold] to authenticate.")
+        raise typer.Exit(1)
+
+    try:
+        r = _httpx.get(
+            f"{_settings.vault_url}/api/me",
+            headers={"Authorization": f"Bearer {_settings.sync_token}"},
+            timeout=10.0,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            console.print(f"[green]✓[/green] Logged in as [bold]{data.get('user_id', 'unknown')}[/bold]")
+            if data.get("gh_profile", {}).get("username"):
+                console.print(f"[dim]GitHub: {data['gh_profile']['username']}[/dim]")
+            console.print(f"[dim]Server: {_settings.vault_url}[/dim]")
+        elif r.status_code == 401:
+            console.print("[red]✗[/red] Token expired or invalid. Run [bold]vlt login[/bold] to re-authenticate.")
+            raise typer.Exit(1)
+        elif r.status_code == 403:
+            detail = r.json().get("detail", {})
+            error = detail.get("error", "forbidden") if isinstance(detail, dict) else "forbidden"
+            if error == "account_pending":
+                console.print("[yellow]![/yellow] Account pending admin approval.")
+            elif error == "account_blocked":
+                console.print("[red]✗[/red] Account has been blocked.")
+            else:
+                console.print(f"[red]✗[/red] Access denied: {error}")
+            raise typer.Exit(1)
+        else:
+            console.print(f"[red]✗[/red] Server returned {r.status_code}")
+            raise typer.Exit(1)
+    except _httpx.ConnectError:
+        console.print(f"[red]✗[/red] Cannot reach server at {_settings.vault_url}")
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

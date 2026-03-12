@@ -244,7 +244,7 @@ class OracleClient:
             ValueError: If no auth token configured.
         """
         if not self.token:
-            raise ValueError("No auth token configured. Run: vlt config set-key <token>")
+            raise ValueError("No auth token configured. Run: vlt login")
 
         payload = {
             "question": question,
@@ -308,7 +308,7 @@ class OracleClient:
         if not self.token:
             yield OracleStreamChunk(
                 type="error",
-                error="No auth token configured. Run: vlt config set-key <token>"
+                error="No auth token configured. Run: vlt login"
             )
             return
 

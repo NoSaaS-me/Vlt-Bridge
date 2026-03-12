@@ -226,7 +226,7 @@ def build_oracle_tools(
     # Thread tools (T034)
     try:
         from .tools.thread_tools import make_thread_tools  # type: ignore[import]
-        tools.extend(make_thread_tools(user_id=user_id))
+        tools.extend(make_thread_tools(user_id=user_id, project_id=project_id))
         logger.debug("Thread tools loaded (%d total tools)", len(tools))
     except (ImportError, Exception) as exc:
         logger.debug("thread_tools unavailable: %s", exc)
@@ -247,7 +247,7 @@ def build_oracle_tools(
     # Meta tools (T034) — must be last (takes full tool list as input)
     try:
         from .tools.meta_tools import make_meta_tools  # type: ignore[import]
-        tools.extend(make_meta_tools(tools))
+        tools.extend(make_meta_tools(tools, plan_ref=None))
         logger.debug("Meta tools loaded (%d total tools)", len(tools))
     except (ImportError, Exception) as exc:
         logger.debug("meta_tools unavailable: %s", exc)

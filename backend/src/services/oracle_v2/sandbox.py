@@ -30,6 +30,7 @@ import re
 import shlex
 import subprocess
 import sys
+import traceback
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -230,11 +231,14 @@ def make_sandbox_eval(tools: list[Callable]) -> Callable[[str, dict], tuple[str,
             "dict": dict,
             "set": set,
             "tuple": tuple,
+            "frozenset": frozenset,
             "str": str,
             "int": int,
             "float": float,
             "bool": bool,
             "bytes": bytes,
+            "bytearray": bytearray,
+            "memoryview": memoryview,
             "type": type,
             "isinstance": isinstance,
             "issubclass": issubclass,
@@ -296,11 +300,20 @@ def make_sandbox_eval(tools: list[Callable]) -> Callable[[str, dict], tuple[str,
         }
         exec_globals = dict(base_globals)
 
+        exec_error: str | None = None
+
         def _run() -> None:
+            nonlocal exec_error
             old_stdout = sys.stdout
             sys.stdout = stdout_capture
             try:
                 exec(compile(code, "<oracle_repl>", "exec"), exec_globals, local_ns)  # noqa: S102
+            except Exception:
+                # Behave like a real REPL: print the traceback to stdout
+                # so the LLM can see the error and adjust, rather than
+                # crashing the entire LangGraph stream.
+                exec_error = traceback.format_exc()
+                stdout_capture.write(exec_error)
             finally:
                 sys.stdout = old_stdout
 
@@ -314,7 +327,9 @@ def make_sandbox_eval(tools: list[Callable]) -> Callable[[str, dict], tuple[str,
                 )
 
         output = stdout_capture.getvalue()
-        new_vars = _extract_new_vars(local_ns, context)
+        # Only extract new vars if execution succeeded — don't persist
+        # partial state from a failed exec.
+        new_vars = _extract_new_vars(local_ns, context) if exec_error is None else {}
         return output, new_vars
 
     return eval_fn

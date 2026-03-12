@@ -102,11 +102,14 @@ def _format_search_results(raw: dict | list, query: str) -> str:
     return "\n".join(lines)
 
 
+_VALID_SYMBOL_KINDS = frozenset({"function", "class", "method", "variable"})
+
+
 def make_code_tools(
     project_id: str,
     openrouter_api_key: Optional[str] = None,
 ) -> list[Callable]:
-    """Factory: returns [search_code, read_file, get_repo_map] bound to project_id.
+    """Factory: returns [search_code, read_file, get_repo_map, symbol_lookup] bound to project_id.
 
     Args:
         project_id: The coderag project ID to scope all tool calls.
@@ -233,4 +236,85 @@ def make_code_tools(
 
         return str(raw)
 
-    return [search_code, read_file, get_repo_map]
+    def symbol_lookup(name: str, kind: str = "") -> str:
+        """Look up a symbol definition by exact name (function, class, method, variable).
+
+        More precise than search_code — filters for exact name matches in symbol definitions.
+        Use search_code for fuzzy/conceptual queries, symbol_lookup for known names.
+
+        Args:
+            name: Symbol name to look up (e.g. 'OracleV2Wrapper', 'make_sandbox_eval').
+            kind: Optional filter: 'function', 'class', 'method', 'variable'. Empty matches all.
+
+        Returns:
+            Symbol definitions with file path, line number, kind, and signature.
+        """
+        if kind and kind not in _VALID_SYMBOL_KINDS:
+            valid = ", ".join(sorted(_VALID_SYMBOL_KINDS))
+            return f"[symbol_lookup error] Invalid kind {kind!r}. Valid values: {valid}"
+
+        args = ["coderag", "search", name, "--limit", "10", "--project", _project_id]
+        env = {}
+        if _api_key:
+            env["VLT_OPENROUTER_API_KEY"] = _api_key
+
+        raw = _run_vlt_coderag(args, timeout=60, env_override=env if env else None)
+
+        if isinstance(raw, dict) and raw.get("error"):
+            return f"[symbol_lookup error] {raw.get('message', 'Unknown error')}"
+
+        # Normalise results to list
+        results: list = []
+        if isinstance(raw, list):
+            results = raw
+        elif isinstance(raw, dict):
+            results = raw.get("results", [])
+
+        if not results:
+            return (
+                f"No symbol {name!r} found. "
+                f"Try search_code({name!r}) for broader matching."
+            )
+
+        kind_header = f" (kind: {kind})" if kind else ""
+        lines = [f"Symbol lookup for {name!r}{kind_header}:\n"]
+        displayed = 0
+        for i, item in enumerate(results, start=1):
+            item_kind = item.get("kind") or item.get("type") or ""
+            # Apply kind filter when specified
+            if kind and item_kind and item_kind.lower() != kind.lower():
+                continue
+
+            file_path = item.get("file_path") or item.get("path") or "unknown"
+            start_line = item.get("start_line") or item.get("line") or ""
+            snippet = item.get("content") or item.get("code") or item.get("snippet") or ""
+
+            loc = f"{file_path}"
+            if start_line:
+                loc += f":{start_line}"
+            lines.append(f"[{displayed + 1}] {loc}")
+
+            if item_kind:
+                lines.append(f"    Kind: {item_kind}")
+
+            # Show first meaningful line of snippet as the signature
+            if snippet:
+                sig_line = next(
+                    (ln.strip() for ln in snippet.splitlines() if ln.strip()),
+                    "",
+                )
+                if sig_line:
+                    lines.append(f"    {sig_line}")
+
+            lines.append("")
+            displayed += 1
+
+        if displayed == 0:
+            return (
+                f"No symbol {name!r} found with kind={kind!r}. "
+                f"Try symbol_lookup({name!r}) without a kind filter."
+            )
+
+        return "\n".join(lines)
+
+    return [search_code, read_file, get_repo_map, symbol_lookup]

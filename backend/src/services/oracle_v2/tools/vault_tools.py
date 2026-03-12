@@ -9,14 +9,14 @@ from ...vault import VaultService
 
 
 def make_vault_tools(user_id: str, project_id: str) -> list[Callable]:
-    """Factory: returns [vault_search, vault_read, vault_write] bound to user/project.
+    """Factory: returns [vault_search, vault_read, vault_write, vault_list, vault_backlinks] bound to user/project.
 
     Args:
         user_id: The authenticated user's ID (captured in closure).
         project_id: The active project ID (captured in closure).
 
     Returns:
-        List of three callables: [vault_search, vault_read, vault_write]
+        List of five callables: [vault_search, vault_read, vault_write, vault_list, vault_backlinks]
     """
     # Instantiate services once — shared across all three tools
     _vault_svc = VaultService()
@@ -102,7 +102,89 @@ def make_vault_tools(user_id: str, project_id: str) -> list[Callable]:
         except Exception as exc:
             return f"Error writing vault note: {exc}"
 
-    return [vault_search, vault_read, vault_write]
+    def vault_list(directory: str = "", limit: int = 50) -> str:
+        """List vault notes, optionally scoped to a directory prefix.
+
+        Args:
+            directory: Optional folder prefix to scope the listing (e.g. 'Research').
+                       Leave empty to list all notes.
+            limit: Maximum number of notes to return (default 50, capped at 200).
+
+        Returns:
+            Formatted table of notes sorted by last_modified descending,
+            or a message if no notes are found.
+        """
+        try:
+            limit = min(limit, 200)
+            folder = directory.strip() or None
+            notes = _vault_svc.list_notes(
+                user_id, folder=folder, project_id=project_id
+            )
+            if not notes:
+                label = directory if directory else "(all)"
+                return f"No notes found in '{label}'. Use vault_list() without arguments to see all notes."
+
+            # Re-sort by last_modified descending (service returns alphabetical)
+            notes_sorted = sorted(
+                notes,
+                key=lambda n: n.get("last_modified") or "",
+                reverse=True,
+            )
+            shown = notes_sorted[:limit]
+            total = len(notes_sorted)
+
+            label = directory if directory else "(all)"
+            lines = [
+                f"Vault notes in: {label}",
+                f"(showing {len(shown)} of {total} notes)",
+                "",
+            ]
+            for note in shown:
+                path = note.get("path", "")
+                title = note.get("title", "")
+                raw_date = note.get("last_modified")
+                if raw_date:
+                    date_str = str(raw_date)[:10]  # YYYY-MM-DD from ISO string or datetime
+                else:
+                    date_str = "unknown"
+                lines.append(f"  {path}  {date_str}  {title}")
+
+            return "\n".join(lines)
+        except Exception as exc:
+            return f"Error listing vault notes: {exc}"
+
+    def vault_backlinks(path: str) -> str:
+        """Get notes that link TO the given note via wikilinks.
+
+        Args:
+            path: Note path relative to vault root (e.g. 'Architecture/Overview.md').
+
+        Returns:
+            Formatted list of source notes that contain a wikilink to this note,
+            or a message if none exist.
+        """
+        try:
+            backlinks = _indexer_svc.get_backlinks(
+                user_id, target_path=path, project_id=project_id
+            )
+            if not backlinks:
+                return f"No notes link to '{path}'."
+
+            lines = [
+                f"Backlinks for: {path}",
+                f"({len(backlinks)} notes link to this)",
+                "",
+            ]
+            for bl in backlinks:
+                source_path = bl.get("path", "")
+                source_title = bl.get("title", "")
+                lines.append(f"  {source_path}  {source_title}")
+
+            return "\n".join(lines)
+        except Exception as exc:
+            return f"Error retrieving backlinks: {exc}"
+
+    return [vault_search, vault_read, vault_write, vault_list, vault_backlinks]
 
 
 __all__ = ["make_vault_tools"]

@@ -133,6 +133,9 @@ async def oracle_to_sse(
             type="error",
             error=f"Streaming error: {exc}",
         )
+        # Always emit done after error so clients get the context_id for
+        # thread management and know the stream has definitively ended.
+        yield OracleStreamChunk(type="done", context_id=thread_id)
         return
 
     # Natural end of stream — emit done chunk

@@ -28,36 +28,37 @@ router = APIRouter()
 
 OAUTH_STATE_TTL_SECONDS = 300
 # GitHub OAuth states for primary login (no user_id yet)
-github_login_states: dict[str, float] = {}  # state -> timestamp
+# state -> (timestamp, cli_port_or_none)
+github_login_states: dict[str, tuple[float, Optional[int]]] = {}
 # GitHub OAuth states for connecting GitHub to existing account (has user_id)
 github_connect_states: dict[str, tuple[float, str]] = {}  # state -> (timestamp, user_id)
 
 auth_service = AuthService()
 
 
-def _create_github_login_state() -> str:
+def _create_github_login_state(cli_port: Optional[int] = None) -> str:
     """Generate a state token for GitHub login and store it with a timestamp."""
     now = time.time()
     # Garbage collect expired states
     expired = [
         state
-        for state, ts in github_login_states.items()
+        for state, (ts, _) in github_login_states.items()
         if now - ts > OAUTH_STATE_TTL_SECONDS
     ]
     for state in expired:
         github_login_states.pop(state, None)
 
     state = secrets.token_urlsafe(32)
-    github_login_states[state] = now
+    github_login_states[state] = (now, cli_port)
     return state
 
 
-def _consume_github_login_state(state: str | None) -> None:
-    """Validate and remove the GitHub login state token; raise if invalid."""
+def _consume_github_login_state(state: str | None) -> Optional[int]:
+    """Validate and remove the GitHub login state token; raise if invalid. Returns cli_port or None."""
     if not state or state not in github_login_states:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state.")
-    # Remove to prevent reuse
-    del github_login_states[state]
+    ts, cli_port = github_login_states.pop(state)
+    return cli_port
 
 
 def get_base_url(request: Request) -> str:
@@ -141,6 +142,42 @@ async def login(request: Request):
     return RedirectResponse(url=oauth_url, status_code=302)
 
 
+@router.get("/auth/cli/login")
+async def cli_login(
+    request: Request,
+    port: int = Query(..., description="Local CLI callback port"),
+):
+    """Initiate GitHub OAuth for CLI authentication.
+
+    The CLI starts a temporary HTTP server on the given port.
+    After OAuth completes, the token is delivered to http://localhost:{port}/callback.
+    """
+    if port < 1024 or port > 65535:
+        raise HTTPException(status_code=400, detail="Invalid port number")
+
+    try:
+        github_service = get_github_service()
+    except GitHubError:
+        raise HTTPException(status_code=501, detail="GitHub OAuth not configured.")
+
+    base_url = get_base_url(request)
+    redirect_uri = f"{base_url}/auth/callback"
+
+    state = _create_github_login_state(cli_port=port)
+
+    try:
+        oauth_url = github_service.get_oauth_url(state=state, redirect_uri=redirect_uri)
+    except GitHubError:
+        raise HTTPException(status_code=501, detail="GitHub OAuth not configured.")
+
+    logger.info(
+        "Initiating CLI GitHub OAuth login",
+        extra={"port": port, "redirect_uri": redirect_uri},
+    )
+
+    return RedirectResponse(url=oauth_url, status_code=302)
+
+
 @router.get("/auth/callback")
 async def callback(
     request: Request,
@@ -156,8 +193,8 @@ async def callback(
     base_url = get_base_url(request)
     redirect_uri = f"{base_url}/auth/callback"
 
-    # Validate state token to prevent CSRF and replay attacks
-    _consume_github_login_state(state)
+    # Validate state token to prevent CSRF and replay attacks; returns cli_port or None
+    cli_port = _consume_github_login_state(state)
 
     logger.info(
         "GitHub OAuth login callback received",
@@ -231,24 +268,42 @@ async def callback(
             },
         )
 
-        # Redirect to frontend with token in URL hash.
-        # NOTE: Hash fragments are not sent to the server in subsequent requests, so
-        # this avoids token leakage via Referer headers on server calls.
-        # However, the token may still appear in browser history on some clients.
-        redirect_url = f"{base_url}/#token={jwt_token}"
-        # Log the redirect destination without the token to avoid leaking credentials
-        logger.info(f"Redirecting to frontend after successful GitHub OAuth login",
-                    extra={"user_id": user_id, "base_url": base_url})
+        if cli_port:
+            # CLI login — deliver token to localhost callback server
+            redirect_url = f"http://localhost:{cli_port}/callback?token={jwt_token}&user_id={user_id}"
+            logger.info(
+                "CLI OAuth login successful, redirecting to CLI callback",
+                extra={"user_id": user_id, "cli_port": cli_port},
+            )
+        else:
+            # Web UI login — deliver token via hash fragment.
+            # NOTE: Hash fragments are not sent to the server in subsequent requests, so
+            # this avoids token leakage via Referer headers on server calls.
+            redirect_url = f"{base_url}/#token={jwt_token}"
+            logger.info(
+                "Web OAuth login successful, redirecting to frontend",
+                extra={"user_id": user_id, "base_url": base_url},
+            )
         return RedirectResponse(url=redirect_url, status_code=302)
 
     except GitHubError as e:
         logger.error(f"GitHub OAuth error: {e}")
+        if cli_port:
+            return RedirectResponse(
+                url=f"http://localhost:{cli_port}/callback?error={quote(e.message)}",
+                status_code=302,
+            )
         return RedirectResponse(
             url=f"{base_url}/#login=error&message={quote(e.message)}",
             status_code=302,
         )
     except Exception as e:
         logger.exception(f"Unexpected error during GitHub OAuth login: {e}")
+        if cli_port:
+            return RedirectResponse(
+                url=f"http://localhost:{cli_port}/callback?error={quote('Login failed')}",
+                status_code=302,
+            )
         return RedirectResponse(
             url=f"{base_url}/#login=error&message={quote('Login failed')}",
             status_code=302,

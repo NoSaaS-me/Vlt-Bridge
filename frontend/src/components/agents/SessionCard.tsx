@@ -119,50 +119,50 @@ export function SessionCard({
             )}
           >
             <span className={statusDot} />
-            <span className="text-xs font-mono truncate flex-1">
+            <span className="text-xs font-mono truncate flex-1 min-w-0">
               {session.name || `pid:${session.pid}`}
             </span>
-            <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums">
+
+            {/* Action buttons — inline, visible on hover */}
+            <span className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+              {onRename && (
+                <span
+                  role="button"
+                  onClick={handleRenameStart}
+                  className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  title="Rename session"
+                >
+                  <Pencil className="h-3 w-3" />
+                </span>
+              )}
+              {onDismiss && (
+                <span
+                  role="button"
+                  onClick={handleKillClick}
+                  className={cn(
+                    'p-1 rounded text-[9px] flex items-center gap-0.5',
+                    armed
+                      ? 'bg-red-500 text-white px-1.5 font-medium'
+                      : 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive',
+                  )}
+                  title={armed ? 'Click again to kill' : 'Remove session'}
+                >
+                  {armed ? (
+                    <>
+                      <Skull className="h-3 w-3" />
+                      <span>Sure?</span>
+                    </>
+                  ) : (
+                    <X className="h-3.5 w-3.5" />
+                  )}
+                </span>
+              )}
+            </span>
+
+            {/* Time ago — hidden when action buttons visible */}
+            <span className="text-[9px] text-muted-foreground shrink-0 tabular-nums group-hover:hidden">
               {timeAgo(session.last_activity)}
             </span>
-          </button>
-        )}
-
-        {/* Pencil — rename, shows on hover when not editing */}
-        {onRename && !editing && (
-          <button
-            onClick={handleRenameStart}
-            className={cn(
-              'absolute top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100',
-              'transition-all p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60',
-              onDismiss ? 'right-7' : 'right-1',
-            )}
-            title="Rename session"
-          >
-            <Pencil className="h-2.5 w-2.5" />
-          </button>
-        )}
-
-        {/* Kill button */}
-        {onDismiss && !editing && (
-          <button
-            onClick={handleKillClick}
-            className={cn(
-              'absolute right-1 top-1/2 -translate-y-1/2 transition-all p-0.5 rounded text-[9px] flex items-center gap-0.5',
-              armed
-                ? 'opacity-100 bg-destructive/20 text-destructive border border-destructive/40 px-1'
-                : 'opacity-0 group-hover:opacity-100 text-muted-foreground hover:bg-destructive/10 hover:text-destructive',
-            )}
-            title={armed ? 'Click again to kill' : 'Kill session'}
-          >
-            {armed ? (
-              <>
-                <Skull className="h-2.5 w-2.5" />
-                <span>Sure?</span>
-              </>
-            ) : (
-              <X className="h-3 w-3" />
-            )}
           </button>
         )}
       </div>

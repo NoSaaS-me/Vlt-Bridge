@@ -285,6 +285,7 @@ class OracleV2Wrapper:
             except Exception as exc:
                 logger.exception("OracleV2Wrapper stream error")
                 yield OracleStreamChunk(type="error", error=f"Stream error: {exc}")
+                yield OracleStreamChunk(type="done", context_id=thread_id)
 
         stream_gen = _run_stream()
 
