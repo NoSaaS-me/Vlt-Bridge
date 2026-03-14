@@ -117,6 +117,14 @@ async def invoke_connector(
     if not svc.is_enabled(auth.user_id, connector_name):
         raise HTTPException(status_code=403, detail=f"Connector '{connector_name}' is not enabled for this user")
 
+    # Per-action permission check — "off" blocks execution; "ask"/"allow" proceed
+    permission = svc.get_action_permission(auth.user_id, connector_name, body.action)
+    if permission == "off":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Action '{body.action}' is disabled for connector '{connector_name}'. Enable it in Connectors settings.",
+        )
+
     credentials = svc.get_credentials(auth.user_id, connector_name)
 
     try:

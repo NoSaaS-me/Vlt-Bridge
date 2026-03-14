@@ -84,7 +84,7 @@ class ComposioService(ServiceConnector):
                     "categories": list(getattr(a, "categories", []) or []),
                 }
                 for a in apps
-                if getattr(a, "name", "")
+                if getattr(a, "name", "") and not getattr(a, "no_auth", False)
             ]
         except Exception as exc:
             logger.exception("Composio catalog() failed")

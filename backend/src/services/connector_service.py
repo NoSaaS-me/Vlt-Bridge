@@ -142,6 +142,16 @@ class ConnectorService:
         """Return decrypted config minus any keys starting with __ (internal control keys)."""
         return {k: v for k, v in self.get_config(user_id, connector_name).items() if not k.startswith("__")}
 
+    def get_action_permission(self, user_id: str, connector_name: str, action_name: str) -> str:
+        """Get permission level for a specific action.
+
+        Returns 'off', 'ask', or 'allow'. Defaults to 'allow' when no config key exists,
+        preserving backwards compatibility with connectors configured before per-action
+        permissions were introduced.
+        """
+        config = self.get_config(user_id, connector_name)
+        return config.get(f"__action_{action_name}", "allow")
+
     def is_configured(self, user_id: str, connector: BaseConnector) -> bool:
         """True if all secret credential fields have non-empty values."""
         creds = self.get_credentials(user_id, connector.name)

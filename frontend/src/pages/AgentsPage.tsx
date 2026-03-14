@@ -204,7 +204,7 @@ export function AgentsPage() {
       </aside>
 
       {/* Content */}
-      <div className="flex-1 overflow-hidden">
+      <div className={cn('flex-1', activeSection === 'connectors' ? 'overflow-y-auto' : 'overflow-hidden')}>
         {activeSection === 'agents' && (
           <AgentsCompositorView
             polling={polling}

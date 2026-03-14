@@ -62,21 +62,46 @@ def register_connector_tools(mcp) -> None:
         except Exception as e:
             return _err("INTERNAL_ERROR", str(e))
 
+        def _fetch_config(connector_name: str) -> dict:
+            """Fetch raw connector config dict; returns {} on failure."""
+            try:
+                cfg_resp = httpx.get(
+                    f"{vault_url}/api/connectors/{connector_name}/config",
+                    headers=headers,
+                    timeout=5.0,
+                )
+                if cfg_resp.status_code == 200:
+                    return cfg_resp.json().get("config", {})
+            except Exception:
+                pass
+            return {}
+
+        def _annotate_and_filter_actions(actions: list[dict], cfg: dict) -> list[dict]:
+            """Attach 'permission' to each action and strip any set to 'off'."""
+            annotated = []
+            for act in actions:
+                perm = cfg.get(f"__action_{act['name']}", "allow")
+                if perm == "off":
+                    continue
+                annotated.append({**act, "permission": perm})
+            return annotated
+
         try:
             # Native connectors
             native_connectors = []
             resp = httpx.get(f"{vault_url}/api/connectors", headers=headers, timeout=10.0)
             if resp.status_code == 200:
-                native_connectors = [
-                    {
+                for c in resp.json().get("connectors", []):
+                    if not (c.get("enabled") and c.get("configured")):
+                        continue
+                    cfg = _fetch_config(c["name"])
+                    actions = _annotate_and_filter_actions(c.get("actions", []), cfg)
+                    native_connectors.append({
                         "name": c["name"],
                         "display_name": c["display_name"],
                         "description": c["description"],
-                        "actions": c["actions"],
-                    }
-                    for c in resp.json().get("connectors", [])
-                    if c.get("enabled") and c.get("configured")
-                ]
+                        "actions": actions,
+                    })
             elif resp.status_code >= 400:
                 return _err("API_ERROR", f"Backend returned HTTP {resp.status_code}: {resp.text[:200]}")
 
@@ -105,6 +130,10 @@ def register_connector_tools(mcp) -> None:
                             ]
                     except Exception:
                         pass  # Missing action list is non-fatal
+
+                    # Annotate composio actions with per-action permissions
+                    composio_cfg = _fetch_config(f"composio:{app_name}")
+                    action_summaries = _annotate_and_filter_actions(action_summaries, composio_cfg)
 
                     composio_connectors.append({
                         "name": f"composio:{app_name}",
@@ -225,6 +254,37 @@ def register_connector_tools(mcp) -> None:
                 )
 
             headers = {"Authorization": f"Bearer {sync_token}"}
+
+            # Check per-action permission before dispatching to the backend.
+            # For composio: connectors, config is stored under "composio:{app_name}".
+            # A 404 on the config endpoint means no config exists → default "allow".
+            config_connector = connector  # e.g. "mailgun" or "composio:gmail"
+            try:
+                cfg_resp = httpx.get(
+                    f"{vault_url}/api/connectors/{config_connector}/config",
+                    headers=headers,
+                    timeout=5.0,
+                )
+                if cfg_resp.status_code == 200:
+                    cfg_data = cfg_resp.json().get("config", {})
+                    perm = cfg_data.get(f"__action_{action}", "allow")
+                    if perm == "off":
+                        return _err(
+                            "ACTION_DISABLED",
+                            f"Action '{action}' is disabled for '{connector}'. Enable it in the Connectors settings.",
+                        )
+                    if perm == "ask":
+                        return _ok(
+                            success=False,
+                            result={"requires_approval": True},
+                            message=(
+                                f"Action '{action}' on '{connector}' requires user approval. "
+                                "This action is in 'ask' mode — the user must grant permission before it executes. "
+                                "Ask the user to set it to 'allow' in Connectors settings, then retry."
+                            ),
+                        )
+            except Exception:
+                pass  # Config fetch failure is non-fatal — proceed with default "allow"
 
             # Route composio: prefixed connectors to the Hub API
             if connector.startswith("composio:"):

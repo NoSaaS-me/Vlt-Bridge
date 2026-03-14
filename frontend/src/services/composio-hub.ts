@@ -74,3 +74,13 @@ export const invokeComposioAction = (
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, params }),
   });
+
+export const getComposioConfig = (appName: string) =>
+  req<{ connector: string; config: Record<string, string> }>(`/${appName}/config`);
+
+export const saveComposioConfig = (appName: string, config: Record<string, string>) =>
+  req<{ connector: string; saved: boolean }>(`/${appName}/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config }),
+  });

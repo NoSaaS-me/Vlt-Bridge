@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..middleware import AuthContext, require_auth_context
+from ...services.connector_service import ConnectorService, get_connector_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/composio", tags=["composio-hub"])
@@ -160,6 +161,48 @@ async def list_app_actions(
 
 
 # ---------------------------------------------------------------------------
+# Action permission config
+# ---------------------------------------------------------------------------
+
+class ComposioConfigUpdate(BaseModel):
+    config: dict[str, str]
+
+
+@router.put("/{app_name}/config")
+async def update_composio_config(
+    app_name: str,
+    body: ComposioConfigUpdate,
+    auth: AuthContext = Depends(require_auth_context),
+    connector_svc: ConnectorService = Depends(get_connector_service),
+) -> dict:
+    """Save action permission config for a composio connector.
+
+    Only accepts __action_* keys. Stored under connector_name='composio:{app}'.
+    """
+    connector_name = f"composio:{app_name.lower()}"
+    # Only allow __action_* keys through this endpoint
+    filtered = {k: v for k, v in body.config.items() if k.startswith("__action_")}
+    if not filtered:
+        raise HTTPException(400, "No valid __action_* keys provided")
+    connector_svc.set_config(auth.user_id, connector_name, filtered)
+    return {"connector": connector_name, "saved": True}
+
+
+@router.get("/{app_name}/config")
+async def get_composio_config(
+    app_name: str,
+    auth: AuthContext = Depends(require_auth_context),
+    connector_svc: ConnectorService = Depends(get_connector_service),
+) -> dict:
+    """Get action permission config for a composio connector."""
+    connector_name = f"composio:{app_name.lower()}"
+    config = connector_svc.get_config(auth.user_id, connector_name)
+    # Only return __action_* keys
+    action_config = {k: v for k, v in config.items() if k.startswith("__action_")}
+    return {"connector": connector_name, "config": action_config}
+
+
+# ---------------------------------------------------------------------------
 # Invoke an action
 # ---------------------------------------------------------------------------
 
@@ -168,12 +211,22 @@ async def invoke_composio_action(
     app_name: str,
     body: InvokeRequest,
     auth: AuthContext = Depends(require_auth_context),
+    connector_svc: ConnectorService = Depends(get_connector_service),
 ) -> dict:
     """Execute a Composio action on behalf of the current user.
 
     action should be the Composio action name e.g. 'GMAIL_SEND_EMAIL'.
     Lowercase names are normalized to uppercase automatically.
     """
+    # Per-action permission check for composio connectors — stored under "composio:{app_name}"
+    composio_connector_name = f"composio:{app_name.lower()}"
+    permission = connector_svc.get_action_permission(auth.user_id, composio_connector_name, body.action)
+    if permission == "off":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Action '{body.action}' is disabled for '{composio_connector_name}'. Enable it in Connectors settings.",
+        )
+
     svc = _get_composio_service()
     try:
         result = svc.execute(

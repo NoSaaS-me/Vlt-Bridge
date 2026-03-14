@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Settings2, Plug, CheckCircle2, AlertCircle, Link, Unlink } from 'lucide-react';
+import { Settings2, Plug, CheckCircle2, AlertCircle, Link, Unlink, ChevronDown, ChevronUp, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
@@ -25,8 +25,157 @@ import {
   listApps,
   connectApp,
   disconnectApp,
+  listAppActions,
+  getComposioConfig,
+  saveComposioConfig,
   type ComposioApp,
+  type ComposioAction,
 } from '@/services/composio-hub';
+
+// ── Action permission types ───────────────────────────────────────────────────
+
+type ActionPermission = 'off' | 'ask' | 'allow';
+
+function actionConfigKey(actionName: string): string {
+  return `__action_${actionName}`;
+}
+
+function getActionPermission(
+  config: Record<string, string>,
+  actionName: string
+): ActionPermission {
+  const val = config[actionConfigKey(actionName)];
+  if (val === 'off' || val === 'ask' || val === 'allow') return val;
+  return 'allow'; // default
+}
+
+// ── 3-way toggle ─────────────────────────────────────────────────────────────
+
+function ActionPermissionToggle({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: ActionPermission;
+  onChange: (v: ActionPermission) => void;
+  disabled?: boolean;
+}) {
+  const options: { label: string; value: ActionPermission; active: string; inactive: string }[] = [
+    {
+      label: 'Off',
+      value: 'off',
+      active: 'bg-muted text-muted-foreground border-border font-medium',
+      inactive: 'text-muted-foreground/50 border-transparent hover:border-border/50',
+    },
+    {
+      label: 'Ask',
+      value: 'ask',
+      active: 'bg-amber-900/30 text-amber-400 border-amber-700 font-medium',
+      inactive: 'text-muted-foreground/50 border-transparent hover:border-border/50',
+    },
+    {
+      label: 'Allow',
+      value: 'allow',
+      active: 'bg-green-900/30 text-green-400 border-green-700 font-medium',
+      inactive: 'text-muted-foreground/50 border-transparent hover:border-border/50',
+    },
+  ];
+
+  return (
+    <div className="flex rounded-md shrink-0" style={{ width: 120 }}>
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          onClick={() => !disabled && onChange(opt.value)}
+          disabled={disabled}
+          className={`flex-1 text-[10px] py-0.5 border rounded-sm transition-colors ${value === opt.value ? opt.active : opt.inactive} ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Action list with collapsing ───────────────────────────────────────────────
+
+const ACTIONS_VISIBLE_LIMIT = 4;
+
+interface ActionRowProps {
+  action: { name: string; description: string };
+  permission: ActionPermission;
+  onPermissionChange: (perm: ActionPermission) => void;
+  saving: boolean;
+}
+
+function ActionRow({ action, permission, onPermissionChange, saving }: ActionRowProps) {
+  return (
+    <div className="flex items-center gap-2 py-1.5 min-w-0 group/row">
+      <div className="flex-1 min-w-0">
+        <code className="text-[10px] font-mono text-foreground/80 block truncate" title={action.name}>
+          {action.name}
+        </code>
+        {action.description && (
+          <span className="text-[10px] text-muted-foreground/60 block truncate leading-tight" title={action.description}>
+            {action.description}
+          </span>
+        )}
+      </div>
+      <ActionPermissionToggle
+        value={permission}
+        onChange={onPermissionChange}
+        disabled={saving}
+      />
+    </div>
+  );
+}
+
+interface ActionListProps {
+  actions: Array<{ name: string; description: string }>;
+  config: Record<string, string>;
+  onPermissionChange: (actionName: string, perm: ActionPermission) => void;
+  savingAction: string | null;
+}
+
+function ActionList({ actions, config, onPermissionChange, savingAction }: ActionListProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (actions.length === 0) return null;
+
+  const visible = expanded ? actions : actions.slice(0, ACTIONS_VISIBLE_LIMIT);
+  const hiddenCount = actions.length - ACTIONS_VISIBLE_LIMIT;
+
+  return (
+    <div className="mt-2 border-t border-border/40 pt-2 space-y-0">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-0.5">
+        Actions ({actions.length})
+      </p>
+      {visible.map((action) => (
+        <ActionRow
+          key={action.name}
+          action={action}
+          permission={getActionPermission(config, action.name)}
+          onPermissionChange={(perm) => onPermissionChange(action.name, perm)}
+          saving={savingAction === action.name}
+        />
+      ))}
+      {hiddenCount > 0 && (
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
+        >
+          {expanded ? (
+            <><ChevronUp className="h-3 w-3" /> Show less</>
+          ) : (
+            <><ChevronDown className="h-3 w-3" /> Show {hiddenCount} more</>
+          )}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Connector settings dialog ─────────────────────────────────────────────────
 
 function ConnectorSettingsDialog({
   connector,
@@ -151,6 +300,108 @@ function ConnectorSettingsDialog({
   );
 }
 
+// ── Native connector card (API key / service) ─────────────────────────────────
+
+function NativeConnectorCard({
+  connector,
+  onSettingsClick,
+  onChanged,
+}: {
+  connector: ConnectorInfo;
+  onSettingsClick: () => void;
+  onChanged: () => void;
+}) {
+  // Per-connector action permission config state
+  const [config, setConfig] = useState<Record<string, string>>({});
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [savingAction, setSavingAction] = useState<string | null>(null);
+
+  // Load config once when the card mounts
+  useEffect(() => {
+    getConnectorConfig(connector.name)
+      .then((cfg) => {
+        setConfig(cfg);
+        setConfigLoaded(true);
+      })
+      .catch(() => setConfigLoaded(true)); // silently proceed if config fetch fails
+  }, [connector.name]);
+
+  const handlePermissionChange = useCallback(async (actionName: string, perm: ActionPermission) => {
+    const key = actionConfigKey(actionName);
+    // Optimistic update
+    setConfig((prev) => ({ ...prev, [key]: perm }));
+    setSavingAction(actionName);
+    try {
+      await saveConnectorConfig(connector.name, { [key]: perm });
+      onChanged();
+    } catch {
+      // Roll back on error
+      setConfig((prev) => {
+        const reverted = { ...prev };
+        delete reverted[key];
+        return reverted;
+      });
+    } finally {
+      setSavingAction(null);
+    }
+  }, [connector.name, onChanged]);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-start justify-between">
+          <div className="space-y-1 min-w-0 flex-1">
+            <CardTitle className="text-base">{connector.display_name}</CardTitle>
+            <CardDescription className="text-xs">{connector.description}</CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-shrink-0 ml-2"
+            onClick={onSettingsClick}
+          >
+            <Settings2 className="h-4 w-4 mr-1" />
+            Settings
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          {connector.enabled && connector.configured ? (
+            <Badge variant="default" className="bg-green-600 text-xs gap-1">
+              <CheckCircle2 className="h-3 w-3" />
+              Enabled
+            </Badge>
+          ) : connector.enabled && !connector.configured ? (
+            <Badge variant="outline" className="text-amber-600 border-amber-600 text-xs gap-1">
+              <AlertCircle className="h-3 w-3" />
+              Needs config
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="text-xs">
+              Disabled
+            </Badge>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {configLoaded && connector.actions.length > 0 && (
+          <ActionList
+            actions={connector.actions}
+            config={config}
+            onPermissionChange={handlePermissionChange}
+            savingAction={savingAction}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── OAuth connector card ──────────────────────────────────────────────────────
+
 function OAuthConnectorCard({
   connector,
   onChanged,
@@ -160,9 +411,20 @@ function OAuthConnectorCard({
 }) {
   const [revoking, setRevoking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<Record<string, string>>({});
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [savingAction, setSavingAction] = useState<string | null>(null);
+
+  useEffect(() => {
+    getConnectorConfig(connector.name)
+      .then((cfg) => {
+        setConfig(cfg);
+        setConfigLoaded(true);
+      })
+      .catch(() => setConfigLoaded(true));
+  }, [connector.name]);
 
   const handleConnect = () => {
-    // Full page redirect to backend OAuth authorize endpoint
     window.location.href = `/api/connectors/${connector.name}/oauth/authorize`;
   };
 
@@ -179,11 +441,29 @@ function OAuthConnectorCard({
     }
   };
 
+  const handlePermissionChange = useCallback(async (actionName: string, perm: ActionPermission) => {
+    const key = actionConfigKey(actionName);
+    setConfig((prev) => ({ ...prev, [key]: perm }));
+    setSavingAction(actionName);
+    try {
+      await saveConnectorConfig(connector.name, { [key]: perm });
+      onChanged();
+    } catch {
+      setConfig((prev) => {
+        const reverted = { ...prev };
+        delete reverted[key];
+        return reverted;
+      });
+    } finally {
+      setSavingAction(null);
+    }
+  }, [connector.name, onChanged]);
+
   return (
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
-          <div className="space-y-1">
+          <div className="space-y-1 min-w-0 flex-1">
             <CardTitle className="text-base">{connector.display_name}</CardTitle>
             <CardDescription className="text-xs">{connector.description}</CardDescription>
           </div>
@@ -227,13 +507,21 @@ function OAuthConnectorCard({
             {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
           </span>
         </div>
+
+        {configLoaded && connector.actions.length > 0 && (
+          <ActionList
+            actions={connector.actions}
+            config={config}
+            onPermissionChange={handlePermissionChange}
+            savingAction={savingAction}
+          />
+        )}
       </CardContent>
     </Card>
   );
 }
 
-// ── App name overrides ───────────────────────────────────────────────────────
-// Composio returns lowercase/slugified names; map known apps to proper brand names.
+// ── App name overrides ────────────────────────────────────────────────────────
 const BRAND_NAMES: Record<string, string> = {
   gmail: 'Gmail', github: 'GitHub', gitlab: 'GitLab', bitbucket: 'Bitbucket',
   notion: 'Notion', slack: 'Slack', discord: 'Discord', telegram: 'Telegram',
@@ -270,52 +558,34 @@ function formatAppName(app: ComposioApp): string {
   const normalized = app.name.toLowerCase().replace(/[-_\s]/g, '');
   if (BRAND_NAMES[normalized]) return BRAND_NAMES[normalized];
   if (BRAND_NAMES[app.name.toLowerCase()]) return BRAND_NAMES[app.name.toLowerCase()];
-  // Title-case the display_name or name as fallback
   const raw = app.display_name || app.name;
   return raw.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function truncateDescription(description: string): string {
   if (!description) return '';
-  // Cut at first sentence boundary
   const sentenceEnd = description.search(/[.!?](\s|$)/);
   const first = sentenceEnd >= 0 ? description.slice(0, sentenceEnd + 1) : description;
   return first.length > 100 ? first.slice(0, 97) + '…' : first;
 }
 
 // ── Category normalization ────────────────────────────────────────────────────
-// Composio categories are very granular and AI-subcategory-heavy.
-// Map them to a small set of human-readable buckets.
 const CATEGORY_RULES: Array<{ match: RegExp | string; bucket: string }> = [
-  // Communication
   { match: /^(email|messaging|chat|communication|sms|phone|video.?call|voip)/i, bucket: 'Communication' },
   { match: 'social media', bucket: 'Social Media' },
-  // Productivity
   { match: /^(productivity|notes?|task|calendar|scheduling|time.?tracking|to.?do)/i, bucket: 'Productivity' },
   { match: /^project.?management/i, bucket: 'Productivity' },
-  // Developer Tools
   { match: /^(developer|devops|code|version.?control|ci.?cd|monitoring|logging|testing|api)/i, bucket: 'Developer Tools' },
-  // Data & Analytics
   { match: /^(data|analytics|bi|reporting|database|spreadsheet|etl)/i, bucket: 'Data & Analytics' },
-  // Sales & CRM
   { match: /^(crm|sales|lead|revenue)/i, bucket: 'Sales & CRM' },
-  // Marketing
   { match: /^(marketing|ads?|advertising|seo|email.?marketing|growth)/i, bucket: 'Marketing' },
-  // Finance
   { match: /^(finance|accounting|payments?|invoic|billing|payroll|tax|bookkeeping)/i, bucket: 'Finance' },
-  // Files & Storage
   { match: /^(file|storage|document|cloud.?storage)/i, bucket: 'Files & Storage' },
-  // E-commerce
   { match: /^(e.?commerce|shopping|retail|inventory)/i, bucket: 'E-commerce' },
-  // HR
   { match: /^(hr|human.?resources|recruiting|hiring|payroll|employee)/i, bucket: 'HR & Recruiting' },
-  // Support
   { match: /^(support|customer.?service|helpdesk|ticketing)/i, bucket: 'Customer Support' },
-  // Design
   { match: /^(design|creative|media|video|audio|photo)/i, bucket: 'Design & Media' },
-  // Automation
   { match: /^(automation|workflow|integration|webhook|trigger)/i, bucket: 'Automation' },
-  // Catch-all: any "ai *" subcategory that didn't match above → AI & Automation
   { match: /^ai\b/i, bucket: 'AI & Automation' },
 ];
 
@@ -325,11 +595,9 @@ function normalizeCategory(raw: string): string {
       return rule.bucket;
     }
   }
-  // Title-case anything that fell through
   return raw.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// Returns the primary normalized bucket for an app (first matching category)
 function appBucket(app: ComposioApp): string {
   for (const cat of app.categories) {
     const bucket = normalizeCategory(cat);
@@ -338,7 +606,7 @@ function appBucket(app: ComposioApp): string {
   return 'Other';
 }
 
-// ── Deterministic color avatar for apps without logos ────────────────────────
+// ── Deterministic color avatar ────────────────────────────────────────────────
 const AVATAR_COLORS = [
   'bg-blue-500', 'bg-violet-500', 'bg-emerald-500', 'bg-orange-500',
   'bg-pink-500', 'bg-cyan-500', 'bg-amber-500', 'bg-rose-500',
@@ -350,6 +618,8 @@ function appAvatarColor(name: string): string {
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
+
+// ── Composio app card ─────────────────────────────────────────────────────────
 
 function AppCard({
   app,
@@ -370,8 +640,45 @@ function AppCard({
   const description = truncateDescription(app.description);
   const bucket = appBucket(app);
 
+  // Action permissions state for connected composio apps
+  const [actions, setActions] = useState<ComposioAction[]>([]);
+  const [actionsLoaded, setActionsLoaded] = useState(false);
+  const [composioConfig, setComposioConfig] = useState<Record<string, string>>({});
+  const [savingAction, setSavingAction] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!app.connected) return;
+    Promise.all([
+      listAppActions(app.name).then((res) => setActions(res.actions)),
+      getComposioConfig(app.name).then((res) => setComposioConfig(res.config)),
+    ])
+      .catch(() => {})
+      .finally(() => setActionsLoaded(true));
+  }, [app.name, app.connected]);
+
+  const handlePermissionChange = useCallback(async (actionName: string, perm: ActionPermission) => {
+    const key = actionConfigKey(actionName);
+    const prev = composioConfig[key];
+    // Optimistic update
+    setComposioConfig((c) => ({ ...c, [key]: perm }));
+    setSavingAction(actionName);
+    try {
+      await saveComposioConfig(app.name, { [key]: perm });
+    } catch {
+      // Roll back on error
+      setComposioConfig((c) => prev ? { ...c, [key]: prev } : (() => { const r = { ...c }; delete r[key]; return r; })());
+    } finally {
+      setSavingAction(null);
+    }
+  }, [app.name, composioConfig]);
+
+  const composioActions = useMemo(
+    () => actions.map((a) => ({ name: a.name, description: a.description })),
+    [actions]
+  );
+
   return (
-    <Card className={`flex flex-col ${app.connected ? 'ring-1 ring-green-400' : ''}`}>
+    <Card className={`flex flex-col ${app.connected ? 'ring-1 ring-emerald-500/30 border-emerald-500/20' : ''}`}>
       <CardHeader className="pb-2 flex-1">
         <div className="flex items-start gap-3">
           <div className={`shrink-0 w-9 h-9 rounded-lg ${avatarColor} flex items-center justify-center text-white font-bold text-sm`}>
@@ -381,25 +688,29 @@ function AppCard({
             <div className="flex items-start justify-between gap-1">
               <CardTitle className="text-sm leading-tight truncate">{displayName}</CardTitle>
               {app.connected && (
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500 mt-0.5" />
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400 mt-0.5" />
               )}
             </div>
-            <CardDescription className="text-xs mt-0.5">
+            <CardDescription className="text-xs mt-0.5 line-clamp-2">
               {description || <span className="italic text-muted-foreground/60">{bucket}</span>}
             </CardDescription>
           </div>
         </div>
       </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent className="pt-0 space-y-2">
         {app.connected ? (
           <Button
             variant="outline"
             size="sm"
-            className="w-full text-red-600 border-red-300 hover:bg-red-50 text-xs h-7"
+            className="w-full text-xs h-7 text-red-400 border-red-500/30 hover:bg-red-500/10 hover:text-red-300"
             onClick={() => onDisconnect(app)}
             disabled={disconnecting === app.name}
           >
-            {disconnecting === app.name ? 'Disconnecting…' : 'Disconnect'}
+            {disconnecting === app.name ? (
+              'Disconnecting…'
+            ) : (
+              <><Unlink className="h-3 w-3 mr-1.5" />Disconnect</>
+            )}
           </Button>
         ) : (
           <Button
@@ -409,13 +720,28 @@ function AppCard({
             onClick={() => onConnect(app)}
             disabled={connecting === app.name}
           >
-            {connecting === app.name ? 'Opening…' : 'Connect'}
+            {connecting === app.name ? (
+              'Opening…'
+            ) : (
+              <><Link className="h-3 w-3 mr-1.5" />Connect</>
+            )}
           </Button>
+        )}
+
+        {app.connected && actionsLoaded && composioActions.length > 0 && (
+          <ActionList
+            actions={composioActions}
+            config={composioConfig}
+            onPermissionChange={handlePermissionChange}
+            savingAction={savingAction}
+          />
         )}
       </CardContent>
     </Card>
   );
 }
+
+// ── Hub tab ───────────────────────────────────────────────────────────────────
 
 function HubTab() {
   const [apps, setApps] = useState<ComposioApp[]>([]);
@@ -472,7 +798,6 @@ function HubTab() {
     }
   };
 
-  // Build normalized category list with counts
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const app of apps) {
@@ -489,7 +814,6 @@ function HubTab() {
 
   const connectedCount = apps.filter((a) => a.connected).length;
 
-  // Filter by search + active category
   const searchLower = search.toLowerCase();
   const filtered = useMemo(() => {
     return apps.filter((a) => {
@@ -509,7 +833,6 @@ function HubTab() {
     });
   }, [apps, search, searchLower, activeCategory]);
 
-  // When showing "all", pin connected apps to the top
   const { connectedApps, otherApps } = useMemo(() => {
     if (activeCategory !== 'all') return { connectedApps: [], otherApps: filtered };
     return {
@@ -597,16 +920,28 @@ function HubTab() {
           </Alert>
         )}
 
-        <div className="flex items-center gap-2">
-          <Input
-            placeholder="Search apps…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="max-w-xs"
-          />
-          <span className="text-xs text-muted-foreground">
-            {filtered.length} app{filtered.length !== 1 ? 's' : ''}
-          </span>
+        {/* Composio attribution + search bar */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="Search apps…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="max-w-xs"
+            />
+            <span className="text-xs text-muted-foreground">
+              {filtered.length} app{filtered.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+          <a
+            href="https://composio.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex items-center gap-1.5 rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1 text-xs font-medium text-purple-400 transition-all hover:border-purple-500/50 hover:bg-purple-500/20 hover:text-purple-300 shrink-0"
+          >
+            <Zap className="h-3 w-3 text-purple-400 group-hover:text-purple-300 transition-colors" />
+            Powered by Composio
+          </a>
         </div>
 
         {loading ? (
@@ -665,6 +1000,8 @@ function HubTab() {
     </div>
   );
 }
+
+// ── ConnectorsPage ────────────────────────────────────────────────────────────
 
 export function ConnectorsPage() {
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
@@ -745,47 +1082,12 @@ export function ConnectorsPage() {
                     onChanged={load}
                   />
                 ) : (
-                  <Card key={connector.name}>
-                    <CardHeader className="pb-2">
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-1">
-                          <CardTitle className="text-base">{connector.display_name}</CardTitle>
-                          <CardDescription className="text-xs">{connector.description}</CardDescription>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex-shrink-0 ml-2"
-                          onClick={() => setSettingsFor(connector)}
-                        >
-                          <Settings2 className="h-4 w-4 mr-1" />
-                          Settings
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="pt-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {connector.enabled && connector.configured ? (
-                          <Badge variant="default" className="bg-green-600 text-xs gap-1">
-                            <CheckCircle2 className="h-3 w-3" />
-                            Enabled
-                          </Badge>
-                        ) : connector.enabled && !connector.configured ? (
-                          <Badge variant="outline" className="text-amber-600 border-amber-600 text-xs gap-1">
-                            <AlertCircle className="h-3 w-3" />
-                            Needs config
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary" className="text-xs">
-                            Disabled
-                          </Badge>
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <NativeConnectorCard
+                    key={connector.name}
+                    connector={connector}
+                    onSettingsClick={() => setSettingsFor(connector)}
+                    onChanged={load}
+                  />
                 )
               )}
             </div>
