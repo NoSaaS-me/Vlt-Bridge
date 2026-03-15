@@ -73,16 +73,17 @@ def register_cronban_tools(mcp) -> None:
     ) -> dict:
         """List Claude agent sessions with their last model output.
 
-        Use this to identify which session to target when creating a cron trigger.
-        The ``last_output`` field shows the tail of the last assistant message so
-        you can tell sessions apart by what they were working on.
+        Use this to find a target_session_id for cronban_create. The last_output
+        field shows the tail of the last assistant message (truncated to 280 chars)
+        so you can identify sessions by what they were working on.
 
         Args:
             project_id: Filter to a specific project slug (optional).
             include_dead: Include terminated sessions (default False).
 
         Returns:
-            {status, sessions: [{id, name, cwd, status, last_activity, last_output}], total}
+            {status, sessions: [{id, name, cwd, status, model, last_activity,
+             last_output (truncated to 280 chars)}], total}
         """
         try:
             import httpx
@@ -171,25 +172,31 @@ def register_cronban_tools(mcp) -> None:
     ) -> dict:
         """Create a scheduled task — recurring or one-off.
 
-        Three scheduling modes (provide exactly one):
-          - ``cron_expression``: recurring schedule (e.g. "0 9 * * 1-5" weekdays 9am)
-          - ``fire_in``: one-off, fires in hh:mm or hh:mm:ss from now (e.g. "1:30" = 90 min)
-          - ``fire_at``: one-off, fires at a specific ISO datetime (e.g. "2026-03-10T14:30:00Z")
+        SCHEDULING (provide EXACTLY ONE — passing multiple causes undefined behavior):
+          - cron_expression: recurring (e.g. "0 9 * * 1-5" = weekdays at 9am UTC).
+            Respects the timezone parameter.
+          - fire_in: one-off relative offset (e.g. "1:30" = 90 min, "2:00:30" = 2h 30s).
+          - fire_at: one-off absolute ISO datetime. MUST include timezone suffix
+            (e.g. "2026-03-10T14:30:00Z"). Without a suffix, behavior is undefined.
 
-        Use ``cronban_sessions`` first to list sessions and pick a ``target_session_id``.
+        TARGET (provide EXACTLY ONE):
+          - target_session_id: inject prompt into an existing session (preferred).
+            Use cronban_sessions() to find session IDs.
+          - target_cwd: spawn a new session in this directory on each fire.
+            Requires create_new_session=True.
 
         Args:
             title: Human-readable label for this schedule.
             prompt_text: Message to inject into the session when the trigger fires.
-            cron_expression: Recurring cron schedule (5-field, e.g. "*/30 * * * *").
-            fire_in: One-off offset from now in hh:mm or hh:mm:ss (e.g. "2:00" = 2 hours).
-            fire_at: One-off ISO datetime string (e.g. "2026-03-10T14:30:00Z").
-            target_session_id: Inject into this specific session (preferred).
-            target_cwd: Working directory for spawning sessions (fallback).
-            create_new_session: Spawn a fresh session on each fire (requires target_cwd).
+            cron_expression: Recurring 5-field cron (e.g. "*/30 * * * *").
+            fire_in: One-off offset: "hh:mm" or "hh:mm:ss" from now.
+            fire_at: One-off ISO datetime with timezone (e.g. "2026-03-10T14:30:00Z").
+            target_session_id: Inject into this session (from cronban_sessions).
+            target_cwd: Working directory for new sessions (requires create_new_session=True).
+            create_new_session: Spawn fresh session on each fire. Default: False.
             skill_id: Use a saved Skill prompt instead of prompt_text (optional).
             project_id: Associate with a project slug (optional).
-            timezone: IANA timezone string (default "UTC", for cron schedules).
+            timezone: IANA timezone for cron_expression only (default "UTC").
 
         Returns:
             {status, trigger_id, title, next_fire_at, cron_expression, fire_once}

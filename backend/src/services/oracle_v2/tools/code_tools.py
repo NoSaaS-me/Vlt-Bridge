@@ -5,6 +5,15 @@ as plain Python (e.g. ``results = search_code("auth middleware")``).
 
 Functions are bound to project_id via closure. All return plain strings so
 the LLM can process them in REPL code.
+
+Available tools (returned by make_code_tools):
+  search_code      — hybrid semantic+BM25 search over indexed code
+  read_file        — read file contents with line-number bounds
+  get_repo_map     — structural overview / repository map
+  symbol_lookup    — precise symbol definition lookup by name
+  find_callers     — find functions that call a given function
+  find_callees     — find functions called by a given function
+  class_hierarchy  — get class inheritance hierarchy (parents + children)
 """
 
 from __future__ import annotations
@@ -109,7 +118,7 @@ def make_code_tools(
     project_id: str,
     openrouter_api_key: Optional[str] = None,
 ) -> list[Callable]:
-    """Factory: returns [search_code, read_file, get_repo_map, symbol_lookup] bound to project_id.
+    """Factory: returns [search_code, read_file, get_repo_map, symbol_lookup, find_callers, find_callees, class_hierarchy] bound to project_id.
 
     Args:
         project_id: The coderag project ID to scope all tool calls.
@@ -253,7 +262,7 @@ def make_code_tools(
             valid = ", ".join(sorted(_VALID_SYMBOL_KINDS))
             return f"[symbol_lookup error] Invalid kind {kind!r}. Valid values: {valid}"
 
-        args = ["coderag", "search", name, "--limit", "10", "--project", _project_id]
+        args = ["coderag", "search", name, "--limit", "10", "--project", _project_id, "--json"]
         env = {}
         if _api_key:
             env["VLT_OPENROUTER_API_KEY"] = _api_key
@@ -317,4 +326,106 @@ def make_code_tools(
 
         return "\n".join(lines)
 
-    return [search_code, read_file, get_repo_map, symbol_lookup]
+    def find_callers(function_name: str, transitive: bool = False) -> str:
+        """Find what functions call a given function.
+
+        Args:
+            function_name: Name of the target function.
+            transitive: If True, find all callers recursively (full call chain). Default False.
+
+        Returns:
+            Formatted list of caller functions with file paths and line numbers.
+        """
+        args = ["coderag", "callers", function_name, "--project", _project_id, "--json"]
+        if transitive:
+            args.append("--transitive")
+        raw = _run_vlt_coderag(args, timeout=60)
+
+        if isinstance(raw, dict) and raw.get("error"):
+            return f"[find_callers error] {raw.get('message', 'Unknown error')}"
+
+        results = raw.get("results", []) if isinstance(raw, dict) else []
+        if not results:
+            return f"No callers found for {function_name!r}."
+
+        lines = [f"Callers of {function_name!r} ({len(results)} found):\n"]
+        for i, item in enumerate(results, 1):
+            name = item.get("caller_name") or item.get("name") or "unknown"
+            fpath = item.get("caller_file_path") or item.get("file_path") or item.get("path") or ""
+            lineno = item.get("caller_line_number") or item.get("line_number") or ""
+            loc = f"{fpath}:{lineno}" if lineno else fpath
+            lines.append(f"  [{i}] {name}  ({loc})")
+        return "\n".join(lines)
+
+    def find_callees(function_name: str, transitive: bool = False) -> str:
+        """Find what a function calls (its dependencies).
+
+        Args:
+            function_name: Name of the source function.
+            transitive: If True, find all callees recursively (full dependency chain). Default False.
+
+        Returns:
+            Formatted list of called functions with file paths and line numbers.
+        """
+        args = ["coderag", "callees", function_name, "--project", _project_id, "--json"]
+        if transitive:
+            args.append("--transitive")
+        raw = _run_vlt_coderag(args, timeout=60)
+
+        if isinstance(raw, dict) and raw.get("error"):
+            return f"[find_callees error] {raw.get('message', 'Unknown error')}"
+
+        results = raw.get("results", []) if isinstance(raw, dict) else []
+        if not results:
+            return f"No callees found for {function_name!r}."
+
+        lines = [f"Functions called by {function_name!r} ({len(results)} found):\n"]
+        for i, item in enumerate(results, 1):
+            name = item.get("callee_name") or item.get("name") or "unknown"
+            fpath = item.get("callee_file_path") or item.get("file_path") or item.get("path") or ""
+            lineno = item.get("callee_line_number") or item.get("line_number") or ""
+            loc = f"{fpath}:{lineno}" if lineno else fpath
+            lines.append(f"  [{i}] {name}  ({loc})")
+        return "\n".join(lines)
+
+    def class_hierarchy(class_name: str) -> str:
+        """Get class inheritance hierarchy — parents and children.
+
+        Args:
+            class_name: Name of the class to inspect.
+
+        Returns:
+            Formatted hierarchy showing parents (superclasses) and children (subclasses).
+        """
+        args = ["coderag", "hierarchy", class_name, "--project", _project_id, "--json"]
+        raw = _run_vlt_coderag(args, timeout=60)
+
+        if isinstance(raw, dict) and raw.get("error"):
+            return f"[class_hierarchy error] {raw.get('message', 'Unknown error')}"
+
+        parents = raw.get("parents", []) if isinstance(raw, dict) else []
+        children = raw.get("children", []) if isinstance(raw, dict) else []
+
+        lines = [f"Class hierarchy for {class_name!r}:\n"]
+
+        if parents:
+            lines.append("  Parents (superclasses):")
+            for p in parents:
+                name = p.get("name") if isinstance(p, dict) else str(p)
+                lines.append(f"    - {name}")
+        else:
+            lines.append("  Parents: (none — base class)")
+
+        lines.append(f"\n  -> {class_name}\n")
+
+        if children:
+            lines.append("  Children (subclasses):")
+            for c in children:
+                name = c.get("name") if isinstance(c, dict) else str(c)
+                lines.append(f"    - {name}")
+        else:
+            lines.append("  Children: (none)")
+
+        return "\n".join(lines)
+
+    return [search_code, read_file, get_repo_map, symbol_lookup, find_callers, find_callees, class_hierarchy]

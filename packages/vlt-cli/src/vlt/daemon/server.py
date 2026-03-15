@@ -645,6 +645,15 @@ async def _run_indexing_job(job):
             progress_callback=on_progress
         )
 
+        # CGC graph indexing (structural: symbols, call graph, hierarchy)
+        try:
+            from vlt.core.coderag.code_graph import get_code_graph_service
+            graph_svc = get_code_graph_service()
+            await asyncio.to_thread(graph_svc.index_project_sync, target_path)
+            logger.info(f"CGC graph indexing completed for job {job_id}")
+        except Exception as cgc_exc:
+            logger.warning(f"CGC graph indexing failed for job {job_id} (non-fatal): {cgc_exc}")
+
         # T028: Update job status to COMPLETED
         with Session(engine) as session:
             j = session.get(CodeRAGIndexJob, job_id)
@@ -2425,6 +2434,7 @@ async def _spawn_relay_session(
     cwd: str,
     prompt: Optional[str] = None,
     model: Optional[str] = None,
+    resume: bool = False,
 ) -> bool:
     """
     Spawn a Claude Code session with a real PTY, managed by the daemon.
@@ -2463,7 +2473,10 @@ async def _spawn_relay_session(
         pass
 
     # Build command — interactive mode (no positional prompt; prompt sent via PTY stdin)
-    cmd = [claude_bin, "--session-id", session_id, "--dangerously-skip-permissions"]
+    if resume:
+        cmd = [claude_bin, "--resume", session_id, "--dangerously-skip-permissions"]
+    else:
+        cmd = [claude_bin, "--session-id", session_id, "--dangerously-skip-permissions"]
     if model:
         cmd += ["--model", model]
 

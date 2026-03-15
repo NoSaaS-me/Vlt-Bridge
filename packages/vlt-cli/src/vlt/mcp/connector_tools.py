@@ -41,14 +41,23 @@ def register_connector_tools(mcp) -> None:
         """List connectors available for the current user.
 
         Returns native connectors (fully configured) plus Composio Integration Hub
-        apps the user has connected. Each Composio connector includes a summary of
-        its available actions so you know what you can call.
+        apps the user has connected. Each connector includes a summary of its
+        available actions so you know what you can call.
 
-        To get the full parameter schema for a specific connector's actions, call
+        Composio connectors are prefixed with ``composio:`` (e.g. ``composio:gmail``).
+        Use this exact prefixed name when calling connector_actions or connector_call.
+
+        Each action has a ``permission`` field:
+          - ``"allow"`` — agent can call freely (default)
+          - ``"ask"``   — agent must request user approval before executing
+          - ``"off"``   — action is disabled and hidden (not returned in this list)
+
+        To get parameter schemas before calling an action, use
         connector_actions(connector_name).
 
         Returns:
-            {status, connectors: [{name, display_name, description, actions: [{name, description}]}], total}
+            {status, connectors: [{name, display_name, description,
+             actions: [{name, description, permission}]}], total}
         """
         import httpx
         from vlt.mcp import _err, _ok
@@ -157,17 +166,24 @@ def register_connector_tools(mcp) -> None:
     def connector_actions(connector: str) -> dict:
         """Get the full list of actions and parameter schemas for a connector.
 
-        Use this after connector_list to discover exactly what parameters an action
-        needs before calling connector_call.
+        Call this before connector_call to discover exactly what parameters an
+        action expects. Works for both connected and unconnected Composio apps
+        (useful for previewing capabilities before connecting).
 
-        For Composio connectors, action names use UPPER_SNAKE_CASE (e.g. GMAIL_SEND_EMAIL).
-        The 'parameters' field contains a JSON Schema describing required/optional fields.
+        For Composio connectors, use the ``composio:`` prefix (e.g. ``composio:gmail``).
+        Composio action names use UPPER_SNAKE_CASE (e.g. ``GMAIL_SEND_EMAIL``).
+
+        The ``parameters`` field on each action is a JSON Schema object with
+        ``type``, ``properties``, and ``required`` keys describing the expected
+        input. Use this schema to construct the ``params`` JSON string for
+        connector_call.
 
         Args:
-            connector: Connector name, e.g. "mailgun" or "composio:gmail"
+            connector: Connector name, e.g. ``"mailgun"`` or ``"composio:gmail"``.
 
         Returns:
-            {status, connector, actions: [{name, display_name, description, parameters}], total}
+            {status, connector, actions: [{name, display_name, description,
+             parameters: {type, properties, required}}], total}
         """
         import httpx
         from vlt.mcp import _err, _ok
@@ -215,22 +231,33 @@ def register_connector_tools(mcp) -> None:
         """Invoke a connector action.
 
         Recommended workflow:
-            1. connector_list()              — see which connectors are available
+            1. connector_list()              — discover available connectors
             2. connector_actions(connector)  — get action names + parameter schemas
             3. connector_call(connector, action, params)  — execute
 
-        For Composio integrations, prefix the connector name with 'composio:',
-        e.g. 'composio:gmail'. Action names for Composio use UPPER_SNAKE_CASE,
-        e.g. 'GMAIL_SEND_EMAIL'. Use connector_actions to get the exact names and
-        required parameters before calling.
+        For Composio integrations, prefix the connector with ``composio:``
+        (e.g. ``composio:gmail``). Action names use UPPER_SNAKE_CASE
+        (e.g. ``GMAIL_SEND_EMAIL``). Always call connector_actions first to get
+        exact names and required parameters.
+
+        **WARNING**: ``params`` must be a JSON **string**, not a dict/object.
+        Example: ``params='{"to": "user@example.com", "subject": "Hello"}'``
+
+        Permission behaviour (set by the user in Connectors settings):
+          - ``allow`` → action executes normally
+          - ``ask`` → returns ``{success: false, result: {requires_approval: true}}``
+            with a message asking you to tell the user to approve it
+          - ``off`` → returns an ACTION_DISABLED error
 
         Args:
-            connector: Connector name, e.g. "mailgun" or "composio:gmail"
-            action: Action name, e.g. "send_email" or "GMAIL_SEND_EMAIL"
-            params: JSON string of action parameters
+            connector: Connector name, e.g. ``"mailgun"`` or ``"composio:gmail"``.
+            action: Action name, e.g. ``"send_email"`` or ``"GMAIL_SEND_EMAIL"``.
+            params: **JSON string** of action parameters (default ``"{}"``).
 
         Returns:
-            {status, success, result} on success or {status: "error", ...} on failure
+            {status, success, result} on success.
+            {status, success: false, result: {requires_approval: true}, message} when permission is "ask".
+            {status: "error", error_code, message} on failure.
         """
         from vlt.mcp import _ok, _err
 

@@ -591,8 +591,8 @@ async for chunk in wrapper.process_query(query="Hello", context_id=None):
 | `backend/src/api/routes/oracle.py` | Oracle API routes (updated to use RLMOracleWrapper) |
 
 ## Recent Changes
+- 023-oracle-codeact-rework: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 - 023-oracle-codeact-rework: Added Python 3.11+ (backend), TypeScript / React 19 (frontend — no new frontend code for core Oracle)
 - 023-oracle-codeact-rework: Added Python 3.11+ (backend), TypeScript / React 19 (frontend — no new frontend code for core Oracle)
-- 022-rlm-oracle: Replaced BT Oracle with RLM Oracle harness; LLM writes Python in REPL with `project`/`sub_oracle`/`Final` namespace; deleted entire `backend/src/bt/` directory; added `REPLExecutor` (RestrictedPython), `ProjectContext` (file/thread/note handles), `RLMOracleWrapper`; Go symbol extraction + `end_line` field in CodeRAG repomap
 
 ## Active Technologies

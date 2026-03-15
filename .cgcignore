@@ -1,0 +1,10 @@
+.venv/
+.pixi/
+node_modules/
+dist/
+build/
+__pycache__/
+.git/
+*.egg-info/
+data/
+Ai-notes/

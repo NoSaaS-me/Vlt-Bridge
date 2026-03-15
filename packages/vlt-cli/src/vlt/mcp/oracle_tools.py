@@ -99,15 +99,24 @@ def register_oracle_tools(mcp) -> None:
         """Ask the oracle a question about your codebase, documentation, or development history.
 
         The oracle synthesises context from vlt threads (reasoning history), CodeRAG
-        (code index), and the Markdown vault. It returns a streaming-compatible answer.
+        (code index), and the Markdown vault. Returns a single consolidated answer
+        (synchronous, not streamed). Timeout: 60 seconds.
+
+        Before using: call vlt_oracle_status() to verify the oracle is enabled and
+        configured. If status shows guidance text, follow it before querying.
+
+        For multi-turn conversations, pass context_id from a previous response to
+        continue with accumulated context.
 
         Args:
             query: Your question or task description.
             project_id: Project scope (optional — oracle infers from context if omitted).
-            context_id: Continue an existing oracle conversation (optional).
+            context_id: Continue a previous conversation. Pass the context_id value
+                        from the previous vlt_oracle_query response.
 
         Returns:
             {status, answer, context_id, sources_used}
+            Pass context_id to the next call for multi-turn conversation.
         """
         from vlt.mcp import _ok, _err
 

@@ -32,12 +32,12 @@ def register_thread_tools(mcp) -> None:
     ) -> dict:
         """Create a new vlt thread in a project.
 
-        Auto-creates the project if it does not already exist. The thread ID
-        is derived from ``name`` (lowercased, spaces → hyphens).
+        The thread ID is derived from ``name`` (lowercased, spaces → hyphens).
+        Auto-creates the project if it does not exist — always safe to call.
 
         Args:
-            project_id: Project identifier slug (e.g. "my-project").
-            name: Thread name. Becomes the thread_id slug.
+            project_id: Project identifier slug (e.g. "my-project"). Created if new.
+            name: Thread name. Becomes the thread_id slug (e.g. "Auth Design" → "auth-design").
             initial_thought: First entry written into the new thread.
             author: Author label for the initial node (default: "agent").
 
@@ -187,8 +187,13 @@ def register_thread_tools(mcp) -> None:
     ) -> dict:
         """Search across thread nodes using semantic or keyword search.
 
-        Attempts vector similarity search first. Falls back to SQLite LIKE
-        search when embeddings are unavailable (no API key configured).
+        Tries vector similarity search first. Falls back automatically to
+        SQLite LIKE keyword search when: (a) no embedding API key is configured,
+        (b) semantic search returns empty results (e.g. freshly pushed nodes
+        not yet embedded — usually takes <30s for background embedding).
+
+        The ``search_mode`` field in the response tells you which strategy
+        was used, so you know if results may be incomplete.
 
         Args:
             query: Natural language or keyword search query.
@@ -196,8 +201,8 @@ def register_thread_tools(mcp) -> None:
             limit: Maximum number of results. Default: 10.
 
         Returns:
-            {status, results, search_mode, total}
-            search_mode is "semantic" or "keyword".
+            {status, results: [{thread_id, node_id, content, author, timestamp, score}],
+             search_mode: "semantic"|"keyword", total}
         """
         from vlt.mcp import _ok, _err
         from vlt.core.service import SqliteVaultService

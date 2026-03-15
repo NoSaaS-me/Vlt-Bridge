@@ -1,0 +1,37 @@
+# Composio Connection Vault — MCP Tool Contract Changes
+
+# connector_list — updated return shape
+connector_list:
+  returns:
+    connectors:
+      - name: "composio:gmail"
+        display_name: "Gmail (via Composio)"
+        description: "..."
+        connections:                    # NEW: per-app connection list
+          - connection_id: "uuid-1"
+            label: "Personal Gmail"
+          - connection_id: "uuid-2"
+            label: "Work Gmail"
+        actions:
+          - name: "GMAIL_SEND_EMAIL"
+            description: "..."
+            permission: "allow"
+
+# connector_call — updated params
+connector_call:
+  params:
+    connector: "composio:gmail"
+    action: "GMAIL_SEND_EMAIL"
+    params: '{"to": "user@example.com"}'
+    connection_id: "uuid-1"             # NEW: optional, required if >1 connection
+  returns_on_ambiguity:
+    status: "error"
+    error_code: "MULTIPLE_CONNECTIONS"
+    message: "Multiple connections for composio:gmail. Specify connection_id."
+    connections:
+      - connection_id: "uuid-1"
+        label: "Personal Gmail"
+      - connection_id: "uuid-2"
+        label: "Work Gmail"
+
+# connector_actions — unchanged

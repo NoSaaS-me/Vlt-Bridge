@@ -33,18 +33,51 @@ def create_server():
         "vlt",
         instructions=(
             "VLT: Persistent cognitive state, code intelligence, and documentation for AI agents.\n\n"
-            "TOOL GROUPS:\n"
-            "- vlt_thread_*: Reasoning chain memory. Log decisions, track progress, search past reasoning. "
-            "Thread push is <50ms — use liberally to offload context.\n"
-            "- vlt_code_*: Code intelligence. Semantic search, repo map, symbol lookup. "
-            "Call vlt_code_init first on any new project.\n"
-            "- vlt_note_*: Markdown vault notes. Requires Document-MCP backend running.\n"
-            "- vlt_oracle_*: AI-powered multi-source answers about your codebase.\n"
-            "- vlt_status, vlt_project_detect: Health check and project auto-detection.\n"
-            "- connector_list, connector_call: Send emails and invoke external services via configured connectors. "
-            "Call connector_list first to see what's available for your account.\n\n"
-            "QUICK START: Call vlt_status to see what's available. "
-            "Call vlt_project_detect to find your current project context automatically."
+
+            "QUICK START:\n"
+            "1. Call vlt_status — see projects, daemon status, backend health.\n"
+            "2. Call vlt_project_detect — auto-detect project from working directory.\n\n"
+
+            "TOOL GROUPS & WORKFLOWS:\n\n"
+
+            "THREADS (reasoning memory):\n"
+            "  vlt_thread_create → vlt_thread_push → vlt_thread_read\n"
+            "  Push is <50ms — use liberally to offload context.\n"
+            "  vlt_thread_seek searches across all threads (semantic + keyword fallback).\n"
+            "  vlt_thread_list shows all threads in a project.\n\n"
+
+            "CODE INTELLIGENCE:\n"
+            "  vlt_code_init(project_id, path) → indexes a codebase (runs async).\n"
+            "  vlt_code_status(project_id) → poll until indexed=true before searching.\n"
+            "  vlt_code_search(query, project_id) → hybrid BM25 search over indexed code.\n"
+            "  vlt_code_map(project_id) → compact repo structure overview.\n"
+            "  vlt_code_lookup(symbol, project_id) → find where a symbol is defined.\n"
+            "  IMPORTANT: You must call vlt_code_init and wait for indexing to complete\n"
+            "  before vlt_code_search/map/lookup will work.\n\n"
+
+            "VAULT NOTES (Markdown docs):\n"
+            "  vlt_note_write/read/search/list/backlinks — CRUD for Markdown notes.\n"
+            "  Requires the Document-MCP backend to be running.\n"
+            "  Paths must include .md extension (e.g. 'docs/api-design.md').\n\n"
+
+            "ORACLE (AI-powered codebase Q&A):\n"
+            "  1. vlt_oracle_status — check if oracle is enabled + configured.\n"
+            "     If guidance field is set, oracle is not ready — follow the guidance.\n"
+            "  2. vlt_oracle_query(query) — ask questions about your codebase.\n"
+            "     Pass context_id from a previous response for multi-turn conversation.\n"
+            "     Timeout: 60s. Returns a single answer (not streamed).\n\n"
+
+            "CONNECTORS (external services — email, APIs, etc.):\n"
+            "  1. connector_list — discover available connectors and their actions.\n"
+            "  2. connector_actions(connector) — get parameter schemas for a connector's actions.\n"
+            "  3. connector_call(connector, action, params) — execute an action.\n"
+            "  Use 'composio:appname' prefix for Composio integrations (e.g. 'composio:gmail').\n"
+            "  IMPORTANT: params must be a JSON string, not a dict.\n\n"
+
+            "CRONBAN (scheduled tasks):\n"
+            "  cronban_sessions — list active Claude sessions (pick a target).\n"
+            "  cronban_create — schedule recurring or one-off prompt injections.\n"
+            "  cronban_list/fire/pause/resume/delete — manage scheduled triggers.\n"
         ),
     )
 

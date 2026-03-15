@@ -3,23 +3,24 @@
 Manages user connections to 100+ third-party apps via Composio.
 
 Routes:
-    GET    /api/composio/status           — check if Composio is configured
-    GET    /api/composio/apps             — catalog with connected status
-    GET    /api/composio/connected        — user's connected apps
-    POST   /api/composio/connect/{app}   — initiate OAuth, return redirect URL
-    DELETE /api/composio/{app}           — disconnect an app
-    GET    /api/composio/{app}/actions   — list actions for an app
-    POST   /api/composio/{app}/invoke    — execute a Composio action
+    GET    /api/composio/status              — check if Composio is configured
+    GET    /api/composio/apps                — catalog with connected status
+    GET    /api/composio/connected           — user's connected apps
+    GET    /api/composio/{app}/auth-info     — auth requirements for an app
+    POST   /api/composio/connect/{app}       — initiate connection (managed/custom/API key)
+    DELETE /api/composio/{app}               — disconnect an app
+    GET    /api/composio/{app}/actions       — list actions for an app
+    POST   /api/composio/{app}/invoke        — execute action (with optional connection_id)
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..middleware import AuthContext, require_auth_context
+from ...models.composio import ConnectRequest, ConnectResponse, InvokeRequest
 from ...services.connector_service import ConnectorService, get_connector_service
 
 logger = logging.getLogger(__name__)
@@ -33,11 +34,6 @@ def _get_composio_service():
     if svc is None:
         raise HTTPException(503, "Composio service is not available. Check vlt-connectors installation.")
     return svc
-
-
-class InvokeRequest(BaseModel):
-    action: str
-    params: dict[str, Any] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -104,22 +100,61 @@ async def list_connected_apps(
 
 
 # ---------------------------------------------------------------------------
-# Connect (initiate OAuth)
+# Auth info (what credentials does an app need?)
+# ---------------------------------------------------------------------------
+
+@router.get("/{app_name}/auth-info")
+async def get_auth_info(
+    app_name: str,
+    auth: AuthContext = Depends(require_auth_context),
+) -> dict:
+    """Get auth requirements for connecting an app.
+
+    Returns {has_managed_auth, primary_auth_mode, auth_schemes} so the frontend
+    knows whether to show a credential form or go straight to OAuth redirect.
+    """
+    svc = _get_composio_service()
+    try:
+        return svc.app_auth_info(app_name)
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to fetch auth info: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Connect (initiate connection — supports managed OAuth, custom OAuth, API key)
 # ---------------------------------------------------------------------------
 
 @router.post("/connect/{app_name}")
 async def connect_app(
     app_name: str,
+    body: ConnectRequest | None = None,
     auth: AuthContext = Depends(require_auth_context),
 ) -> dict:
-    """Initiate OAuth connection for a Composio app. Returns the redirect URL."""
+    """Initiate connection for a Composio app.
+
+    For managed OAuth apps (Gmail): empty body or just a label.
+    For custom OAuth apps (Twitter): body with auth_config={client_id, client_secret}.
+    For API_KEY apps: body with connected_account_params={api_key}.
+    """
     svc = _get_composio_service()
+    b = body or ConnectRequest()
     try:
-        redirect_url = svc.initiate_connection(
+        result = svc.initiate_connection(
             app_name=app_name.lower(),
             entity_id=auth.user_id,
+            label=b.label.strip(),
+            auth_mode=b.auth_mode,
+            auth_config=b.auth_config,
+            connected_account_params=b.connected_account_params,
+            redirect_url=b.redirect_url,
         )
-        return {"app": app_name, "redirect_url": redirect_url}
+        return {
+            "app": app_name,
+            "connection_id": result["connection_id"],
+            "label": b.label.strip(),
+            "redirect_url": result["redirect_url"] or None,
+            "status": result["status"],
+        }
     except Exception as exc:
         raise HTTPException(502, f"Failed to initiate connection: {exc}")
 
@@ -234,6 +269,7 @@ async def invoke_composio_action(
             action_name=body.action,
             params=body.params,
             entity_id=auth.user_id,
+            connected_account_id=body.connection_id,
         )
     except Exception as exc:
         logger.exception("Composio action failed: %s/%s", app_name, body.action)

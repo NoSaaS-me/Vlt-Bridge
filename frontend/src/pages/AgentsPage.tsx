@@ -225,12 +225,18 @@ export function AgentsPage() {
           <CronbanView
             projectId={selectedProjectId ?? undefined}
             onViewSession={(sessionId) => {
-              // Switch to agents tab and open the live session
+              // Switch to agents tab and open the session
               const session = polling.sessions.find((s) => s.id === sessionId);
-              if (session) {
+              if (session?.source === 'relay') {
+                // Relay sessions render in the TerminalCompositor (xterm.js)
+                setLiveSession(null);
+                setFocusedSessionId(sessionId);
+              } else if (session) {
+                // Non-relay sessions open in the LiveSessionPanel (JSONL view)
                 setLiveSession(session);
               } else {
                 // Session might not be in current polling data — create minimal ref
+                // Default to LiveSessionPanel; it will auto-upgrade if relay
                 setLiveSession({
                   id: sessionId,
                   project_id: selectedProjectId,

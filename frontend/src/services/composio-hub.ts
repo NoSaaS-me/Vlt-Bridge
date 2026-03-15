@@ -24,6 +24,45 @@ export interface ComposioAction {
   parameters: Record<string, unknown>;
 }
 
+// --- Auth info types (024-composio-connection-vault) ---
+
+export interface AuthFieldInfo {
+  name: string;
+  display_name: string;
+  description: string;
+  type: string;
+  required: boolean;
+  expected_from_customer: boolean;
+}
+
+export interface AuthSchemeInfo {
+  auth_mode: string;
+  integration_fields: AuthFieldInfo[];
+  user_fields: AuthFieldInfo[];
+}
+
+export interface AppAuthInfo {
+  has_managed_auth: boolean;
+  primary_auth_mode: string;
+  auth_schemes: AuthSchemeInfo[];
+}
+
+export interface ConnectRequest {
+  label?: string;
+  auth_mode?: string;
+  auth_config?: Record<string, string>;
+  connected_account_params?: Record<string, string>;
+  redirect_url?: string;
+}
+
+export interface ConnectResponse {
+  app: string;
+  connection_id: string;
+  label: string;
+  redirect_url: string | null;
+  status: string;
+}
+
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('auth_token');
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -51,9 +90,14 @@ export const listApps = () =>
 export const listConnected = () =>
   req<{ connections: ComposioConnection[]; total: number }>('/connected');
 
-export const connectApp = (appName: string) =>
-  req<{ app: string; redirect_url: string }>(`/connect/${appName}`, {
+export const getAuthInfo = (appName: string) =>
+  req<AppAuthInfo>(`/${appName}/auth-info`);
+
+export const connectApp = (appName: string, body?: ConnectRequest) =>
+  req<ConnectResponse>(`/connect/${appName}`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
   });
 
 export const disconnectApp = (appName: string) =>
@@ -67,12 +111,13 @@ export const listAppActions = (appName: string) =>
 export const invokeComposioAction = (
   appName: string,
   action: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
+  connectionId?: string
 ) =>
   req<{ success: boolean; data: Record<string, unknown> }>(`/${appName}/invoke`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, params }),
+    body: JSON.stringify({ action, params, connection_id: connectionId }),
   });
 
 export const getComposioConfig = (appName: string) =>
