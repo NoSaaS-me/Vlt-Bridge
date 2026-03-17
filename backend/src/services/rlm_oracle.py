@@ -418,9 +418,16 @@ class SubOracleCallable:
 
     Called synchronously from the REPL thread (a daemon thread without a
     running event loop), so ``asyncio.run()`` is safe here.
+
+    Subagent patterns applied (023 Phase 0):
+    - Result truncation: child returns capped at RESULT_MAX_CHARS (2000)
+    - Toolkit exclusion: children don't receive sub_oracle (NameError if called)
+    - Wall-clock timeout: entire child loop bounded by CHILD_TIMEOUT_S (60s)
     """
 
     MAX_SUB_ORACLE_CALLS = 3
+    RESULT_MAX_CHARS = 2000
+    CHILD_TIMEOUT_S = 60.0
 
     def __init__(
         self,
@@ -438,6 +445,16 @@ class SubOracleCallable:
         self._max_tokens = max_tokens
         self._base_url = base_url
 
+    @staticmethod
+    def _truncate_result(result: str, max_chars: int) -> str:
+        """Cap child result to max_chars, appending truncation notice."""
+        if len(result) <= max_chars:
+            return result
+        return (
+            result[:max_chars]
+            + f"\n...\n[truncated — {len(result)} chars total]"
+        )
+
     def __call__(self, prompt: str, *args: Any, **kwargs: Any) -> str:
         """Run a child RLM loop synchronously and return its Final value.
 
@@ -446,12 +463,8 @@ class SubOracleCallable:
         """
         if args or kwargs:
             logger.debug("sub_oracle ignoring extra args=%r kwargs=%r", args, kwargs)
-        if self._parent.recursion_depth >= 2:
-            raise RecursionDepthExceeded(
-                f"Max recursion depth (2) reached at depth "
-                f"{self._parent.recursion_depth}. "
-                "Cannot call sub_oracle recursively beyond depth 2."
-            )
+        # Call-count guard (recursion prevention is now via toolkit exclusion —
+        # children simply don't have sub_oracle in their namespace).
         if self._parent.sub_oracle_call_count >= self.MAX_SUB_ORACLE_CALLS:
             raise RecursionDepthExceeded(
                 f"Max sub_oracle calls ({self.MAX_SUB_ORACLE_CALLS}) exhausted for this session. "
@@ -469,16 +482,32 @@ class SubOracleCallable:
         child_session = RLMSession.create_sub(self._parent, prompt)
 
         import asyncio as _asyncio
-        return _asyncio.run(
-            _run_rlm_child_loop(
-                session=child_session,
-                api_key=self._api_key,
-                model=self._model,
-                project_id=self._project_id,
-                max_tokens=self._max_tokens,
-                base_url=self._base_url,
+
+        try:
+            raw_result = _asyncio.run(
+                _asyncio.wait_for(
+                    _run_rlm_child_loop(
+                        session=child_session,
+                        api_key=self._api_key,
+                        model=self._model,
+                        project_id=self._project_id,
+                        max_tokens=self._max_tokens,
+                        base_url=self._base_url,
+                    ),
+                    timeout=self.CHILD_TIMEOUT_S,
+                )
             )
-        )
+        except _asyncio.TimeoutError:
+            logger.warning(
+                "sub_oracle child timed out after %.0fs (session %s)",
+                self.CHILD_TIMEOUT_S, child_session.session_id,
+            )
+            raw_result = (
+                child_session.partial_result
+                or f"(child timed out after {self.CHILD_TIMEOUT_S:.0f}s)"
+            )
+
+        return self._truncate_result(raw_result, self.RESULT_MAX_CHARS)
 
 
 # ---------------------------------------------------------------------------
@@ -519,13 +548,10 @@ async def _run_rlm_child_loop(
         {"role": "user", "content": initial_msg},
     ]
 
-    sub_oracle_fn = SubOracleCallable(
-        parent_session=session,
-        api_key=api_key,
-        model=model,
-        project_id=project_id,
-        max_tokens=max_tokens,
-    )
+    # Toolkit exclusion: child sessions do NOT get sub_oracle.
+    # If the child LLM tries to call sub_oracle, it gets a NameError —
+    # cleaner than depth counters and impossible to circumvent.
+    sub_oracle_fn = None  # children cannot delegate further
 
     namespace = REPLNamespace()
     namespace.inject(project_context, sub_oracle_fn)

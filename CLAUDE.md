@@ -592,9 +592,7 @@ async for chunk in wrapper.process_query(query="Hello", context_id=None):
 
 ## Recent Changes
 - 025-artifact-sandbox: Added Python 3.11+ (daemon/backend), TypeScript (frontend, React 19) + FastAPI (daemon routes), watchdog 4.0+ (file watching), Playwright (screenshots), Pydantic (models), SQLModel/SQLAlchemy (DB), shadcn/ui (frontend components)
+- 025-artifact-sandbox: Added Python 3.11+ (daemon/backend), TypeScript (frontend, React 19) + FastAPI (daemon routes), watchdog 4.0+ (file watching), Playwright (screenshots), Pydantic (models), SQLModel/SQLAlchemy (DB), shadcn/ui (frontend components)
 - 023-oracle-codeact-rework: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
-- 023-oracle-codeact-rework: Added Python 3.11+ (backend), TypeScript / React 19 (frontend — no new frontend code for core Oracle)
 
 ## Active Technologies
-- Python 3.11+ (daemon/backend), TypeScript (frontend, React 19) + FastAPI (daemon routes), watchdog 4.0+ (file watching), Playwright (screenshots), Pydantic (models), SQLModel/SQLAlchemy (DB), shadcn/ui (frontend components) (025-artifact-sandbox)
-- SQLite (artifacts table in daemon vault.db + connector/proxy/vision in backend index.db) + filesystem (artifact source files) (025-artifact-sandbox)

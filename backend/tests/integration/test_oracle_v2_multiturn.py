@@ -263,3 +263,50 @@ class TestRunShellAllowlist:
             assert isinstance(result, str), f"Expected str, got {type(result)}"
         except (FileNotFoundError, ValueError):
             pytest.skip("Command not available in test environment")
+
+
+# ---------------------------------------------------------------------------
+# T043: Planner classifier (rule-based query routing)
+# ---------------------------------------------------------------------------
+
+class TestPlannerClassifier:
+    """Verify classify_query routes simple vs complex queries correctly."""
+
+    @pytest.fixture(autouse=True)
+    def _import_classifier(self):
+        try:
+            from backend.src.services.oracle_v2.graph import classify_query
+            self.classify = classify_query
+        except ImportError:
+            pytest.skip("oracle_v2.graph not importable")
+
+    def test_simple_what_is_query(self):
+        assert self.classify("What is the vault service?") == "direct"
+
+    def test_simple_where_is_query(self):
+        assert self.classify("Where is auth?") == "direct"
+
+    def test_simple_show_me_query(self):
+        assert self.classify("Show me the config") == "direct"
+
+    def test_complex_find_all(self):
+        assert self.classify("Find all files that import from vault.py") == "plan"
+
+    def test_complex_analyze(self):
+        assert self.classify("Analyze the authentication flow across the codebase") == "plan"
+
+    def test_complex_refactor(self):
+        assert self.classify("Refactor the search service to use async") == "plan"
+
+    def test_complex_compare(self):
+        assert self.classify("Compare the old and new Oracle implementations") == "plan"
+
+    def test_long_query_gets_plan(self):
+        long_query = " ".join(["word"] * 55)
+        assert self.classify(long_query) == "plan"
+
+    def test_short_ambiguous_defaults_direct(self):
+        assert self.classify("how does it work") == "direct"
+
+    def test_empty_query_defaults_direct(self):
+        assert self.classify("") == "direct"

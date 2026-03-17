@@ -140,6 +140,7 @@ def build_oracle_graph(
 
     from .sandbox import make_sandbox_eval
     from .state import OracleState
+    from .prompt import ORACLE_V2_SYSTEM_PROMPT
 
     # Use MemorySaver fallback if no checkpointer provided
     effective_checkpointer = checkpointer
@@ -159,6 +160,7 @@ def build_oracle_graph(
         model=model,
         tools=tools,
         eval_fn=eval_fn,
+        prompt=ORACLE_V2_SYSTEM_PROMPT,
         state_schema=OracleState,
     )
 
@@ -179,6 +181,7 @@ def build_oracle_tools(
     include_web_tools: bool = False,
     tavily_api_key: Optional[str] = None,
     search_provider: Optional[str] = None,
+    delegate_config: Optional[dict[str, Any]] = None,
 ) -> list[Callable]:
     """Assemble the default tool list for a given user + project.
 
@@ -190,6 +193,9 @@ def build_oracle_tools(
         include_web_tools: Gate for web_search/web_fetch/deep_research tools.
         tavily_api_key: Tavily API key for web search (if include_web_tools=True).
         search_provider: Search provider override (tavily, openrouter, etc.).
+        delegate_config: Config for delegate_task subagent pattern.
+            Keys: ``checkpointer`` (LangGraph checkpointer), ``model`` (ChatModel).
+            When None, delegate_task returns "not configured".
 
     Returns:
         List of plain callable tools ready for REPL injection.
@@ -244,10 +250,15 @@ def build_oracle_tools(
         except (ImportError, Exception) as exc:
             logger.debug("web_tools unavailable: %s", exc)
 
-    # Meta tools (T034) — must be last (takes full tool list as input)
+    # Meta tools — must be last (takes full tool list as input).
+    # delegate_config enables the delegate_task subagent pattern.
     try:
         from .tools.meta_tools import make_meta_tools  # type: ignore[import]
-        tools.extend(make_meta_tools(tools, plan_ref=None))
+        tools.extend(make_meta_tools(
+            tools,
+            plan_ref=None,
+            delegate_config=delegate_config,
+        ))
         logger.debug("Meta tools loaded (%d total tools)", len(tools))
     except (ImportError, Exception) as exc:
         logger.debug("meta_tools unavailable: %s", exc)

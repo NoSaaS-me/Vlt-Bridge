@@ -1,8 +1,16 @@
-"""Meta tools for the Oracle CodeAct agent — self-awareness and plan management."""
+"""Meta tools for the Oracle CodeAct agent — self-awareness, plan management, and delegation.
+
+Subagent patterns (from validated architecture research):
+- delegate_task: spawns a child CodeAct graph with toolkit exclusion (no delegate_task
+  in child), context isolation (clean prompt + task only), and result truncation (2000 chars).
+"""
 
 from __future__ import annotations
 
-from typing import Callable
+import logging
+from typing import Any, Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 _VALID_STATUSES = frozenset({"done", "in_progress", "blocked", "skipped"})
 
@@ -15,7 +23,16 @@ _STATUS_SYMBOLS: dict[str, str] = {
 }
 
 
-def make_meta_tools(all_tools: list[Callable], plan_ref: list | None = None) -> list[Callable]:
+DELEGATE_RESULT_MAX_CHARS = 2000
+DELEGATE_CHILD_RECURSION_LIMIT = 25
+
+
+def make_meta_tools(
+    all_tools: list[Callable],
+    plan_ref: list | None = None,
+    *,
+    delegate_config: Optional[dict[str, Any]] = None,
+) -> list[Callable]:
     """Build meta tool callables bound to the full tool list.
 
     Args:
@@ -23,9 +40,13 @@ def make_meta_tools(all_tools: list[Callable], plan_ref: list | None = None) -> 
         plan_ref: Optional mutable list of plan step dicts. Each dict has keys:
                   ``description`` (str), ``status`` (str), ``notes`` (str).
                   When None, update_plan returns a "no plan active" message.
+        delegate_config: Optional config for delegate_task. Keys:
+            - checkpointer: LangGraph checkpointer for child graph
+            - model: Pre-built LangChain chat model
+            When None, delegate_task returns a "not configured" message.
 
     Returns:
-        [list_tools, update_plan]
+        [list_tools, update_plan, delegate_task]
     """
     _plan_ref = plan_ref
 
@@ -110,4 +131,100 @@ def make_meta_tools(all_tools: list[Callable], plan_ref: list | None = None) -> 
 
         return "\n".join(lines)
 
-    return [list_tools, update_plan]
+    def delegate_task(task_description: str, context: str = "") -> str:
+        """Delegate a complex multi-step task to an isolated subagent.
+
+        The subagent has access to all your tools EXCEPT delegate_task (no
+        recursion). It receives a clean prompt with only the task description
+        and optional context — it does NOT inherit your conversation history.
+
+        Use when:
+          - The task requires 3+ tool calls
+          - It involves research across multiple sources
+          - It benefits from focused execution without your accumulated context
+
+        Do NOT use for:
+          - Simple single-tool lookups (use the tool directly)
+          - Tasks requiring your conversation context (include it in ``context``)
+
+        Args:
+            task_description: Clear, self-contained description of what to accomplish.
+            context: Optional additional context the subagent needs (file contents,
+                     search results, etc.). Keep this concise.
+
+        Returns:
+            The subagent's final response (capped at 2000 chars).
+        """
+        if delegate_config is None:
+            return "[delegate_task] Not configured — checkpointer or model not available."
+
+        try:
+            import asyncio as _asyncio
+            import uuid
+            from ..graph import build_oracle_graph, _PickleSerde
+
+            model = delegate_config.get("model")
+            if model is None:
+                return "[delegate_task] Missing model in config."
+
+            # Toolkit exclusion: child gets ALL tools except delegate_task
+            child_tools = [t for t in all_tools if getattr(t, "__name__", "") != "delegate_task"]
+
+            # Child uses a fresh MemorySaver — NOT the parent's AsyncSqliteSaver.
+            # The parent's checkpointer has async locks bound to the FastAPI event
+            # loop, but delegate_task runs in a sync REPL thread via asyncio.run()
+            # which creates a new loop. Using MemorySaver avoids the cross-loop
+            # lock conflict. Child state is ephemeral anyway — no need to persist.
+            from langgraph.checkpoint.memory import MemorySaver
+            child_checkpointer = MemorySaver(serde=_PickleSerde())
+
+            # Build child graph with separate recursion limit
+            child_graph = build_oracle_graph(
+                tools=child_tools,
+                checkpointer=child_checkpointer,
+                model=model,
+            )
+
+            # Context isolation: child gets clean prompt with task only
+            child_thread_id = str(uuid.uuid4())
+            child_prompt = task_description
+            if context:
+                child_prompt = f"{task_description}\n\nContext:\n{context}"
+
+            config = {
+                "configurable": {"thread_id": child_thread_id},
+                "recursion_limit": DELEGATE_CHILD_RECURSION_LIMIT,
+            }
+
+            # Run child graph synchronously (we're in a sync REPL thread).
+            # asyncio.run() creates a fresh event loop — safe because the
+            # child's MemorySaver has no pre-bound locks.
+            result_messages = _asyncio.run(
+                child_graph.ainvoke(
+                    {"messages": [("user", child_prompt)]},
+                    config=config,
+                )
+            )
+
+            # Extract the last assistant message as the result
+            messages = result_messages.get("messages", [])
+            if messages:
+                last_msg = messages[-1]
+                raw_result = getattr(last_msg, "content", str(last_msg))
+            else:
+                raw_result = "(subagent produced no output)"
+
+        except Exception as exc:
+            logger.error("delegate_task failed: %s", exc, exc_info=True)
+            raw_result = f"[delegate_task error] {type(exc).__name__}: {exc}"
+
+        # Result truncation (prevents DeepMind 17x error cascade)
+        if len(raw_result) > DELEGATE_RESULT_MAX_CHARS:
+            raw_result = (
+                raw_result[:DELEGATE_RESULT_MAX_CHARS]
+                + f"\n...\n[truncated — {len(raw_result)} chars total]"
+            )
+
+        return raw_result
+
+    return [list_tools, update_plan, delegate_task]

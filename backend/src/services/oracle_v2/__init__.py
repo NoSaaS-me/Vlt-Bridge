@@ -178,12 +178,16 @@ class OracleV2Wrapper:
             yield OracleStreamChunk(type="error", error=str(exc))
             return
 
-        # Assemble tools — pass graphiti for memory tools (T028/T034)
+        # Assemble tools — pass graphiti for memory, delegate_config for subagent pattern
         tools = build_oracle_tools(
             user_id=self._user_id,
             project_id=self._project_id,
             openrouter_api_key=self._api_key,
             graphiti=self._graphiti,
+            delegate_config={
+                "checkpointer": self._checkpointer,
+                "model": model_obj,
+            },
         )
 
         # Build (or reuse) the compiled graph
