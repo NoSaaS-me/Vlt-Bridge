@@ -58,6 +58,7 @@ class ConnectorConfigUpdate(BaseModel):
 class ConnectorInvokeRequest(BaseModel):
     action: str
     params: dict[str, Any] = Field(default_factory=dict)
+    instance_id: str = "default"
 
 
 class ConnectorInvokeResponse(BaseModel):

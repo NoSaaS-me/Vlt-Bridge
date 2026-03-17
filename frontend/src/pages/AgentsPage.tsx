@@ -8,7 +8,7 @@
  *   Events ticker     — compact event strip at bottom
  */
 import { useState, useCallback, useMemo } from 'react';
-import { Bot, Clock, Plug, RefreshCw } from 'lucide-react';
+import { Bot, Clock, Plug, Puzzle, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type AgentSession, dismissSession, spawnSession, renameSession } from '@/services/daemon-api';
 import { useSessionPolling } from '@/hooks/useSessionPolling';
@@ -19,17 +19,19 @@ import { EventsTicker } from '@/components/agents/EventsTicker';
 import { LiveSessionPanel } from '@/components/agents/LiveSessionPanel';
 import { CronbanView as CronbanViewReal } from '@/components/cronban/CronbanView';
 import { ConnectorsPage } from '@/pages/ConnectorsPage';
+import { ArtifactsCompositorView } from '@/components/artifacts/ArtifactsCompositorView';
 
 // ---------------------------------------------------------------------------
 // Nav
 // ---------------------------------------------------------------------------
 
-type NavSection = 'agents' | 'cronban' | 'connectors';
+type NavSection = 'agents' | 'cronban' | 'connectors' | 'artifacts';
 
 const NAV_ITEMS: { id: NavSection; icon: React.ElementType; label: string }[] = [
   { id: 'agents', icon: Bot, label: 'Agents' },
   { id: 'cronban', icon: Clock, label: 'Cronban' },
   { id: 'connectors', icon: Plug, label: 'Connectors' },
+  { id: 'artifacts', icon: Puzzle, label: 'Artifacts' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -258,6 +260,9 @@ export function AgentsPage() {
           />
         )}
         {activeSection === 'connectors' && <ConnectorsView />}
+        {activeSection === 'artifacts' && (
+          <ArtifactsCompositorView projectId={selectedProjectId ?? undefined} />
+        )}
       </div>
     </div>
   );

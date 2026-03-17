@@ -227,7 +227,7 @@ def register_connector_tools(mcp) -> None:
             return _err("INTERNAL_ERROR", str(e))
 
     @mcp.tool()
-    def connector_call(connector: str, action: str, params: str = "{}") -> dict:
+    def connector_call(connector: str, action: str, params: str = "{}", instance_id: str = "default") -> dict:
         """Invoke a connector action.
 
         Recommended workflow:
@@ -250,9 +250,12 @@ def register_connector_tools(mcp) -> None:
           - ``off`` → returns an ACTION_DISABLED error
 
         Args:
-            connector: Connector name, e.g. ``"mailgun"`` or ``"composio:gmail"``.
-            action: Action name, e.g. ``"send_email"`` or ``"GMAIL_SEND_EMAIL"``.
-            params: **JSON string** of action parameters (default ``"{}"``).
+            connector:   Connector name, e.g. ``"mailgun"`` or ``"composio:gmail"``.
+            action:      Action name, e.g. ``"send_email"`` or ``"GMAIL_SEND_EMAIL"``.
+            params:      **JSON string** of action parameters (default ``"{}"``).
+            instance_id: Instance of the connector to use (default ``"default"``).
+                         Multi-instance support allows separate credential sets for
+                         the same connector type (e.g. two Mailgun accounts).
 
         Returns:
             {status, success, result} on success.
@@ -288,7 +291,7 @@ def register_connector_tools(mcp) -> None:
             config_connector = connector  # e.g. "mailgun" or "composio:gmail"
             try:
                 cfg_resp = httpx.get(
-                    f"{vault_url}/api/connectors/{config_connector}/config",
+                    f"{vault_url}/api/connectors/{config_connector}/instances/{instance_id}/config",
                     headers=headers,
                     timeout=5.0,
                 )
@@ -298,14 +301,14 @@ def register_connector_tools(mcp) -> None:
                     if perm == "off":
                         return _err(
                             "ACTION_DISABLED",
-                            f"Action '{action}' is disabled for '{connector}'. Enable it in the Connectors settings.",
+                            f"Action '{action}' is disabled for '{connector}' (instance '{instance_id}'). Enable it in the Connectors settings.",
                         )
                     if perm == "ask":
                         return _ok(
                             success=False,
                             result={"requires_approval": True},
                             message=(
-                                f"Action '{action}' on '{connector}' requires user approval. "
+                                f"Action '{action}' on '{connector}' (instance '{instance_id}') requires user approval. "
                                 "This action is in 'ask' mode — the user must grant permission before it executes. "
                                 "Ask the user to set it to 'allow' in Connectors settings, then retry."
                             ),
@@ -327,10 +330,10 @@ def register_connector_tools(mcp) -> None:
                 data = resp.json()
                 return _ok(success=data.get("success", True), result=data.get("data", {}))
 
-            # Native connector path
+            # Native connector path — pass instance_id through to backend
             resp = httpx.post(
                 f"{vault_url}/api/connectors/{connector}/invoke",
-                json={"action": action, "params": params_dict},
+                json={"action": action, "params": params_dict, "instance_id": instance_id},
                 headers=headers,
                 timeout=30.0,
             )

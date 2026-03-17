@@ -465,6 +465,12 @@ def apply_pipeline_migrations():
         except Exception:
             pass  # Already exists
 
+        # max_fires on cron_triggers (idempotent)
+        try:
+            conn.execute(text("ALTER TABLE cron_triggers ADD COLUMN max_fires INTEGER"))
+        except Exception:
+            pass  # Already exists
+
         # skill_id / prompt_text / gate_id on pipeline_cards (idempotent)
         try:
             conn.execute(text("ALTER TABLE pipeline_cards ADD COLUMN skill_id TEXT"))

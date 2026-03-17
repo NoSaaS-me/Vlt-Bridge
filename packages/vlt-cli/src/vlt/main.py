@@ -5210,7 +5210,9 @@ def cron_list(
         if t.get("next_fire_at"):
             console.print(f"       next: [dim]{t['next_fire_at']}[/dim]")
         if t.get("last_fired_at"):
-            console.print(f"       last: [dim]{t['last_fired_at']}[/dim]  (fired {t.get('fire_count', 0)}×)")
+            max_f = t.get("max_fires")
+            count_str = f"{t.get('fire_count', 0)}/{max_f}" if max_f else f"{t.get('fire_count', 0)}"
+            console.print(f"       last: [dim]{t['last_fired_at']}[/dim]  (fired {count_str}×)")
         target = t.get("target_session_id")
         if target:
             console.print(f"       target: session [dim]{target[:12]}…[/dim]")
@@ -5232,6 +5234,7 @@ def cron_add(
     skill: Optional[str] = typer.Option(None, "--skill", help="Skill ID to use instead of inline prompt"),
     project_id: Optional[str] = typer.Option(None, "--project", "-p", help="Associate with project slug"),
     timezone: str = typer.Option("UTC", "--tz", help="IANA timezone, e.g. America/New_York"),
+    max_fires: Optional[int] = typer.Option(None, "--max-fires", help="Auto-complete after N fires (default: unlimited)"),
 ):
     """Create a new CronTrigger.
 
@@ -5240,8 +5243,8 @@ def cron_add(
       vlt cron add "Daily standup" "0 9 * * 1-5" "Run the standup script" --session <id>\n\n
       # One-off: fire in 90 minutes:\n
       vlt cron add "Deploy check" "" "Verify the deployment is healthy" --in 1:30 --session <id>\n\n
-      # One-off: fire at a specific date and time:\n
-      vlt cron add "Release prep" "" "Prepare the release notes" --at "2026-03-10 14:30" --session <id>
+      # Fire every 15 min, stop after 5 fires:\n
+      vlt cron add "Build check" "*/15 * * * *" "Check CI status" --session <id> --max-fires 5
     """
     import httpx
     daemon_url = _cron_daemon_url()
@@ -5274,6 +5277,8 @@ def cron_add(
         payload["skill_id"] = skill
     if project_id:
         payload["project_id"] = project_id
+    if max_fires is not None:
+        payload["max_fires"] = max_fires
 
     try:
         r = httpx.post(f"{daemon_url}/api/cronban/crons", json=payload, timeout=5.0)
@@ -5286,6 +5291,8 @@ def cron_add(
     console.print(f"\n[green]✓ Created:[/green] [bold]{t['title']}[/bold]")
     console.print(f"  id:   [dim]{t['id']}[/dim]")
     console.print(f"  expr: [cyan]{t.get('cron_expression')}[/cyan]  tz: {t.get('timezone', 'UTC')}")
+    if t.get("max_fires"):
+        console.print(f"  max:  {t['max_fires']} fires")
     if t.get("next_fire_at"):
         console.print(f"  next: {t['next_fire_at']}")
 

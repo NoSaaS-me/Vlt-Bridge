@@ -21,7 +21,7 @@ from starlette.responses import Response
 from fastmcp.server.http import StreamableHTTPSessionManager, set_http_request
 from fastapi.responses import FileResponse
 
-from .routes import auth, index, notes, search, graph, system, rag, tts, models, oracle, oracle_context, threads, projects, coderag, notifications, rules, settings, assets, connectors, connector_oauth, connector_webhooks, composio_hub, admin
+from .routes import auth, index, notes, search, graph, system, rag, tts, models, oracle, oracle_context, threads, projects, coderag, notifications, rules, settings, assets, connectors, connector_oauth, connector_webhooks, composio_hub, admin, proxy_profiles
 from .middleware import SecurityHeadersMiddleware
 from ..mcp.server import mcp
 from ..services.database import DatabaseService
@@ -204,6 +204,7 @@ app.include_router(connector_oauth.router, tags=["connector-oauth"])
 app.include_router(connector_webhooks.router, tags=["webhooks"])
 app.include_router(composio_hub.router, tags=["composio-hub"])
 app.include_router(admin.router, tags=["admin"])
+app.include_router(proxy_profiles.router, tags=["proxy-profiles"])
 
 
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"])

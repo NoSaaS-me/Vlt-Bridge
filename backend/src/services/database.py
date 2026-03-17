@@ -327,18 +327,32 @@ DDL_STATEMENTS: tuple[str, ...] = (
         tokenize='porter unicode61'
     )
     """,
-    # Connector configs (023-connectors)
+    # Connector configs (023-connectors, multi-instance: 025-artifact-sandbox)
     """
     CREATE TABLE IF NOT EXISTS connector_configs (
         user_id        TEXT NOT NULL,
         connector_name TEXT NOT NULL,
+        instance_id    TEXT NOT NULL DEFAULT 'default',
         config_key     TEXT NOT NULL,
         config_value   TEXT,
         updated_at     TEXT,
-        PRIMARY KEY (user_id, connector_name, config_key)
+        PRIMARY KEY (user_id, connector_name, instance_id, config_key)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_connector_configs_user ON connector_configs(user_id, connector_name)",
+    # Proxy profiles (025-artifact-sandbox)
+    """
+    CREATE TABLE IF NOT EXISTS proxy_profiles (
+        user_id          TEXT NOT NULL,
+        name             TEXT NOT NULL,
+        proxy_url        TEXT NOT NULL,
+        proxy_username   TEXT,
+        proxy_password   TEXT,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (user_id, name)
+    )
+    """,
     # OAuth2 CSRF state table (023-connectors Phase 3)
     """
     CREATE TABLE IF NOT EXISTS oauth_states (
@@ -459,6 +473,22 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
         last_login_at TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
+    # Add vision model settings to user_settings (025-artifact-sandbox)
+    "ALTER TABLE user_settings ADD COLUMN vision_model TEXT",
+    "ALTER TABLE user_settings ADD COLUMN vision_provider TEXT",
+    # Add instance_id for multi-instance connector support (025-artifact-sandbox)
+    "ALTER TABLE connector_configs ADD COLUMN instance_id TEXT NOT NULL DEFAULT 'default'",
+    # proxy_profiles table (025-artifact-sandbox)
+    """CREATE TABLE IF NOT EXISTS proxy_profiles (
+        user_id          TEXT NOT NULL,
+        name             TEXT NOT NULL,
+        proxy_url        TEXT NOT NULL,
+        proxy_username   TEXT,
+        proxy_password   TEXT,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (user_id, name)
+    )""",
 )
 
 

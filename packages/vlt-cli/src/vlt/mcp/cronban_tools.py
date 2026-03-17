@@ -169,6 +169,7 @@ def register_cronban_tools(mcp) -> None:
         skill_id: Optional[str] = None,
         project_id: Optional[str] = None,
         timezone: str = "UTC",
+        max_fires: Optional[int] = None,
     ) -> dict:
         """Create a scheduled task — recurring or one-off.
 
@@ -197,9 +198,10 @@ def register_cronban_tools(mcp) -> None:
             skill_id: Use a saved Skill prompt instead of prompt_text (optional).
             project_id: Associate with a project slug (optional).
             timezone: IANA timezone for cron_expression only (default "UTC").
+            max_fires: Stop after this many fires (auto-completes). None = unlimited.
 
         Returns:
-            {status, trigger_id, title, next_fire_at, cron_expression, fire_once}
+            {status, trigger_id, title, next_fire_at, cron_expression, fire_once, max_fires}
         """
         try:
             import httpx
@@ -228,6 +230,8 @@ def register_cronban_tools(mcp) -> None:
                 payload["skill_id"] = skill_id
             if project_id:
                 payload["project_id"] = project_id
+            if max_fires is not None:
+                payload["max_fires"] = max_fires
 
             r = httpx.post(
                 f"{daemon_url}/api/cronban/crons",
@@ -242,6 +246,7 @@ def register_cronban_tools(mcp) -> None:
                 cron_expression=data.get("cron_expression"),
                 next_fire_at=data.get("next_fire_at"),
                 fire_once=data.get("fire_once", False),
+                max_fires=data.get("max_fires"),
                 status=data.get("status"),
             )
         except Exception as e:

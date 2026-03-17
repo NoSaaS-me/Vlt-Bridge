@@ -152,6 +152,7 @@ def _cron_to_dict(c: CronTrigger) -> dict:
         "target_cwd": c.target_cwd,
         "create_new_session": bool(c.create_new_session),
         "fire_once": bool(c.fire_once),
+        "max_fires": getattr(c, "max_fires", None),
         "fire_count": c.fire_count,
         "last_fired_at": c.last_fired_at,
         "created_at": c.created_at,
@@ -257,7 +258,7 @@ async def _dispatch_to_session(
             # 0. Relay session — inject text into the PTY queue
             _relay_queues = getattr(_srv, '_session_inject_queues', {})
             if target_session_id in _relay_queues:
-                await _relay_queues[target_session_id].put((prompt + "\n").encode())
+                await _relay_queues[target_session_id].put((prompt + "\r").encode())
                 logger.info(f"_dispatch: relay inject for {target_session_id}")
                 return target_session_id
 
@@ -462,7 +463,8 @@ async def fire_cron_trigger(trigger_id: str, trigger_type: str = "cron") -> dict
             trigger.fire_count = (trigger.fire_count or 0) + 1
             trigger.last_fired_at = now_iso
             trigger.updated_at = now_iso
-            if getattr(trigger, 'fire_once', False):
+            max_fires = getattr(trigger, 'max_fires', None)
+            if getattr(trigger, 'fire_once', False) or (max_fires and trigger.fire_count >= max_fires):
                 trigger.next_fire_at = None
                 trigger.status = "completed"
             elif trigger.cron_expression or trigger.rrule_str:
@@ -1190,6 +1192,7 @@ async def create_cron(request: Request):
             target_cwd=body.get("target_cwd"),
             create_new_session=bool(body.get("create_new_session", False)),
             fire_once=fire_once,
+            max_fires=body.get("max_fires"),
         )
         db.add(t)
         db.commit()
@@ -1222,6 +1225,8 @@ async def update_cron(cron_id: str, request: Request):
             t.create_new_session = bool(body["create_new_session"])
         if "fire_once" in body:
             t.fire_once = bool(body["fire_once"])
+        if "max_fires" in body:
+            t.max_fires = body["max_fires"]  # int or None to clear
         # One-shot: fire_at or fire_in override cron recalculation
         fire_at = body.get("fire_at")
         fire_in = body.get("fire_in")

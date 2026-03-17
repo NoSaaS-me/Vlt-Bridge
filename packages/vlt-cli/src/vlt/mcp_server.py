@@ -119,6 +119,12 @@ def create_server():
     except ImportError:
         logger.debug("connector_tools not available")
 
+    try:
+        from vlt.mcp.artifact_tools import register_artifact_tools
+        register_artifact_tools(mcp)
+    except ImportError:
+        logger.debug("artifact_tools not available")
+
     return mcp
 
 

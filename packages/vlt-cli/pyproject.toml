@@ -23,10 +23,14 @@ dependencies = [
     "python-dateutil>=2.9.0.post0",
     "sqlmodel>=0.0.37",
     "vlt-connectors",
+    "watchdog>=4.0.0",
 ]
 
 [project.optional-dependencies]
 windows = ["pywinpty>=2.0.0"]
+artifacts = [
+    "playwright>=1.40.0",
+]
 oracle = [
     "llama-index>=0.10.0",
     "llama-index-core>=0.10.0",

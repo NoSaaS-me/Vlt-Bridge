@@ -53,8 +53,8 @@ class ConnectorService:
     # Core CRUD
     # ------------------------------------------------------------------
 
-    def get_config(self, user_id: str, connector_name: str) -> dict[str, str]:
-        """Return all config key/value pairs for a connector, including __enabled.
+    def get_config(self, user_id: str, connector_name: str, instance_id: str = "default") -> dict[str, str]:
+        """Return all config key/value pairs for a connector instance, including __enabled.
 
         Secret fields are decrypted transparently. Legacy plaintext values
         (no ``v1:`` prefix) pass through unchanged.
@@ -63,8 +63,8 @@ class ConnectorService:
         try:
             cursor = conn.execute(
                 "SELECT config_key, config_value FROM connector_configs"
-                " WHERE user_id=? AND connector_name=?",
-                (user_id, connector_name),
+                " WHERE user_id=? AND connector_name=? AND instance_id=?",
+                (user_id, connector_name, instance_id),
             )
             raw = {row["config_key"]: (row["config_value"] or "") for row in cursor.fetchall()}
         finally:
@@ -97,8 +97,8 @@ class ConnectorService:
                 result[key] = value
         return result
 
-    def set_config(self, user_id: str, connector_name: str, updates: dict[str, str]) -> None:
-        """Upsert config keys for a connector.
+    def set_config(self, user_id: str, connector_name: str, updates: dict[str, str], instance_id: str = "default") -> None:
+        """Upsert config keys for a connector instance.
 
         Secret fields are encrypted before storage. Empty values for secret
         fields are stored as-is (empty string) so callers can clear a credential.
@@ -123,40 +123,78 @@ class ConnectorService:
 
                 conn.execute(
                     """
-                    INSERT INTO connector_configs (user_id, connector_name, config_key, config_value)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT (user_id, connector_name, config_key)
+                    INSERT INTO connector_configs (user_id, connector_name, instance_id, config_key, config_value)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT (user_id, connector_name, instance_id, config_key)
                     DO UPDATE SET config_value=excluded.config_value, updated_at=datetime('now')
                     """,
-                    (user_id, connector_name, key, stored_value),
+                    (user_id, connector_name, instance_id, key, stored_value),
                 )
             conn.commit()
         finally:
             conn.close()
 
-    def is_enabled(self, user_id: str, connector_name: str) -> bool:
-        config = self.get_config(user_id, connector_name)
+    def is_enabled(self, user_id: str, connector_name: str, instance_id: str = "default") -> bool:
+        config = self.get_config(user_id, connector_name, instance_id=instance_id)
         return config.get("__enabled", "false").lower() == "true"
 
-    def get_credentials(self, user_id: str, connector_name: str) -> dict[str, str]:
+    def get_credentials(self, user_id: str, connector_name: str, instance_id: str = "default") -> dict[str, str]:
         """Return decrypted config minus any keys starting with __ (internal control keys)."""
-        return {k: v for k, v in self.get_config(user_id, connector_name).items() if not k.startswith("__")}
+        return {k: v for k, v in self.get_config(user_id, connector_name, instance_id=instance_id).items() if not k.startswith("__")}
 
-    def get_action_permission(self, user_id: str, connector_name: str, action_name: str) -> str:
+    def get_action_permission(self, user_id: str, connector_name: str, action_name: str, instance_id: str = "default") -> str:
         """Get permission level for a specific action.
 
         Returns 'off', 'ask', or 'allow'. Defaults to 'allow' when no config key exists,
         preserving backwards compatibility with connectors configured before per-action
         permissions were introduced.
         """
-        config = self.get_config(user_id, connector_name)
+        config = self.get_config(user_id, connector_name, instance_id=instance_id)
         return config.get(f"__action_{action_name}", "allow")
 
-    def is_configured(self, user_id: str, connector: BaseConnector) -> bool:
+    def is_configured(self, user_id: str, connector: BaseConnector, instance_id: str = "default") -> bool:
         """True if all secret credential fields have non-empty values."""
-        creds = self.get_credentials(user_id, connector.name)
+        creds = self.get_credentials(user_id, connector.name, instance_id=instance_id)
         secret_fields = [f.name for f in connector.credential_fields if f.secret]
         return all(creds.get(f, "").strip() for f in secret_fields)
+
+    def list_instances(self, user_id: str, connector_name: str) -> list[dict]:
+        """Return distinct instance_ids for a connector with their enabled/configured state."""
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "SELECT DISTINCT instance_id FROM connector_configs"
+                " WHERE user_id=? AND connector_name=?"
+                " ORDER BY instance_id",
+                (user_id, connector_name),
+            )
+            instance_ids = [row["instance_id"] for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+        from vlt_connectors.registry import get_registry
+        registry = get_registry()
+        connector = registry.get(connector_name)
+
+        instances = []
+        for iid in instance_ids:
+            enabled = self.is_enabled(user_id, connector_name, instance_id=iid)
+            configured = self.is_configured(user_id, connector, instance_id=iid) if connector else False
+            instances.append({"instance_id": iid, "enabled": enabled, "configured": configured})
+        return instances
+
+    def delete_instance(self, user_id: str, connector_name: str, instance_id: str) -> bool:
+        """Delete all config rows for a connector instance. Returns True if any rows were deleted."""
+        conn = self.db.connect()
+        try:
+            cursor = conn.execute(
+                "DELETE FROM connector_configs WHERE user_id=? AND connector_name=? AND instance_id=?",
+                (user_id, connector_name, instance_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
 
 
 def get_connector_service(db: DatabaseService = Depends(get_db_service)) -> ConnectorService:

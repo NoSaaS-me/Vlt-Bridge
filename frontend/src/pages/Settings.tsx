@@ -487,6 +487,17 @@ export function Settings() {
     });
   };
 
+  const handleVisionProviderChange = (provider: ModelProvider) => {
+    if (!modelSettings) return;
+    const visionModels = modelsForProvider(provider).filter((m) => m.supports_vision);
+    const first = visionModels[0];
+    setModelSettings({
+      ...modelSettings,
+      vision_provider: provider,
+      vision_model: first?.id ?? modelSettings.vision_model,
+    });
+  };
+
   const getModelInfo = (modelId: string): ModelInfo | undefined => {
     return availableModels.find((m) => m.id === modelId);
   };
@@ -1040,6 +1051,61 @@ export function Settings() {
 
               <Separator />
 
+              {/* Vision Model */}
+              <div className="space-y-3">
+                <div>
+                  <h4 className="text-sm font-medium">Vision Model</h4>
+                  <p className="text-xs text-muted-foreground">Used for artifact screenshot review</p>
+                </div>
+                {/* Provider selector */}
+                <div className="flex gap-1 p-1 bg-muted rounded-md w-fit">
+                  {PROVIDERS.map((p) => (
+                    <Button
+                      key={p}
+                      variant={(modelSettings.vision_provider ?? 'openrouter') === p ? 'default' : 'ghost'}
+                      size="sm"
+                      className="h-7 px-3 text-xs"
+                      onClick={() => handleVisionProviderChange(p)}
+                    >
+                      {PROVIDER_LABELS[p]}
+                    </Button>
+                  ))}
+                </div>
+                {/* Model dropdown — filtered to vision-capable models */}
+                <Select
+                  value={modelSettings.vision_model ?? ''}
+                  onValueChange={(value) => setModelSettings({ ...modelSettings, vision_model: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Not configured" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelsForProvider(modelSettings.vision_provider ?? 'openrouter')
+                      .filter((m) => m.supports_vision)
+                      .map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          <div className="flex items-center gap-2">
+                            <span>{model.name}</span>
+                            {model.is_free && (
+                              <Badge variant="secondary" className="text-xs">FREE</Badge>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                {modelSettings.vision_model && getModelInfo(modelSettings.vision_model) && (
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
+                    <span>Context: {formatContextLength(getModelInfo(modelSettings.vision_model)!.context_length!)}</span>
+                    {getModelInfo(modelSettings.vision_model)!.is_free && (
+                      <Badge variant="outline" className="text-xs">Free Tier</Badge>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
               {/* Thinking Mode */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -1495,4 +1561,11 @@ export function Settings() {
     </div>
   );
 }
+
+// TODO (025-artifact-sandbox T055): Add connector instance management UI
+// - Per-connector instance list with add/delete
+// - Per-instance config form (reuse existing ConnectorConfigDialog)
+// - Proxy profile selector dropdown per instance
+// - "Proxy Profiles" management section (list, create, edit, delete)
+// Implement after core connector multi-instance backend is validated.
 

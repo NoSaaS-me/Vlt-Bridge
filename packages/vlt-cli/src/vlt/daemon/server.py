@@ -890,6 +890,14 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning(f"Cronban scheduler not available: {_e}")
 
+    # Initialize artifact watcher observer (Phase 5: hot reload)
+    try:
+        from vlt.daemon.artifact_watcher import _get_observer
+        _get_observer()  # Start the shared watchdog observer
+        logger.info("Artifact file watcher ready")
+    except Exception as _e:
+        logger.warning(f"Artifact watcher not available: {_e}")
+
     logger.info(f"VLT Daemon started (backend: {state.vault_url}, connected: {state.backend_connected})")
 
     yield
@@ -897,6 +905,16 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("VLT Daemon shutting down...")
     state._shutdown_event.set()
+
+    # Stop artifact watchers and backend processes
+    try:
+        from vlt.daemon.artifact_watcher import stop_all_watchers
+        stop_all_watchers()
+        from vlt.daemon.artifact_service import _artifact_processes, _stop_backend_process
+        for aid in list(_artifact_processes.keys()):
+            await _stop_backend_process(aid)
+    except Exception:
+        pass
 
     # Stop Cronban scheduler
     try:
@@ -969,6 +987,14 @@ try:
 except Exception as _e:
     import logging as _l
     _l.getLogger(__name__).warning(f"Cronban routes unavailable: {_e}")
+
+# Mount Artifact Sandbox router
+try:
+    from vlt.daemon.artifact_routes import router as _artifact_router
+    app.include_router(_artifact_router)
+except Exception as _e:
+    import logging as _l
+    _l.getLogger(__name__).warning(f"Artifact routes unavailable: {_e}")
 
 
 # =============================================================================
@@ -1307,7 +1333,29 @@ async def list_sessions(
         if untagged:
             db.commit()
 
-        # Step 2: Build the filtered query
+        # Step 2: Reap stale relay/managed sessions whose processes have died.
+        # After a daemon restart, DB records persist but processes don't.
+        import os as _os
+        stale = db.scalars(
+            select(AgentSession)
+            .where(AgentSession.status != "dead")
+            .where(AgentSession.pid.isnot(None))
+            .where(AgentSession.source.in_(["relay", "managed"]))
+        ).all()
+        reaped = 0
+        for s in stale:
+            try:
+                _os.kill(s.pid, 0)
+            except ProcessLookupError:
+                s.status = "dead"
+                reaped += 1
+            except (PermissionError, OSError):
+                pass  # process exists or signal error — leave it
+        if reaped:
+            db.commit()
+            logger.info(f"Reaped {reaped} stale sessions with dead processes")
+
+        # Step 3: Build the filtered query
         query = select(AgentSession)
         if helper:
             # Helper sessions only
@@ -1384,8 +1432,8 @@ async def inject_to_session(session_id: str, request: Request):
     text = payload.get("text", "")
     press_enter = payload.get("press_enter", False)
 
-    if press_enter and not text.endswith("\n"):
-        text = text + "\n"
+    if press_enter and not text.endswith("\r"):
+        text = text + "\r"
 
     await _session_inject_queues[session_id].put(text.encode())
     logger.debug(f"Injected {len(text)} bytes into session {session_id}")
@@ -2557,7 +2605,7 @@ async def _spawn_relay_session(
             if session_id not in _relay_sessions:
                 return
             try:
-                os.write(master_fd, (prompt + "\n").encode())
+                os.write(master_fd, (prompt + "\r").encode())
                 logger.info(f"Sent initial prompt to relay {session_id}")
             except OSError as e:
                 logger.debug(f"Initial prompt write failed (FD likely closed) for {session_id}: {e}")
