@@ -5,6 +5,7 @@ Each stage calls a connector through the artifact harness.
 
 Stage types:
   text_generation  — LLM text output
+  text_cleanup     — LLM rewrite/edit of previous text based on instruction
   text_review      — LLM-based scoring of previous text
   image_generation — Image generation from prompt or previous text
   vision_review    — Vision model scoring of generated image
@@ -386,12 +387,97 @@ def _execute_vision_review(stage: dict, results: dict, topic: str) -> dict:
     }
 
 
+def _execute_text_cleanup(stage: dict, results: dict, topic: str) -> dict:
+    """Transform text from a previous stage using an LLM instruction prompt.
+
+    Unlike text_generation (which creates from scratch), text_cleanup takes
+    existing content and rewrites/edits it according to a cleanup prompt.
+    Use cases: tone adjustment, formatting, SEO optimization, length trimming,
+    platform adaptation, grammar fixes, etc.
+    """
+    connector = stage.get("connector", "openrouter")
+    action = stage.get("action", "generate_text")
+    model = stage.get("model", "openai/gpt-4o-mini")
+    stage_params = stage.get("params", {})
+
+    # Find source text
+    input_from = stage.get("input_from")
+    if input_from and input_from in results:
+        source_text = _extract_text_output(results[input_from])
+    else:
+        source_text = ""
+        for r in reversed(list(results.values())):
+            if "output" in r and isinstance(r["output"], str) and r.get("score") is None:
+                source_text = r["output"]
+                break
+
+    if not source_text:
+        raise ValueError("text_cleanup: no source text found from previous stages")
+
+    # Build cleanup instruction: inline > prompt_file > default
+    inline_prompt = (stage.get("instruction") or "").strip()
+    prompt_file = stage.get("prompt_file")
+    if inline_prompt:
+        system_prompt = _apply_topic(inline_prompt, topic)
+    elif prompt_file:
+        system_prompt = _apply_topic(_load_prompt_file(prompt_file), topic)
+    else:
+        system_prompt = (
+            "You are an expert editor. Rewrite the provided content according "
+            "to the user's instructions. Output ONLY the revised content — no "
+            "commentary, no preamble, no markdown fences wrapping the result."
+        )
+
+    user_prompt = stage.get("user_message", "Clean up and improve the following content.")
+    user_prompt = _apply_topic(user_prompt, topic)
+    user_prompt = f"{user_prompt}\n\n---BEGIN CONTENT---\n{source_text}\n---END CONTENT---"
+
+    params: dict[str, Any] = {
+        "model": model,
+        "prompt": user_prompt,
+        "system_prompt": system_prompt,
+    }
+    max_tokens = stage.get("max_tokens") or stage_params.get("max_tokens")
+    if max_tokens:
+        params["max_tokens"] = str(max_tokens)
+    temperature = stage.get("temperature") or stage_params.get("temperature")
+    if temperature is not None:
+        params["temperature"] = str(temperature)
+
+    data = _call_connector(connector, action, params)
+
+    if isinstance(data, str):
+        output_text = data
+        tokens = 0
+    elif isinstance(data, dict):
+        output_text = (
+            data.get("content")
+            or data.get("text")
+            or data.get("output")
+            or str(data)
+        )
+        usage = data.get("usage", {})
+        tokens = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
+    else:
+        output_text = str(data)
+        tokens = 0
+
+    return {
+        "output": output_text,
+        "model": model,
+        "tokens": tokens,
+        "source_length": len(source_text),
+        "output_length": len(output_text),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Stage dispatch table
 # ---------------------------------------------------------------------------
 
 _STAGE_EXECUTORS = {
     "text_generation": _execute_text_generation,
+    "text_cleanup": _execute_text_cleanup,
     "text_review": _execute_text_review,
     "image_generation": _execute_image_generation,
     "vision_review": _execute_vision_review,

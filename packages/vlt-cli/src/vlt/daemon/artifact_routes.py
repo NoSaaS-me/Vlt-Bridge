@@ -419,6 +419,163 @@ async def import_artifact(
 
 
 # ============================================================================
+# Sync (folder upload / delta push)
+# ============================================================================
+
+class SyncOptions(BaseModel):
+    delete: bool = False       # Remove files on disk that aren't in the upload
+    dry_run: bool = False      # Just report what would change, don't write
+
+
+@router.post("/{artifact_id}/sync")
+async def sync_artifact(
+    artifact_id: str,
+    file: UploadFile = File(...),
+    delete: bool = Query(False, description="Delete files not in the upload"),
+    dry_run: bool = Query(False, description="Report changes without writing"),
+):
+    """Sync a zip of files to an artifact's disk path (like git push).
+
+    Compares each file in the zip against what's on disk:
+      - New files are created
+      - Changed files are overwritten
+      - Unchanged files are skipped
+      - If delete=true, files on disk not in the zip are removed
+        (excluding .vlt/, .git/, __pycache__/)
+
+    Returns a summary of {added, modified, unchanged, deleted} file lists.
+    """
+    artifact = svc.get_artifact(artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    content = await file.read()
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid zip file")
+
+    disk_path = Path(artifact["disk_path"])
+    if not disk_path.exists():
+        raise HTTPException(status_code=404, detail="Artifact directory not found")
+
+    # Protected directories that sync never touches
+    protected = {".vlt", ".git", "__pycache__", ".deps", "node_modules"}
+
+    # Build set of uploaded file paths (normalized)
+    uploaded_paths: set[str] = set()
+    added: list[str] = []
+    modified: list[str] = []
+    unchanged: list[str] = []
+
+    for member in zf.namelist():
+        if member.endswith("/"):
+            continue
+        # Skip protected dirs in upload too
+        parts = Path(member).parts
+        if any(p in protected for p in parts):
+            continue
+
+        uploaded_paths.add(member)
+        target = disk_path / member
+        new_content = zf.read(member)
+
+        if target.exists():
+            try:
+                existing = target.read_bytes()
+                if existing == new_content:
+                    unchanged.append(member)
+                    continue
+            except Exception:
+                pass
+            modified.append(member)
+        else:
+            added.append(member)
+
+        if not dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(new_content)
+
+    # Handle deletions
+    deleted: list[str] = []
+    if delete:
+        for file_path in disk_path.rglob("*"):
+            if not file_path.is_file():
+                continue
+            rel = str(file_path.relative_to(disk_path))
+            parts = Path(rel).parts
+            if any(p in protected for p in parts):
+                continue
+            if rel not in uploaded_paths:
+                deleted.append(rel)
+                if not dry_run:
+                    file_path.unlink()
+
+        # Clean up empty directories (bottom-up)
+        if not dry_run:
+            for dir_path in sorted(disk_path.rglob("*"), reverse=True):
+                if dir_path.is_dir() and not any(dir_path.iterdir()):
+                    parts = dir_path.relative_to(disk_path).parts
+                    if not any(p in protected for p in parts):
+                        dir_path.rmdir()
+
+    # If manifest.json was synced, update DB too
+    if not dry_run and "manifest.json" in uploaded_paths:
+        manifest_path = disk_path / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+                svc.update_artifact(artifact_id, manifest=manifest)
+            except Exception as e:
+                log.warning(f"Failed to update manifest in DB after sync: {e}")
+
+    return {
+        "artifact_id": artifact_id,
+        "dry_run": dry_run,
+        "added": added,
+        "modified": modified,
+        "unchanged": unchanged,
+        "deleted": deleted,
+        "total_files": len(uploaded_paths),
+        "changes": len(added) + len(modified) + len(deleted),
+    }
+
+
+@router.get("/{artifact_id}/files")
+def list_artifact_files(artifact_id: str):
+    """List all files in an artifact's disk path with sizes and hashes."""
+    import hashlib
+
+    artifact = svc.get_artifact(artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    disk_path = Path(artifact["disk_path"])
+    if not disk_path.exists():
+        raise HTTPException(status_code=404, detail="Artifact directory not found")
+
+    protected = {".vlt", ".git", "__pycache__", ".deps", "node_modules"}
+    files = []
+    for file_path in sorted(disk_path.rglob("*")):
+        if not file_path.is_file():
+            continue
+        rel = str(file_path.relative_to(disk_path))
+        parts = Path(rel).parts
+        if any(p in protected for p in parts):
+            continue
+        stat = file_path.stat()
+        content = file_path.read_bytes()
+        files.append({
+            "path": rel,
+            "size": stat.st_size,
+            "sha256": hashlib.sha256(content).hexdigest()[:16],
+            "modified": stat.st_mtime,
+        })
+
+    return {"artifact_id": artifact_id, "files": files, "total": len(files)}
+
+
+# ============================================================================
 # WebSocket: HMR (Hot Module Replacement)
 # ============================================================================
 

@@ -48,6 +48,7 @@ def register_artifact_tools(mcp) -> None:
         description: str = "",
         project_id: str = "default",
         type: str = "ephemeral",
+        template: str = "",
     ) -> dict:
         """Create a new artifact sandbox (frontend + optional backend).
 
@@ -56,22 +57,28 @@ def register_artifact_tools(mcp) -> None:
             description: Optional description of what the artifact does.
             project_id: Project to associate the artifact with (default: "default").
             type: "ephemeral" (temp) or "persistent" (permanent). Default: "ephemeral".
+            template: Template to initialize from (e.g. "text_factory"). Empty = blank.
+                      Use vlt_artifact_list_templates() to see available templates.
 
         Returns:
-            {status, artifact_id, name, project_id, state, disk_path}
+            {status, artifact_id, name, project_id, state, disk_path, template}
         """
         import httpx
         from vlt.mcp import _ok, _err
 
         try:
+            body: dict = {
+                "name": name,
+                "description": description or None,
+                "project_id": project_id,
+                "type": type,
+            }
+            if template:
+                body["template"] = template
+
             resp = httpx.post(
                 f"{_daemon_url()}/api/artifacts",
-                json={
-                    "name": name,
-                    "description": description or None,
-                    "project_id": project_id,
-                    "type": type,
-                },
+                json=body,
                 timeout=10.0,
             )
             if resp.status_code >= 400:
@@ -84,6 +91,7 @@ def register_artifact_tools(mcp) -> None:
                 state=data["state"],
                 disk_path=data["disk_path"],
                 type=data["type"],
+                template=template or "blank",
             )
         except Exception as e:
             logger.exception("vlt_artifact_create failed")
@@ -285,6 +293,89 @@ def register_artifact_tools(mcp) -> None:
             )
         except Exception as e:
             logger.exception("vlt_artifact_test failed")
+            return _err("INTERNAL_ERROR", str(e))
+
+    @mcp.tool()
+    def vlt_artifact_call(
+        artifact_id: str,
+        action: str,
+        params: str = "{}",
+    ) -> dict:
+        """Call an action on an artifact's backend process.
+
+        The backend must be running (use vlt_artifact_state to transition to
+        "building", then the backend starts automatically; or start it manually).
+
+        Common actions for text_factory artifacts:
+            get_config      — returns pipeline stage configuration
+            test            — run the pipeline once on a topic: {"topic": "..."}
+            generate        — run pipeline and add result to content queue
+            update_config   — update pipeline stages: {"stages": [...]}
+            get_queue       — list content queue items
+            get_history     — list test run history
+            approve         — approve a queue item: {"item_id": "cnt_..."}
+            reject          — reject a queue item: {"item_id": "cnt_...", "reason": "..."}
+            save_runbook    — save current pipeline as named config: {"name": "..."}
+            list_runbooks   — list saved runbooks
+            run_runbook     — execute a saved runbook: {"name": "...", "topic": "..."}
+
+        Args:
+            artifact_id: Artifact UUID.
+            action: Backend action name.
+            params: JSON string of action parameters (default: "{}").
+
+        Returns:
+            {status, artifact_id, action, result: <action-specific data>}
+        """
+        import httpx
+        from vlt.mcp import _ok, _err
+
+        try:
+            params_dict = json.loads(params) if params else {}
+        except json.JSONDecodeError as e:
+            return _err("INVALID_PARAMS", f"params must be valid JSON: {e}")
+
+        # Pipeline actions need longer timeouts
+        slow_actions = {"test", "generate", "run_runbook"}
+        timeout = 120.0 if action in slow_actions else 30.0
+
+        try:
+            resp = httpx.post(
+                f"{_daemon_url()}/api/artifacts/{artifact_id}/backend/call",
+                json={"action": action, "params": params_dict},
+                timeout=timeout,
+            )
+            if resp.status_code == 400:
+                detail = resp.text[:300]
+                try:
+                    detail = resp.json().get("detail", detail)
+                except Exception:
+                    pass
+                # Check for "backend not running" specifically
+                if "not running" in detail.lower():
+                    return _err(
+                        "BACKEND_NOT_RUNNING",
+                        f"Backend not running for artifact {artifact_id}. "
+                        "Transition to 'building' state first: "
+                        "vlt_artifact_state(artifact_id, 'building')"
+                    )
+                return _err("ACTION_ERROR", detail)
+            if resp.status_code >= 400:
+                return _err("API_ERROR", f"HTTP {resp.status_code}: {resp.text[:300]}")
+
+            data = resp.json()
+
+            # If the harness returned an error (exception in handle())
+            if isinstance(data, dict) and "error" in data and "result" not in data:
+                return _err("BACKEND_ERROR", data["error"])
+
+            result = data.get("result", data)
+            return _ok(artifact_id=artifact_id, action=action, result=result)
+
+        except httpx.TimeoutException:
+            return _err("TIMEOUT", f"Backend call '{action}' timed out after {timeout}s")
+        except Exception as e:
+            logger.exception("vlt_artifact_call failed")
             return _err("INTERNAL_ERROR", str(e))
 
     @mcp.tool()

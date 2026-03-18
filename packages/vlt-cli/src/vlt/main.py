@@ -109,6 +109,8 @@ app.add_typer(daemon_app, name="daemon")
 app.add_typer(profile_app, name="profile")
 app.add_typer(cron_app, name="cron")
 app.add_typer(connectors_app, name="connectors")
+from vlt.artifact_cli import artifact_app
+app.add_typer(artifact_app, name="artifact")
 
 service = SqliteVaultService()
 

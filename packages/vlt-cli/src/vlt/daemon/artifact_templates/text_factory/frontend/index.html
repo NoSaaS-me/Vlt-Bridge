@@ -191,6 +191,7 @@
       color: #bfdbfe;
     }
     .stage-type-tag.review { background: #065f46; color: #a7f3d0; }
+    .stage-type-tag.cleanup { background: #713f12; color: #fde68a; }
     .btn-remove-stage {
       background: none;
       border: none;
@@ -516,6 +517,7 @@
           </button>
           <div id="add-stage-menu">
             <div class="add-stage-option" onclick="addStage('text_generation')">📝 Text Generation</div>
+            <div class="add-stage-option" onclick="addStage('text_cleanup')">✂️ Text Cleanup</div>
             <div class="add-stage-option" onclick="addStage('text_review')">🔍 Text Review</div>
             <div class="add-stage-option" onclick="addStage('image_generation')">🖼 Image Generation</div>
             <div class="add-stage-option" onclick="addStage('vision_review')">👁 Vision Review</div>
@@ -693,6 +695,9 @@ function stageDefaults(type) {
   if (type === 'text_generation') {
     return { ...base, model: 'anthropic/claude-sonnet-4', system_prompt: '', temperature: 0.7, max_tokens: 2000 };
   }
+  if (type === 'text_cleanup') {
+    return { ...base, model: 'anthropic/claude-haiku-4.5', instruction: '', user_message: 'Clean up and improve the following content.', temperature: 0.3, max_tokens: 4096 };
+  }
   if (type === 'text_review') {
     return { ...base, model: 'anthropic/claude-haiku-4.5', criteria: 'engagement, clarity, accuracy', auto_approve_threshold: 8.5 };
   }
@@ -736,9 +741,10 @@ function renderStages() {
 }
 
 function stageCardHTML(stage, idx) {
-  const tagClass = stage.type.includes('review') ? 'review' : '';
+  const tagClass = stage.type.includes('review') ? 'review' : stage.type === 'text_cleanup' ? 'cleanup' : '';
   const label = {
     text_generation: 'Text Gen',
+    text_cleanup: 'Text Cleanup',
     text_review: 'Text Review',
     image_generation: 'Image Gen',
     vision_review: 'Vision Review',
@@ -775,6 +781,29 @@ function stageCardHTML(stage, idx) {
     <div class="form-row">
       <label>Max Tokens</label>
       <input type="number" min="100" max="8000" step="100" value="${stage.max_tokens ?? 2000}"
+             oninput="updateStage(${idx},'max_tokens',parseInt(this.value))" />
+    </div>`;
+  }
+
+  if (stage.type === 'text_cleanup') {
+    fields += `
+    <div class="form-row">
+      <label>Cleanup Instruction</label>
+      <textarea placeholder="e.g. Rewrite for a LinkedIn audience, keep under 300 words" oninput="updateStage(${idx},'instruction',this.value)">${esc(stage.instruction || '')}</textarea>
+    </div>
+    <div class="form-row">
+      <label>User Message</label>
+      <input type="text" value="${esc(stage.user_message || 'Clean up and improve the following content.')}" oninput="updateStage(${idx},'user_message',this.value)" />
+    </div>
+    <label>Temperature</label>
+    <div class="slider-row">
+      <input type="range" min="0" max="1" step="0.05" value="${stage.temperature ?? 0.3}"
+             oninput="updateStage(${idx},'temperature',parseFloat(this.value));this.nextElementSibling.textContent=parseFloat(this.value).toFixed(2)" />
+      <span class="slider-val">${(stage.temperature ?? 0.3).toFixed(2)}</span>
+    </div>
+    <div class="form-row">
+      <label>Max Tokens</label>
+      <input type="number" min="100" max="8000" step="100" value="${stage.max_tokens ?? 4096}"
              oninput="updateStage(${idx},'max_tokens',parseInt(this.value))" />
     </div>`;
   }
