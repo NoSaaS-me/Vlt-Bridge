@@ -21,9 +21,12 @@ interface VltRequest {
 }
 
 async function daemonFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+  // Pipeline operations (backend/call with test/generate) need longer timeouts
+  const isSlowPath = path.includes('/backend/call');
+  const defaultTimeout = isSlowPath ? 120_000 : 10_000;
   const response = await fetch(`/vlt${path}`, {
     ...options,
-    signal: options.signal ?? AbortSignal.timeout(10000),
+    signal: options.signal ?? AbortSignal.timeout(defaultTimeout),
   });
   if (!response.ok) {
     let detail = `HTTP ${response.status}`;

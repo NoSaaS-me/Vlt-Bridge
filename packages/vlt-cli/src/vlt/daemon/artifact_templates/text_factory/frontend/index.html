@@ -680,7 +680,7 @@ function defaultStages() {
       id: 'text_review',
       type: 'text_review',
       connector: 'openrouter',
-      model: 'anthropic/claude-haiku-4',
+      model: 'anthropic/claude-haiku-4.5',
       review_prompt_file: 'prompts/review_criteria.md',
       criteria: 'engagement, clarity, accuracy, actionability',
       auto_approve_threshold: 7.5,
@@ -694,7 +694,7 @@ function stageDefaults(type) {
     return { ...base, model: 'anthropic/claude-sonnet-4', system_prompt: '', temperature: 0.7, max_tokens: 2000 };
   }
   if (type === 'text_review') {
-    return { ...base, model: 'anthropic/claude-haiku-4', criteria: 'engagement, clarity, accuracy', auto_approve_threshold: 8.5 };
+    return { ...base, model: 'anthropic/claude-haiku-4.5', criteria: 'engagement, clarity, accuracy', auto_approve_threshold: 8.5 };
   }
   if (type === 'image_generation') {
     return { ...base, connector: 'huggingface', model: 'black-forest-labs/FLUX.1-schnell', prompt_template: '' };

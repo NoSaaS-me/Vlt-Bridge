@@ -168,9 +168,16 @@ async def stop_backend(artifact_id: str):
 
 @router.post("/{artifact_id}/backend/call")
 async def call_backend(artifact_id: str, req: BackendCallRequest):
-    """Proxy a call to the artifact's backend."""
+    """Proxy a call to the artifact's backend.
+
+    Pipeline actions (test, generate, run_runbook) may involve multiple LLM calls
+    and need longer timeouts than simple config reads.
+    """
+    # Pipeline actions need longer timeouts (multiple LLM calls in sequence)
+    slow_actions = {"test", "generate", "run_runbook"}
+    timeout = 120.0 if req.action in slow_actions else 30.0
     try:
-        return await svc.call_backend(artifact_id, req.action, req.params)
+        return await svc.call_backend(artifact_id, req.action, req.params, timeout=timeout)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

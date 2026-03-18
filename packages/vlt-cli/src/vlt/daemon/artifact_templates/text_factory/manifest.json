@@ -62,7 +62,7 @@
         "id": "text_review",
         "type": "text_review",
         "connector": "openrouter",
-        "model": "anthropic/claude-haiku-4",
+        "model": "anthropic/claude-haiku-4.5",
         "review_prompt_file": "prompts/review_criteria.md",
         "criteria": ["engagement", "clarity", "accuracy", "actionability"],
         "auto_approve_threshold": 7.5

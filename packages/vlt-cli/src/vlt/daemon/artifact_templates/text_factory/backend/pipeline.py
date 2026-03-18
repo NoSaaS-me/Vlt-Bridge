@@ -136,9 +136,12 @@ def _execute_text_generation(stage: dict, results: dict, topic: str) -> dict:
     action = stage.get("action", "generate_text")
     model = stage.get("model", "openai/gpt-4o-mini")
 
-    # Build system prompt
+    # Build system prompt: inline system_prompt overrides prompt_file
+    inline_prompt = (stage.get("system_prompt") or "").strip()
     prompt_file = stage.get("prompt_file")
-    if prompt_file:
+    if inline_prompt:
+        system_prompt = _apply_topic(inline_prompt, topic)
+    elif prompt_file:
         system_prompt = _apply_topic(_load_prompt_file(prompt_file), topic)
     else:
         system_prompt = _apply_topic(stage.get("prompt", ""), topic)

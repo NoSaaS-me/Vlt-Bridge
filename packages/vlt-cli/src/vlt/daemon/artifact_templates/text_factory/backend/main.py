@@ -129,7 +129,7 @@ def load_state(state: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def _handle_get_config(params: dict) -> dict:
-    return {"config": _get_config()}
+    return _get_config()
 
 
 def _handle_update_config(params: dict) -> dict:
@@ -143,7 +143,7 @@ def _handle_update_config(params: dict) -> dict:
     config["version"] = config.get("version", 1) + 1
     _save_pipeline_config(config)
     _state["pipeline_config"] = config
-    return {"config": config, "saved": True}
+    return {**config, "saved": True}
 
 
 def _handle_test(params: dict) -> dict:

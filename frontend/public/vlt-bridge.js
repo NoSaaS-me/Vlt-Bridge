@@ -45,13 +45,14 @@
       var id = 'req-' + (++_requestId);
       _pending[id] = { resolve: resolve, reject: reject };
 
-      // Timeout after 30s
+      // Timeout: pipeline operations need longer (multiple LLM calls)
+      var ms = (params && params.action && /^(test|generate|run_runbook)$/.test(params.action)) ? 120000 : 30000;
       setTimeout(function () {
         if (id in _pending) {
           delete _pending[id];
           reject(new Error('VltBridge request timed out: ' + method));
         }
-      }, 30000);
+      }, ms);
 
       window.parent.postMessage({
         type: 'vlt_request',
