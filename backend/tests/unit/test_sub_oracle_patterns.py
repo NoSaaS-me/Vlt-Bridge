@@ -1,7 +1,7 @@
 """Unit tests for sub_oracle subagent patterns (023 Phase 0).
 
 Tests:
-- T001: Result truncation at 2000 chars
+- T001: Result truncation at ~2000 tokens (~8000 chars) with file save
 - T002: Toolkit exclusion (child namespace has no sub_oracle)
 - T003: Wall-clock timeout (60s)
 """
@@ -28,29 +28,45 @@ class TestResultTruncation:
 
     def test_short_result_unchanged(self):
         result = "Short answer."
-        truncated = SubOracleCallable._truncate_result(result, 2000)
+        truncated = SubOracleCallable._truncate_result(result, 8000)
         assert truncated == result
 
     def test_exact_limit_unchanged(self):
-        result = "x" * 2000
-        truncated = SubOracleCallable._truncate_result(result, 2000)
+        result = "x" * 8000
+        truncated = SubOracleCallable._truncate_result(result, 8000)
         assert truncated == result
 
     def test_long_result_truncated_with_notice(self):
-        result = "x" * 5000
-        truncated = SubOracleCallable._truncate_result(result, 2000)
+        result = "x" * 15000
+        truncated = SubOracleCallable._truncate_result(result, 8000)
         assert len(truncated) < len(result)
-        assert truncated.startswith("x" * 2000)
-        assert "[truncated — 5000 chars total]" in truncated
+        assert truncated.startswith("x" * 8000)
+        assert "[truncated — 15000 chars total" in truncated
+        assert "Full result saved to:" in truncated
 
     def test_truncation_preserves_prefix(self):
-        result = "A" * 1000 + "B" * 3000
-        truncated = SubOracleCallable._truncate_result(result, 2000)
-        # First 2000 chars: 1000 A's + 1000 B's
-        assert truncated.startswith("A" * 1000 + "B" * 1000)
+        result = "A" * 4000 + "B" * 8000
+        truncated = SubOracleCallable._truncate_result(result, 8000)
+        # First 8000 chars: 4000 A's + 4000 B's
+        assert truncated.startswith("A" * 4000 + "B" * 4000)
 
-    def test_class_constant_is_2000(self):
-        assert SubOracleCallable.RESULT_MAX_CHARS == 2000
+    def test_class_constants(self):
+        assert SubOracleCallable.RESULT_MAX_TOKENS == 2000
+        assert SubOracleCallable.RESULT_CHARS_PER_TOKEN == 4
+        assert SubOracleCallable.RESULT_MAX_CHARS == 8000
+
+    def test_file_saved_on_truncation(self, tmp_path, monkeypatch):
+        """Truncated results should be saved to a file."""
+        monkeypatch.setattr(SubOracleCallable, "RESULTS_DIR", str(tmp_path))
+        result = "x" * 15000
+        truncated = SubOracleCallable._truncate_result(result, 8000, task_hint="test task")
+        assert "Full result saved to:" in truncated
+        # Verify file was written
+        files = list(tmp_path.glob("*.md"))
+        assert len(files) == 1
+        content = files[0].read_text()
+        assert "test task" in content
+        assert "x" * 100 in content  # has the actual result
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +199,7 @@ class TestWallClockTimeout:
         assert result == "partial findings so far"
 
     def test_successful_child_not_truncated_under_limit(self):
-        """Normal child result under 2000 chars should pass through unchanged."""
+        """Normal child result under 8000 chars should pass through unchanged."""
         parent = RLMSession.create_root(user_id="u", query="q")
         parent.sub_oracle_call_count = 0
         sub = SubOracleCallable(
@@ -204,7 +220,7 @@ class TestWallClockTimeout:
         assert result == short_result
 
     def test_successful_long_child_result_truncated(self):
-        """Normal child result over 2000 chars should be truncated."""
+        """Normal child result over 8000 chars (~2000 tokens) should be truncated."""
         parent = RLMSession.create_root(user_id="u", query="q")
         parent.sub_oracle_call_count = 0
         sub = SubOracleCallable(
@@ -214,7 +230,7 @@ class TestWallClockTimeout:
             project_id="proj",
         )
 
-        long_result = "A" * 5000
+        long_result = "A" * 15000
 
         async def _verbose(**kwargs):
             return long_result
@@ -222,5 +238,6 @@ class TestWallClockTimeout:
         with patch("backend.src.services.rlm_oracle._run_rlm_child_loop", _verbose):
             result = sub("test prompt")
 
-        assert len(result) < 5000
-        assert "[truncated — 5000 chars total]" in result
+        assert len(result) < 15000
+        assert "[truncated — 15000 chars total" in result
+        assert "Full result saved to:" in result

@@ -2,12 +2,14 @@
 
 Subagent patterns (from validated architecture research):
 - delegate_task: spawns a child CodeAct graph with toolkit exclusion (no delegate_task
-  in child), context isolation (clean prompt + task only), and result truncation (2000 chars).
+  in child), context isolation (clean prompt + task only), and result truncation (2000 tokens).
+- Full results saved to /tmp/delegate_results/ for recovery when truncated.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -23,8 +25,11 @@ _STATUS_SYMBOLS: dict[str, str] = {
 }
 
 
-DELEGATE_RESULT_MAX_CHARS = 2000
+DELEGATE_RESULT_MAX_TOKENS = 2000
+DELEGATE_RESULT_CHARS_PER_TOKEN = 4  # conservative estimate
+DELEGATE_RESULT_MAX_CHARS = DELEGATE_RESULT_MAX_TOKENS * DELEGATE_RESULT_CHARS_PER_TOKEN  # ~8000
 DELEGATE_CHILD_RECURSION_LIMIT = 25
+DELEGATE_RESULTS_DIR = "/tmp/delegate_results"
 
 
 def make_meta_tools(
@@ -153,14 +158,18 @@ def make_meta_tools(
                      search results, etc.). Keep this concise.
 
         Returns:
-            The subagent's final response (capped at 2000 chars).
+            The subagent's final response (capped at ~2000 tokens). If truncated,
+            the full result is saved to /tmp/delegate_results/<task_id>.md and the
+            path is included in the truncation notice.
         """
         if delegate_config is None:
             return "[delegate_task] Not configured — checkpointer or model not available."
 
+        import uuid
+        child_thread_id = str(uuid.uuid4())
+
         try:
             import asyncio as _asyncio
-            import uuid
             from ..graph import build_oracle_graph, _PickleSerde
 
             model = delegate_config.get("model")
@@ -186,7 +195,6 @@ def make_meta_tools(
             )
 
             # Context isolation: child gets clean prompt with task only
-            child_thread_id = str(uuid.uuid4())
             child_prompt = task_description
             if context:
                 child_prompt = f"{task_description}\n\nContext:\n{context}"
@@ -218,12 +226,25 @@ def make_meta_tools(
             logger.error("delegate_task failed: %s", exc, exc_info=True)
             raw_result = f"[delegate_task error] {type(exc).__name__}: {exc}"
 
-        # Result truncation (prevents DeepMind 17x error cascade)
+        # Always save full result to file for recovery
+        os.makedirs(DELEGATE_RESULTS_DIR, exist_ok=True)
+        result_path = os.path.join(DELEGATE_RESULTS_DIR, f"{child_thread_id}.md")
+        try:
+            with open(result_path, "w") as f:
+                f.write(f"# Delegate Task Result\n\n")
+                f.write(f"**Task:** {task_description}\n\n")
+                f.write(f"---\n\n{raw_result}\n")
+        except OSError as write_err:
+            logger.warning("Failed to save delegate result to %s: %s", result_path, write_err)
+            result_path = None
+
+        # Result truncation (~2000 tokens ≈ 8000 chars)
         if len(raw_result) > DELEGATE_RESULT_MAX_CHARS:
-            raw_result = (
-                raw_result[:DELEGATE_RESULT_MAX_CHARS]
-                + f"\n...\n[truncated — {len(raw_result)} chars total]"
-            )
+            truncation_notice = f"\n...\n[truncated — {len(raw_result)} chars total (~{len(raw_result) // DELEGATE_RESULT_CHARS_PER_TOKEN} tokens)]"
+            if result_path:
+                truncation_notice += f"\nFull result saved to: {result_path}"
+                truncation_notice += f"\nUse run_shell('cat {result_path}') to read the complete output."
+            raw_result = raw_result[:DELEGATE_RESULT_MAX_CHARS] + truncation_notice
 
         return raw_result
 

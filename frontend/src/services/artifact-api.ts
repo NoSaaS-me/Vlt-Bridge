@@ -52,11 +52,23 @@ async function daemonFetch<T>(
   return response.json() as Promise<T>;
 }
 
+export interface ArtifactTemplate {
+  name: string;
+  description: string;
+  has_backend: boolean;
+  connectors: string[];
+}
+
+export async function listTemplates(): Promise<ArtifactTemplate[]> {
+  return daemonFetch<ArtifactTemplate[]>('/api/artifacts/templates');
+}
+
 export async function createArtifact(data: {
   name: string;
   description?: string;
   type?: string;
   project_id?: string;
+  template?: string;
 }): Promise<ArtifactData> {
   return daemonFetch<ArtifactData>('/api/artifacts', {
     method: 'POST',

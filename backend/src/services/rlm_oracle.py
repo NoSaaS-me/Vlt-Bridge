@@ -420,14 +420,18 @@ class SubOracleCallable:
     running event loop), so ``asyncio.run()`` is safe here.
 
     Subagent patterns applied (023 Phase 0):
-    - Result truncation: child returns capped at RESULT_MAX_CHARS (2000)
+    - Result truncation: child returns capped at ~2000 tokens (~8000 chars)
     - Toolkit exclusion: children don't receive sub_oracle (NameError if called)
     - Wall-clock timeout: entire child loop bounded by CHILD_TIMEOUT_S (60s)
+    - Full results saved to /tmp/sub_oracle_results/ for recovery when truncated
     """
 
     MAX_SUB_ORACLE_CALLS = 3
-    RESULT_MAX_CHARS = 2000
+    RESULT_MAX_TOKENS = 2000
+    RESULT_CHARS_PER_TOKEN = 4
+    RESULT_MAX_CHARS = RESULT_MAX_TOKENS * RESULT_CHARS_PER_TOKEN  # ~8000
     CHILD_TIMEOUT_S = 60.0
+    RESULTS_DIR = "/tmp/sub_oracle_results"
 
     def __init__(
         self,
@@ -445,15 +449,35 @@ class SubOracleCallable:
         self._max_tokens = max_tokens
         self._base_url = base_url
 
-    @staticmethod
-    def _truncate_result(result: str, max_chars: int) -> str:
-        """Cap child result to max_chars, appending truncation notice."""
+    @classmethod
+    def _truncate_result(cls, result: str, max_chars: int, task_hint: str = "") -> str:
+        """Cap child result to max_chars, saving full result to file if truncated."""
+        import os
+
+        # Always save full result for recovery
+        import uuid
+        result_id = str(uuid.uuid4())[:8]
+        os.makedirs(cls.RESULTS_DIR, exist_ok=True)
+        result_path = os.path.join(cls.RESULTS_DIR, f"{result_id}.md")
+        try:
+            with open(result_path, "w") as f:
+                f.write(f"# Sub-Oracle Result\n\n")
+                if task_hint:
+                    f.write(f"**Task:** {task_hint}\n\n---\n\n")
+                f.write(result + "\n")
+        except OSError:
+            result_path = None
+
         if len(result) <= max_chars:
             return result
-        return (
-            result[:max_chars]
-            + f"\n...\n[truncated — {len(result)} chars total]"
+
+        truncation_notice = (
+            f"\n...\n[truncated — {len(result)} chars total "
+            f"(~{len(result) // cls.RESULT_CHARS_PER_TOKEN} tokens)]"
         )
+        if result_path:
+            truncation_notice += f"\nFull result saved to: {result_path}"
+        return result[:max_chars] + truncation_notice
 
     def __call__(self, prompt: str, *args: Any, **kwargs: Any) -> str:
         """Run a child RLM loop synchronously and return its Final value.
@@ -507,7 +531,7 @@ class SubOracleCallable:
                 or f"(child timed out after {self.CHILD_TIMEOUT_S:.0f}s)"
             )
 
-        return self._truncate_result(raw_result, self.RESULT_MAX_CHARS)
+        return self._truncate_result(raw_result, self.RESULT_MAX_CHARS, task_hint=prompt)
 
 
 # ---------------------------------------------------------------------------

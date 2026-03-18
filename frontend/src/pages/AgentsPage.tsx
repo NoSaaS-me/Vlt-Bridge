@@ -127,7 +127,7 @@ function AgentsCompositorView({
 export function AgentsPage() {
   const [activeSection, setActiveSection] = useState<NavSection>('agents');
   const { selectedProjectId } = useProjectContext();
-  const polling = useSessionPolling(selectedProjectId);
+  const polling = useSessionPolling(selectedProjectId, activeSection === 'agents');
   const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null);
   const [liveSession, setLiveSession] = useState<AgentSession | null>(null);
 

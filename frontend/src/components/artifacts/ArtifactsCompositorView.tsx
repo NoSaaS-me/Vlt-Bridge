@@ -69,7 +69,7 @@ export function ArtifactsCompositorView({ projectId }: ArtifactsCompositorViewPr
   // ---------------------------------------------------------------------------
 
   const handleCreate = useCallback(
-    async (data: { name: string; description?: string; type: string }) => {
+    async (data: { name: string; description?: string; type: string; template?: string }) => {
       const artifact = await createArtifact({
         ...data,
         project_id: projectId ?? 'default',

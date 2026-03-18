@@ -191,7 +191,7 @@ def _extract_new_vars(local_ns: dict[str, Any], prev_context: dict[str, Any]) ->
 # Eval function factory
 # ---------------------------------------------------------------------------
 
-REPL_TIMEOUT_SECONDS = 30
+REPL_TIMEOUT_SECONDS = 300  # 5 minutes — soft limit, not a crash
 
 
 def make_sandbox_eval(tools: list[Callable]) -> Callable[[str, dict], tuple[str, dict]]:
@@ -211,8 +211,30 @@ def make_sandbox_eval(tools: list[Callable]) -> Callable[[str, dict], tuple[str,
     Returns:
         eval_fn compatible with create_codeact(eval_fn=...).
     """
+    # Mutable timeout override — agent can call set_timeout(seconds) to
+    # increase the limit for the next iteration (one-shot, resets after use).
+    _timeout_override: list[float] = [0]
+
+    def set_timeout(seconds: int) -> str:
+        """Set the REPL timeout for the next code execution.
+
+        Use this before running long operations (e.g. delegate_task, large
+        file processing). The override applies to the NEXT iteration only,
+        then resets to the default (5 minutes).
+
+        Args:
+            seconds: Timeout in seconds (max 600 = 10 minutes).
+
+        Returns:
+            Confirmation message.
+        """
+        clamped = max(10, min(seconds, 600))
+        _timeout_override[0] = clamped
+        return f"Timeout set to {clamped}s for next execution."
+
     # Build tool namespace: {tool.__name__: tool, ...}
     tool_namespace: dict[str, Callable] = {t.__name__: t for t in tools}
+    tool_namespace["set_timeout"] = set_timeout
 
     # Pre-import allowed modules into a shared base namespace
     base_globals: dict[str, Any] = {
@@ -317,14 +339,27 @@ def make_sandbox_eval(tools: list[Callable]) -> Callable[[str, dict], tuple[str,
             finally:
                 sys.stdout = old_stdout
 
+        # Allow the agent to override timeout per-iteration via set_timeout()
+        effective_timeout = _timeout_override[0] if _timeout_override[0] > 0 else REPL_TIMEOUT_SECONDS
+        # Reset override after use (one-shot)
+        _timeout_override[0] = 0
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_run)
             try:
-                future.result(timeout=REPL_TIMEOUT_SECONDS)
+                future.result(timeout=effective_timeout)
             except concurrent.futures.TimeoutError:
-                raise TimeoutError(
-                    f"REPL code execution exceeded {REPL_TIMEOUT_SECONDS}s timeout"
+                # Soft error — return as stdout so the agent can see it and
+                # adjust, instead of crashing the entire LangGraph stream.
+                timeout_msg = (
+                    f"[TIMEOUT] Code execution exceeded {effective_timeout:.0f}s. "
+                    f"Use set_timeout(seconds) before your next code block to increase "
+                    f"the limit, or break the work into smaller steps."
                 )
+                partial_output = stdout_capture.getvalue()
+                if partial_output:
+                    partial_output += "\n"
+                return partial_output + timeout_msg, {}
 
         output = stdout_capture.getvalue()
         # Only extract new vars if execution succeeded — don't persist

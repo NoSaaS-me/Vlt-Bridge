@@ -31,6 +31,7 @@ class CreateArtifactRequest(BaseModel):
     description: Optional[str] = None
     type: str = "ephemeral"
     project_id: str = "default"
+    template: Optional[str] = None
 
 
 class UpdateArtifactRequest(BaseModel):
@@ -81,10 +82,17 @@ def create_artifact(req: CreateArtifactRequest):
             name=req.name,
             description=req.description,
             artifact_type=req.type,
+            template=req.template,
         )
         return artifact
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/templates")
+def list_templates():
+    """List available artifact templates."""
+    return svc.list_templates()
 
 
 @router.get("")
@@ -580,13 +588,37 @@ async def proxy_connector_call(artifact_id: str, req: ConnectorCallRequest):
     manifest = artifact.get("manifest") or {}
     declared_connectors = manifest.get("connectors")
     if declared_connectors is not None:
-        if req.connector not in declared_connectors:
+        # Support both list-of-str and list-of-dict formats
+        allowed = any(
+            (entry == req.connector if isinstance(entry, str)
+             else entry.get("connector") == req.connector)
+            for entry in declared_connectors
+        )
+        if not allowed:
             raise HTTPException(
                 status_code=403,
                 detail=f"Connector '{req.connector}' is not declared in this artifact's manifest.connectors",
             )
 
-    # Resolve backend URL and auth token from vlt settings
+    # Try local vlt-connectors registry first (AI model connectors live here)
+    try:
+        from vlt_connectors.registry import get_registry
+        registry = get_registry()
+        connector_obj = registry.get_action(req.connector)
+        if connector_obj:
+            credentials = _resolve_connector_credentials(req.connector, req.instance_id)
+            log.info(f"Invoking connector '{req.connector}' action '{req.action}' locally (keys: {list(credentials.keys())})")
+            result = await connector_obj.invoke(req.action, req.params, credentials)
+            return result
+        else:
+            log.debug(f"Connector '{req.connector}' not found in local registry, falling through to backend")
+    except ImportError as e:
+        log.debug(f"vlt_connectors not available: {e}")
+    except Exception as e:
+        log.error(f"Local connector '{req.connector}' error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Connector '{req.connector}' error: {e}")
+
+    # Fall back to backend proxy for connectors registered there
     settings = get_settings()
     vault_url = getattr(settings, "vault_url", None) or getattr(settings, "sync_url", None)
     sync_token = getattr(settings, "sync_token", None)
@@ -617,3 +649,53 @@ async def proxy_connector_call(artifact_id: str, req: ConnectorCallRequest):
         raise HTTPException(status_code=resp.status_code, detail=resp.text[:400])
 
     return resp.json()
+
+
+def _resolve_connector_credentials(connector_name: str, instance_id: str = "default") -> dict:
+    """Resolve API credentials for a connector from user settings or connector_configs."""
+    import sqlite3
+
+    credentials = {}
+
+    # Try user_settings table in backend DB for known AI provider keys
+    key_mapping = {
+        "openrouter": "openrouter_api_key",
+        "zai": "glm_api_key",
+        "zai_vision": "glm_api_key",
+        "elevenlabs": "elevenlabs_api_key",
+    }
+    settings_key = key_mapping.get(connector_name)
+    if settings_key:
+        try:
+            # Backend DB is at data/index.db
+            from pathlib import Path
+            db_path = Path("/mnt/sda1/Projects/00Tooling/Vlt-Bridge/data/index.db")
+            if db_path.exists():
+                conn = sqlite3.connect(str(db_path))
+                cursor = conn.execute(f"SELECT {settings_key} FROM user_settings LIMIT 1")
+                row = cursor.fetchone()
+                if row and row[0]:
+                    credentials["api_key"] = row[0]
+                conn.close()
+        except Exception as e:
+            log.debug(f"Could not read {settings_key} from user_settings: {e}")
+
+    # Also check connector_configs table in daemon DB
+    if not credentials.get("api_key"):
+        try:
+            from vlt.config import settings as vlt_settings
+            db_path = vlt_settings.get_db_path()
+            conn = sqlite3.connect(db_path)
+            cursor = conn.execute(
+                "SELECT config_key, config_value FROM connector_configs "
+                "WHERE connector_name = ? AND instance_id = ?",
+                (connector_name, instance_id),
+            )
+            for key, value in cursor.fetchall():
+                if not key.startswith("__"):
+                    credentials[key] = value
+            conn.close()
+        except Exception:
+            pass
+
+    return credentials

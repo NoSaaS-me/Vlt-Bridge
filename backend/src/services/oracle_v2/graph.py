@@ -141,6 +141,7 @@ def build_oracle_graph(
     from .sandbox import make_sandbox_eval
     from .state import OracleState
     from .prompt import ORACLE_V2_SYSTEM_PROMPT
+    from langgraph_codeact import create_default_prompt
 
     # Use MemorySaver fallback if no checkpointer provided
     effective_checkpointer = checkpointer
@@ -156,11 +157,23 @@ def build_oracle_graph(
 
     eval_fn = make_sandbox_eval(tools)
 
+    # Build prompt: default CodeAct prompt (includes tool signatures + code
+    # instruction) with our Oracle identity/principles prepended.
+    # create_default_prompt needs StructuredTool objects, same conversion
+    # that create_codeact does internally (line 23 of langgraph_codeact).
+    from langchain_core.tools import StructuredTool
+    from langchain_core.tools import tool as create_tool
+    structured_tools = [
+        t if isinstance(t, StructuredTool) else create_tool(t)
+        for t in tools
+    ]
+    codeact_prompt = create_default_prompt(structured_tools, base_prompt=ORACLE_V2_SYSTEM_PROMPT)
+
     graph = create_codeact(
         model=model,
         tools=tools,
         eval_fn=eval_fn,
-        prompt=ORACLE_V2_SYSTEM_PROMPT,
+        prompt=codeact_prompt,
         state_schema=OracleState,
     )
 

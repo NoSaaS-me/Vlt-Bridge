@@ -342,8 +342,8 @@ async def query_oracle_stream(
                 if chunk.type == "content" and chunk.content:
                     answer_parts.append(chunk.content)
                 elif chunk.type == "done":
-                    # Persist Q&A turn to context tree, get back new node ID
-                    new_context_id = _save_oracle_turn_to_tree(
+                    # Persist Q&A turn to context tree (for history UI)
+                    tree_node_id = _save_oracle_turn_to_tree(
                         tree_service=tree_service,
                         settings_service=settings_service,
                         user_id=auth.user_id,
@@ -353,11 +353,19 @@ async def query_oracle_stream(
                         parent_context_id=request.context_id,
                         model_used=model_used_final,
                     )
-                    # Emit done chunk with context_id so frontend can continue the thread
+                    # CRITICAL: context_id must be the LangGraph thread_id
+                    # (from oracle_to_sse's done chunk), NOT the context tree
+                    # node ID. The frontend sends this back on the next turn
+                    # and the wrapper uses it as the LangGraph thread_id for
+                    # checkpoint loading. Using the tree node ID breaks
+                    # multi-turn because no checkpoint exists for it.
+                    done_metadata = dict(chunk.metadata or {})
+                    if tree_node_id:
+                        done_metadata["tree_node_id"] = tree_node_id
                     done_chunk = OracleStreamChunk(
                         type="done",
-                        context_id=new_context_id,
-                        metadata=chunk.metadata,
+                        context_id=chunk.context_id,  # LangGraph thread_id
+                        metadata=done_metadata,
                     )
                     yield json.dumps(done_chunk.model_dump(exclude_none=True))
                     continue

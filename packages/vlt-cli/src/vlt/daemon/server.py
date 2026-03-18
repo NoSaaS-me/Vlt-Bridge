@@ -271,17 +271,21 @@ state = DaemonState()
 # =============================================================================
 
 async def check_backend_connection():
-    """Check if we can connect to the backend."""
-    if not state.http_client:
-        state.backend_connected = False
-        return
+    """Check if we can connect to the backend.
 
+    Uses a short-lived client to avoid holding a persistent TCP connection
+    to the frontend/backend port. A persistent connection causes the daemon
+    to appear in `lsof -ti tcp:5173`, which makes stop-dev.sh kill the daemon
+    when restarting the frontend.
+    """
     try:
-        response = await state.http_client.get(
-            f"{state.vault_url}/health",
-            timeout=5.0
-        )
-        state.backend_connected = response.status_code == 200
+        import httpx as _httpx
+        async with _httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{state.vault_url}/health",
+                timeout=5.0,
+            )
+            state.backend_connected = response.status_code == 200
     except Exception as e:
         logger.debug(f"Backend health check failed: {e}")
         state.backend_connected = False

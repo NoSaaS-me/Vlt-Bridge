@@ -223,5 +223,11 @@ def test_delegate_task_toolkit_exclusion():
 # ---------------------------------------------------------------------------
 
 def test_delegate_result_truncation_constant():
-    from backend.src.services.oracle_v2.tools.meta_tools import DELEGATE_RESULT_MAX_CHARS
-    assert DELEGATE_RESULT_MAX_CHARS == 2000
+    from backend.src.services.oracle_v2.tools.meta_tools import (
+        DELEGATE_RESULT_MAX_CHARS,
+        DELEGATE_RESULT_MAX_TOKENS,
+        DELEGATE_RESULT_CHARS_PER_TOKEN,
+    )
+    assert DELEGATE_RESULT_MAX_TOKENS == 2000
+    assert DELEGATE_RESULT_CHARS_PER_TOKEN == 4
+    assert DELEGATE_RESULT_MAX_CHARS == 8000  # 2000 tokens * 4 chars/token

@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Content Factory</title>
+  <!-- Auto-injected by harness: <script src="/vlt-bridge.js"></script> -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f172a;
+      --card:      #1e293b;
+      --border:    #334155;
+      --text:      #e2e8f0;
+      --muted:     #94a3b8;
+      --accent:    #38bdf8;
+      --accent-d:  #0284c7;
+      --success:   #22c55e;
+      --error:     #ef4444;
+      --warning:   #f59e0b;
+      --radius:    8px;
+      --font:      'Inter', system-ui, -apple-system, sans-serif;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Layout ──────────────────────────────────────── */
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Header */
+    #header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #header h1 {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    #state-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    #state-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      transition: background 0.3s;
+    }
+    #state-dot.busy  { background: var(--warning); }
+    #state-dot.error { background: var(--error); }
+
+    /* Main panels */
+    #main {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      gap: 0;
+    }
+
+    /* Left panel */
+    #panel-left {
+      width: 280px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+    }
+    #panel-left-header {
+      padding: 10px 14px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #stages-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #left-footer {
+      padding: 10px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    /* Right panel */
+    #panel-right {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #panel-right-header {
+      padding: 10px 14px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #preview-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* Bottom queue */
+    #panel-bottom {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+    }
+    #panel-bottom-header {
+      padding: 8px 14px 4px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    #queue-row {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 6px 14px 10px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    #queue-row::-webkit-scrollbar { height: 4px; }
+    #queue-row::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Stage Cards ─────────────────────────────────── */
+    .stage-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px;
+    }
+    .stage-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .stage-type-tag {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #1d4ed8;
+      color: #bfdbfe;
+    }
+    .stage-type-tag.review { background: #065f46; color: #a7f3d0; }
+    .btn-remove-stage {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 0 2px;
+      transition: color 0.15s;
+    }
+    .btn-remove-stage:hover { color: var(--error); }
+
+    /* ── Form Controls ───────────────────────────────── */
+    label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 3px;
+    }
+    input[type="text"],
+    input[type="number"],
+    textarea,
+    select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      padding: 5px 8px;
+      font-size: 13px;
+      font-family: var(--font);
+      outline: none;
+      resize: vertical;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    textarea:focus,
+    select:focus { border-color: var(--accent); }
+    textarea { min-height: 70px; }
+
+    .form-row { margin-bottom: 8px; }
+    .form-row:last-child { margin-bottom: 0; }
+
+    /* Slider */
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .slider-row input[type="range"] {
+      flex: 1;
+      accent-color: var(--accent);
+      height: auto;
+      padding: 0;
+      border: none;
+      background: none;
+      cursor: pointer;
+    }
+    .slider-val {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      min-width: 30px;
+      text-align: right;
+    }
+
+    /* ── Buttons ─────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: var(--font);
+      padding: 7px 14px;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+    .btn-primary  { background: var(--accent);   color: #0c1a2e; }
+    .btn-success  { background: var(--success);  color: #0c1a2e; }
+    .btn-danger   { background: var(--error);    color: #fff; }
+    .btn-ghost    { background: var(--border);   color: var(--text); }
+    .btn-outline  { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn-sm       { padding: 4px 10px; font-size: 12px; }
+    .btn-full     { width: 100%; }
+
+    /* Add stage dropdown wrapper */
+    #add-stage-wrap { position: relative; }
+    #add-stage-menu {
+      position: absolute;
+      bottom: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      z-index: 10;
+      display: none;
+    }
+    #add-stage-menu.open { display: block; }
+    .add-stage-option {
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.1s;
+    }
+    .add-stage-option:hover { background: var(--border); }
+
+    /* ── Preview panel ───────────────────────────────── */
+    #preview-placeholder {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+      gap: 6px;
+    }
+
+    #preview-content {
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #preview-content.visible { display: flex; }
+
+    .preview-output {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 13px;
+      line-height: 1.65;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+
+    /* Quality bar */
+    .quality-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .quality-bar-bg {
+      flex: 1;
+      height: 8px;
+      background: var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .quality-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.4s, background 0.4s;
+    }
+    .quality-score {
+      font-size: 13px;
+      font-weight: 700;
+      min-width: 36px;
+      text-align: right;
+    }
+    .quality-label {
+      font-size: 11px;
+      color: var(--muted);
+      min-width: 52px;
+    }
+
+    .cost-line {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .cost-line span { color: var(--text); font-weight: 600; }
+
+    /* Approve/Reject row */
+    .action-row {
+      display: flex;
+      gap: 8px;
+    }
+    .action-row .btn { flex: 1; }
+
+    /* History nav */
+    .history-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .history-nav .btn { padding: 4px 10px; font-size: 12px; }
+
+    /* Spinner */
+    #spinner {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 24px;
+      color: var(--muted);
+    }
+    #spinner.visible { display: flex; }
+    .spin {
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Error box */
+    .error-box {
+      background: #450a0a;
+      border: 1px solid var(--error);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      color: #fca5a5;
+      font-size: 13px;
+    }
+
+    /* ── Queue Cards ─────────────────────────────────── */
+    .queue-card {
+      flex-shrink: 0;
+      width: 160px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .queue-card:hover { border-color: var(--accent); }
+    .queue-card.active { border-color: var(--accent); }
+    .queue-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .queue-badge.approved { color: var(--success); }
+    .queue-badge.rejected { color: var(--error); }
+    .queue-badge.pending  { color: var(--warning); }
+    .queue-badge.generating { color: var(--accent); }
+    .queue-badge.auto     { color: #a78bfa; }
+    .queue-snippet {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .queue-time {
+      font-size: 10px;
+      color: #475569;
+      margin-top: 4px;
+    }
+    #queue-empty {
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      padding: 6px 0;
+    }
+
+    /* Topic input row */
+    #topic-row {
+      display: flex;
+      gap: 6px;
+    }
+    #topic-row input { flex: 1; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ── -->
+  <div id="header">
+    <h1>⚙ Content Factory</h1>
+    <div id="state-badge">
+      <div id="state-dot"></div>
+      <span id="state-label">Ready</span>
+    </div>
+  </div>
+
+  <!-- ── Main panels ── -->
+  <div id="main">
+
+    <!-- Left: Pipeline Config -->
+    <div id="panel-left">
+      <div id="panel-left-header">Pipeline Config</div>
+      <div id="stages-list">
+        <!-- Stage cards injected here -->
+        <div id="stages-empty" style="color:var(--muted);font-size:12px;padding:8px 0;">
+          No stages yet. Add one below.
+        </div>
+      </div>
+      <div id="left-footer">
+        <div id="topic-row">
+          <input type="text" id="test-topic" placeholder="Test topic…" />
+        </div>
+        <button class="btn btn-primary btn-full" id="btn-test" onclick="runTest()">
+          🧪 Test Pipeline
+        </button>
+        <div id="add-stage-wrap">
+          <button class="btn btn-outline btn-full btn-sm" onclick="toggleAddMenu()">
+            + Add Stage
+          </button>
+          <div id="add-stage-menu">
+            <div class="add-stage-option" onclick="addStage('text_generation')">📝 Text Generation</div>
+            <div class="add-stage-option" onclick="addStage('text_review')">🔍 Text Review</div>
+            <div class="add-stage-option" onclick="addStage('image_generation')">🖼 Image Generation</div>
+            <div class="add-stage-option" onclick="addStage('vision_review')">👁 Vision Review</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Preview -->
+    <div id="panel-right">
+      <div id="panel-right-header">Preview / Test</div>
+      <div id="preview-area">
+
+        <div id="preview-placeholder">
+          <span>Click <strong>Test</strong> to generate content</span>
+        </div>
+
+        <div id="spinner">
+          <div class="spin"></div>
+          <span>Generating…</span>
+        </div>
+
+        <div id="preview-content">
+          <div id="error-display" class="error-box" style="display:none;"></div>
+          <div class="preview-output" id="output-text"></div>
+
+          <div class="quality-row">
+            <span class="quality-label">Quality</span>
+            <div class="quality-bar-bg">
+              <div class="quality-bar-fill" id="quality-fill" style="width:0%"></div>
+            </div>
+            <span class="quality-score" id="quality-score">–</span>
+          </div>
+
+          <div id="feedback-line" style="font-size:12px;color:var(--muted);padding:2px 0 6px;display:none;"></div>
+          <div class="cost-line">Cost: <span id="cost-display">$0.000</span></div>
+
+          <div class="action-row">
+            <button class="btn btn-success" id="btn-approve" onclick="approveResult()">✅ Approve</button>
+            <button class="btn btn-danger"  id="btn-reject"  onclick="rejectResult()">❌ Reject</button>
+          </div>
+
+          <div class="history-nav">
+            <button class="btn btn-ghost btn-sm" id="btn-prev" onclick="navHistory(-1)">◀ prev</button>
+            <span id="history-counter">Attempt 1 of 1</span>
+            <button class="btn btn-ghost btn-sm" id="btn-next" onclick="navHistory(1)">next ▶</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Bottom: Queue ── -->
+  <div id="panel-bottom">
+    <div id="panel-bottom-header">Content Queue</div>
+    <div id="queue-row">
+      <div id="queue-empty" class="queue-empty">No items yet</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────────────────────
+const state = {
+  stages: [],       // Array of stage config objects
+  history: [],      // Test results for current session
+  historyIdx: 0,    // Current position in history
+  queue: [],        // Content queue items
+  busy: false,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VltBridge wrapper — gracefully degrades when bridge not available
+// ─────────────────────────────────────────────────────────────────────────────
+const Bridge = {
+  async call(action, params = {}) {
+    if (window.VltBridge?.backend?.call) {
+      return await window.VltBridge.backend.call(action, params);
+    }
+    console.warn('[ContentFactory] VltBridge not available, action:', action, params);
+    // Return plausible mock data for development
+    if (action === 'get_config')   return { stages: defaultStages() };
+    if (action === 'get_queue')    return { items: [] };
+    if (action === 'test')         return mockTestResult(params.topic || 'Demo');
+    return {};
+  },
+  async storageGet(key) {
+    if (window.VltBridge?.storage?.get) return await window.VltBridge.storage.get(key);
+    return null;
+  },
+  async storageSet(key, value) {
+    if (window.VltBridge?.storage?.set) return await window.VltBridge.storage.set(key, value);
+  },
+  log(msg) {
+    if (window.VltBridge?.artifact?.log) window.VltBridge.artifact.log(msg);
+    else console.log('[ContentFactory]', msg);
+  },
+};
+
+function mockTestResult(topic) {
+  const score = 7.5 + Math.random() * 2;
+  return {
+    text: `[Mock] This is a generated article about "${topic}".\n\nLorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.`,
+    score: parseFloat(score.toFixed(1)),
+    cost_usd: 0.003,
+    item_id: 'cnt_' + Math.random().toString(36).slice(2, 9),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOM helpers
+// ─────────────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function setState(label, mode) {
+  $('state-label').textContent = label;
+  const dot = $('state-dot');
+  dot.className = mode === 'busy' ? 'busy' : mode === 'error' ? 'error' : '';
+}
+
+function setBusy(busy) {
+  state.busy = busy;
+  $('btn-test').disabled = busy;
+  setState(busy ? 'Generating…' : 'Ready', busy ? 'busy' : '');
+  $('spinner').className = busy ? 'visible' : '';
+  if (busy) {
+    $('preview-placeholder').style.display = 'none';
+    $('preview-content').classList.remove('visible');
+    $('error-display').style.display = 'none';
+  }
+}
+
+function showError(msg) {
+  $('preview-placeholder').style.display = 'none';
+  $('preview-content').classList.add('visible');
+  $('error-display').style.display = 'block';
+  $('error-display').textContent = '⚠ ' + msg;
+  $('output-text').textContent = '';
+  setState('Error', 'error');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stage management
+// ─────────────────────────────────────────────────────────────────────────────
+function defaultStages() {
+  return [
+    {
+      id: 'text_gen',
+      type: 'text_generation',
+      connector: 'openrouter',
+      model: 'anthropic/claude-sonnet-4',
+      prompt_file: 'prompts/blog_voice.md',
+      system_prompt: '',
+      temperature: 0.7,
+      max_tokens: 4096,
+    },
+    {
+      id: 'text_review',
+      type: 'text_review',
+      connector: 'openrouter',
+      model: 'anthropic/claude-haiku-4',
+      review_prompt_file: 'prompts/review_criteria.md',
+      criteria: 'engagement, clarity, accuracy, actionability',
+      auto_approve_threshold: 7.5,
+    },
+  ];
+}
+
+function stageDefaults(type) {
+  const base = { id: type + '_' + Math.random().toString(36).slice(2, 6), type, connector: 'openrouter' };
+  if (type === 'text_generation') {
+    return { ...base, model: 'anthropic/claude-sonnet-4', system_prompt: '', temperature: 0.7, max_tokens: 2000 };
+  }
+  if (type === 'text_review') {
+    return { ...base, model: 'anthropic/claude-haiku-4', criteria: 'engagement, clarity, accuracy', auto_approve_threshold: 8.5 };
+  }
+  if (type === 'image_generation') {
+    return { ...base, connector: 'huggingface', model: 'black-forest-labs/FLUX.1-schnell', prompt_template: '' };
+  }
+  if (type === 'vision_review') {
+    return { ...base, connector: 'zai_vision', model: 'glm-4.6v', criteria: 'quality, relevance' };
+  }
+  return base;
+}
+
+function addStage(type) {
+  state.stages.push(stageDefaults(type));
+  renderStages();
+  toggleAddMenu(false);
+  syncConfig();
+}
+
+function removeStage(idx) {
+  state.stages.splice(idx, 1);
+  renderStages();
+  syncConfig();
+}
+
+function renderStages() {
+  const list = $('stages-list');
+  list.innerHTML = '';
+
+  if (state.stages.length === 0) {
+    list.innerHTML = '<div id="stages-empty" style="color:var(--muted);font-size:12px;padding:8px 0;">No stages yet. Add one below.</div>';
+    return;
+  }
+
+  state.stages.forEach((stage, idx) => {
+    const card = document.createElement('div');
+    card.className = 'stage-card';
+    card.innerHTML = stageCardHTML(stage, idx);
+    list.appendChild(card);
+  });
+}
+
+function stageCardHTML(stage, idx) {
+  const tagClass = stage.type.includes('review') ? 'review' : '';
+  const label = {
+    text_generation: 'Text Gen',
+    text_review: 'Text Review',
+    image_generation: 'Image Gen',
+    vision_review: 'Vision Review',
+  }[stage.type] || stage.type;
+
+  const connectorOptions = ['openrouter', 'zai', 'gemini', 'huggingface', 'elevenlabs', 'custom_openai', 'zai_vision']
+    .map(c => `<option value="${c}" ${stage.connector === c ? 'selected' : ''}>${c}</option>`)
+    .join('');
+
+  let fields = `
+    <div class="form-row">
+      <label>Provider</label>
+      <select onchange="updateStage(${idx},'connector',this.value)" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 8px;font-size:13px;width:100%;">
+        ${connectorOptions}
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Model</label>
+      <input type="text" value="${esc(stage.model || '')}" oninput="updateStage(${idx},'model',this.value)" />
+    </div>`;
+
+  if (stage.type === 'text_generation') {
+    fields += `
+    <div class="form-row">
+      <label>System Prompt</label>
+      <textarea oninput="updateStage(${idx},'system_prompt',this.value)">${esc(stage.system_prompt || '')}</textarea>
+    </div>
+    <label>Temperature</label>
+    <div class="slider-row">
+      <input type="range" min="0" max="1" step="0.05" value="${stage.temperature ?? 0.7}"
+             oninput="updateStage(${idx},'temperature',parseFloat(this.value));this.nextElementSibling.textContent=parseFloat(this.value).toFixed(2)" />
+      <span class="slider-val">${(stage.temperature ?? 0.7).toFixed(2)}</span>
+    </div>
+    <div class="form-row">
+      <label>Max Tokens</label>
+      <input type="number" min="100" max="8000" step="100" value="${stage.max_tokens ?? 2000}"
+             oninput="updateStage(${idx},'max_tokens',parseInt(this.value))" />
+    </div>`;
+  }
+
+  if (stage.type === 'text_review') {
+    fields += `
+    <div class="form-row">
+      <label>Criteria</label>
+      <textarea oninput="updateStage(${idx},'criteria',this.value)">${esc(stage.criteria || '')}</textarea>
+    </div>
+    <label>Auto-Approve Threshold (0–10)</label>
+    <div class="slider-row">
+      <input type="range" min="0" max="10" step="0.5" value="${stage.auto_approve_threshold ?? 8.5}"
+             oninput="updateStage(${idx},'auto_approve_threshold',parseFloat(this.value));this.nextElementSibling.textContent=parseFloat(this.value).toFixed(1)" />
+      <span class="slider-val">${(stage.auto_approve_threshold ?? 8.5).toFixed(1)}</span>
+    </div>`;
+  }
+
+  if (stage.type === 'image_generation') {
+    fields += `
+    <div class="form-row">
+      <label>Prompt Template</label>
+      <textarea oninput="updateStage(${idx},'prompt_template',this.value)">${esc(stage.prompt_template || '')}</textarea>
+    </div>`;
+  }
+
+  if (stage.type === 'vision_review') {
+    fields += `
+    <div class="form-row">
+      <label>Criteria</label>
+      <textarea oninput="updateStage(${idx},'criteria',this.value)">${esc(stage.criteria || '')}</textarea>
+    </div>`;
+  }
+
+  return `
+    <div class="stage-card-header">
+      <span class="stage-type-tag ${tagClass}">${label}</span>
+      <button class="btn-remove-stage" onclick="removeStage(${idx})" title="Remove stage">×</button>
+    </div>
+    ${fields}`;
+}
+
+function updateStage(idx, key, value) {
+  state.stages[idx][key] = value;
+  syncConfig();
+}
+
+function esc(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Add-stage dropdown
+// ─────────────────────────────────────────────────────────────────────────────
+function toggleAddMenu(force) {
+  const menu = $('add-stage-menu');
+  const open = typeof force === 'boolean' ? force : !menu.classList.contains('open');
+  menu.classList.toggle('open', open);
+}
+document.addEventListener('click', e => {
+  if (!$('add-stage-wrap').contains(e.target)) toggleAddMenu(false);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test pipeline
+// ─────────────────────────────────────────────────────────────────────────────
+async function runTest() {
+  if (state.busy) return;
+  const topic = $('test-topic').value.trim() || 'AI trends';
+  setBusy(true);
+  Bridge.log('Running test: ' + topic);
+  try {
+    const result = await Bridge.call('test', { topic, stages: state.stages });
+    const entry = {
+      topic,
+      text:     result.text || result.content || '',
+      score:    typeof result.score === 'number' ? result.score : null,
+      feedback: result.feedback || '',
+      cost_usd: result.cost_usd || 0,
+      item_id:  result.run_id || result.item_id || null,
+      ts:       Date.now(),
+    };
+    state.history.push(entry);
+    state.historyIdx = state.history.length - 1;
+    renderPreview();
+    setBusy(false);
+  } catch (err) {
+    setBusy(false);
+    showError(err.message || String(err));
+    Bridge.log('Test error: ' + err.message);
+  }
+}
+
+function renderPreview() {
+  const entry = state.history[state.historyIdx];
+  if (!entry) return;
+
+  $('preview-placeholder').style.display = 'none';
+  $('error-display').style.display = 'none';
+  $('preview-content').classList.add('visible');
+
+  $('output-text').textContent = entry.text;
+
+  // Quality bar
+  const score = entry.score;
+  if (score !== null && score !== undefined) {
+    const pct = Math.min(100, (score / 10) * 100);
+    const fill = $('quality-fill');
+    fill.style.width = pct + '%';
+    fill.style.background = score < 5 ? 'var(--error)' : score < 7 ? 'var(--warning)' : 'var(--success)';
+    $('quality-score').textContent = score.toFixed(1);
+  } else {
+    $('quality-fill').style.width = '0%';
+    $('quality-score').textContent = '–';
+  }
+
+  // Feedback from review stage
+  const feedbackEl = $('feedback-line');
+  if (entry.feedback) {
+    feedbackEl.textContent = '💬 ' + entry.feedback;
+    feedbackEl.style.display = 'block';
+  } else {
+    feedbackEl.style.display = 'none';
+  }
+
+  $('cost-display').textContent = entry.cost_usd ? '$' + entry.cost_usd.toFixed(4) : '$0.0000';
+
+  // History nav
+  const total = state.history.length;
+  const cur   = state.historyIdx + 1;
+  $('history-counter').textContent = `Attempt ${cur} of ${total}`;
+  $('btn-prev').disabled = state.historyIdx <= 0;
+  $('btn-next').disabled = state.historyIdx >= total - 1;
+}
+
+function navHistory(dir) {
+  const next = state.historyIdx + dir;
+  if (next < 0 || next >= state.history.length) return;
+  state.historyIdx = next;
+  renderPreview();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Approve / Reject
+// ─────────────────────────────────────────────────────────────────────────────
+async function approveResult() {
+  const entry = state.history[state.historyIdx];
+  if (!entry) return;
+  try {
+    await Bridge.call('approve', { item_id: entry.item_id, text: entry.text });
+    Bridge.log('Approved: ' + entry.item_id);
+    addToQueue({ ...entry, status: 'approved' });
+  } catch (err) {
+    showError('Approve failed: ' + (err.message || err));
+  }
+}
+
+async function rejectResult() {
+  const entry = state.history[state.historyIdx];
+  if (!entry) return;
+  try {
+    await Bridge.call('reject', { item_id: entry.item_id });
+    Bridge.log('Rejected: ' + entry.item_id);
+    addToQueue({ ...entry, status: 'rejected' });
+  } catch (err) {
+    showError('Reject failed: ' + (err.message || err));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Content queue
+// ─────────────────────────────────────────────────────────────────────────────
+function addToQueue(item) {
+  // Replace existing or push
+  const existing = state.queue.findIndex(q => q.item_id === item.item_id);
+  if (existing >= 0) state.queue[existing] = item;
+  else state.queue.unshift(item);
+  renderQueue();
+}
+
+function renderQueue() {
+  const row = $('queue-row');
+  row.innerHTML = '';
+
+  if (state.queue.length === 0) {
+    row.innerHTML = '<div id="queue-empty" style="color:var(--muted);font-size:12px;display:flex;align-items:center;">No items yet</div>';
+    return;
+  }
+
+  state.queue.forEach((item, idx) => {
+    const card = document.createElement('div');
+    card.className = 'queue-card';
+    card.onclick = () => selectQueueItem(idx);
+
+    const statusMap = {
+      approved:   { cls: 'approved',   icon: '✅', label: 'Approved' },
+      rejected:   { cls: 'rejected',   icon: '❌', label: 'Rejected' },
+      pending:    { cls: 'pending',    icon: '⏳', label: 'Pending' },
+      generating: { cls: 'generating', icon: '🔄', label: 'Generating' },
+      auto:       { cls: 'auto',       icon: '⚡', label: 'Auto-approved' },
+    };
+    const st = statusMap[item.status] || statusMap.pending;
+    const snippet = (item.text || '').slice(0, 90) + ((item.text || '').length > 90 ? '…' : '');
+    const time = item.ts ? new Date(item.ts).toLocaleTimeString() : '';
+
+    card.innerHTML = `
+      <div class="queue-badge ${st.cls}">${st.icon} ${st.label}</div>
+      <div class="queue-snippet">${esc(snippet) || '(empty)'}</div>
+      <div class="queue-time">${time}</div>`;
+
+    row.appendChild(card);
+  });
+}
+
+function selectQueueItem(idx) {
+  const item = state.queue[idx];
+  if (!item) return;
+  // Show in preview
+  $('preview-placeholder').style.display = 'none';
+  $('error-display').style.display = 'none';
+  $('preview-content').classList.add('visible');
+  $('output-text').textContent = item.text || '';
+  $('cost-display').textContent = item.cost_usd ? '$' + item.cost_usd.toFixed(4) : '–';
+
+  const score = item.score;
+  if (score !== null && score !== undefined) {
+    const pct = Math.min(100, (score / 10) * 100);
+    $('quality-fill').style.width = pct + '%';
+    $('quality-fill').style.background = score < 5 ? 'var(--error)' : score < 7 ? 'var(--warning)' : 'var(--success)';
+    $('quality-score').textContent = score.toFixed(1);
+  }
+
+  // Mark active
+  document.querySelectorAll('.queue-card').forEach((c, i) => c.classList.toggle('active', i === idx));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sync config to backend
+// ─────────────────────────────────────────────────────────────────────────────
+let syncTimer = null;
+function syncConfig() {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(async () => {
+    try {
+      await Bridge.call('update_config', { stages: state.stages });
+    } catch (err) {
+      console.warn('[ContentFactory] config sync failed:', err.message);
+    }
+  }, 800);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────────────────────────────────────
+async function init() {
+  setState('Loading…', 'busy');
+  try {
+    // Load config
+    const config = await Bridge.call('get_config', {});
+    state.stages = (config && config.stages) ? config.stages : defaultStages();
+    renderStages();
+
+    // Load queue
+    try {
+      const qData = await Bridge.call('get_queue', {});
+      state.queue = (qData && qData.items) ? qData.items : [];
+      renderQueue();
+    } catch (_) {
+      renderQueue();
+    }
+
+    setState('Ready', '');
+  } catch (err) {
+    state.stages = defaultStages();
+    renderStages();
+    renderQueue();
+    setState('Ready (offline)', '');
+    console.warn('[ContentFactory] init error:', err.message);
+  }
+}
+
+// Kick off after DOM ready, give VltBridge time to inject
+window.addEventListener('load', () => setTimeout(init, 150));
+</script>
+</body>
+</html>

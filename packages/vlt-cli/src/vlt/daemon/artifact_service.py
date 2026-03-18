@@ -12,7 +12,7 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from sqlalchemy.orm import Session
 
@@ -32,23 +32,63 @@ DEFAULT_MANIFEST = {
     "tests": None,
 }
 
-# Artifact backend processes: artifact_id -> {proc, cwd, reader_task}
+# Artifact backend processes:
+#   artifact_id -> {proc, cwd, restart_count, reader_task, pending_responses, manifest}
+#
+# pending_responses: req_id -> asyncio.Future
+#   call_backend() registers a Future here before writing to stdin.
+#   _backend_stdout_reader() resolves it when the matching response arrives.
 _artifact_processes: dict[str, dict] = {}
 
 
-def _artifacts_base_dir() -> Path:
-    """Get the base directory for artifact storage."""
-    from vlt.config import settings
-    # Store artifacts alongside the vault DB
-    db_path = Path(settings.get_db_path())
-    base = db_path.parent / "artifacts"
-    base.mkdir(parents=True, exist_ok=True)
+def _get_vault_base() -> Path:
+    """Get the vault base directory (where user vaults live)."""
+    # Try backend's VAULT_BASE_PATH first, fall back to default
+    vault_base = Path("/mnt/sda1/Projects/00Tooling/Vlt-Bridge/data/vaults")
+    if not vault_base.exists():
+        from vlt.config import settings
+        db_path = Path(settings.get_db_path())
+        vault_base = db_path.parent / "vaults"
+    vault_base.mkdir(parents=True, exist_ok=True)
+    return vault_base
+
+
+def _get_artifact_dir(user_id: str, artifact_id: str, project_id: str = "default", name: str = "") -> Path:
+    """Get the disk path for an artifact inside the user's vault.
+
+    Structure: data/vaults/{user_id}/{project_id}/Artifacts/{name}_{id}/
+    This makes artifacts visible in the main vault file browser.
+    """
+    # Sanitize name for filesystem
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "" for c in (name or "")).strip().replace(" ", "-")
+    folder_name = f"{safe_name}_{artifact_id}" if safe_name else artifact_id
+
+    base = _get_vault_base() / user_id / project_id / "Artifacts" / folder_name
     return base
 
 
-def _get_artifact_dir(user_id: str, artifact_id: str) -> Path:
-    """Get the disk path for an artifact."""
-    return _artifacts_base_dir() / user_id / artifact_id
+def _get_templates_dir() -> Path:
+    """Get the directory containing artifact templates."""
+    return Path(__file__).parent / "artifact_templates"
+
+
+def list_templates() -> list[dict]:
+    """List available artifact templates."""
+    templates_dir = _get_templates_dir()
+    if not templates_dir.exists():
+        return []
+    result = []
+    for d in sorted(templates_dir.iterdir()):
+        if d.is_dir() and (d / "manifest.json").exists():
+            manifest = json.loads((d / "manifest.json").read_text())
+            result.append({
+                "name": d.name,
+                "description": manifest.get("description", d.name.replace("_", " ").title()),
+                "has_backend": manifest.get("backend") is not None,
+                "connectors": [c.get("connector", c) if isinstance(c, dict) else c
+                               for c in manifest.get("connectors", [])],
+            })
+    return result
 
 
 def create_artifact(
@@ -57,36 +97,66 @@ def create_artifact(
     name: str,
     description: str | None = None,
     artifact_type: str = "ephemeral",
+    template: str | None = None,
 ) -> dict:
     """Create a new artifact with directory structure and git init."""
     artifact_id = str(uuid.uuid4())[:8]
-    disk_path = _get_artifact_dir(user_id, artifact_id)
+    disk_path = _get_artifact_dir(user_id, artifact_id, project_id=project_id, name=name)
 
-    # Create directory structure
-    (disk_path / "frontend").mkdir(parents=True, exist_ok=True)
-    (disk_path / "backend").mkdir(parents=True, exist_ok=True)
-    (disk_path / "tests").mkdir(parents=True, exist_ok=True)
-    (disk_path / ".vlt" / "storage").mkdir(parents=True, exist_ok=True)
-    (disk_path / ".vlt" / "screenshots").mkdir(parents=True, exist_ok=True)
+    # Check for template
+    template_dir = None
+    if template:
+        template_dir = _get_templates_dir() / template
+        if not template_dir.exists() or not (template_dir / "manifest.json").exists():
+            raise ValueError(f"Template '{template}' not found")
 
-    # Write default index.html
-    (disk_path / "frontend" / "index.html").write_text(
-        "<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"utf-8\">\n"
-        "  <title>{name}</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n"
-        "</head>\n<body>\n  <h1>{name}</h1>\n  <p>Edit this file to get started.</p>\n"
-        "  <script src=\"app.js\"></script>\n</body>\n</html>\n".format(name=name)
-    )
-    (disk_path / "frontend" / "style.css").write_text(
-        "body { font-family: system-ui, sans-serif; padding: 1rem; }\n"
-    )
-    (disk_path / "frontend" / "app.js").write_text(
-        "// VltBridge is auto-injected. Use VltBridge.storage, VltBridge.notes, etc.\n"
-        "console.log('Artifact loaded:', document.title);\n"
-    )
+    if template_dir:
+        # Copy entire template to artifact dir
+        shutil.copytree(str(template_dir), str(disk_path))
+        # Ensure .vlt directories exist
+        (disk_path / ".vlt" / "storage" / "content").mkdir(parents=True, exist_ok=True)
+        (disk_path / ".vlt" / "screenshots").mkdir(parents=True, exist_ok=True)
+        (disk_path / ".vlt" / "costs").mkdir(parents=True, exist_ok=True)
+        # Read manifest from template
+        manifest = json.loads((disk_path / "manifest.json").read_text())
+    else:
+        # Create default directory structure
+        (disk_path / "frontend").mkdir(parents=True, exist_ok=True)
+        (disk_path / "backend").mkdir(parents=True, exist_ok=True)
+        (disk_path / "tests").mkdir(parents=True, exist_ok=True)
+        (disk_path / ".vlt" / "storage").mkdir(parents=True, exist_ok=True)
+        (disk_path / ".vlt" / "screenshots").mkdir(parents=True, exist_ok=True)
 
-    # Write manifest
-    manifest = {**DEFAULT_MANIFEST}
+        # Write default index.html
+        (disk_path / "frontend" / "index.html").write_text(
+            "<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"utf-8\">\n"
+            "  <title>{name}</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n"
+            "</head>\n<body>\n  <h1>{name}</h1>\n  <p>Edit this file to get started.</p>\n"
+            "  <script src=\"app.js\"></script>\n</body>\n</html>\n".format(name=name)
+        )
+        (disk_path / "frontend" / "style.css").write_text(
+            "body { font-family: system-ui, sans-serif; padding: 1rem; }\n"
+        )
+        (disk_path / "frontend" / "app.js").write_text(
+            "// VltBridge is auto-injected. Use VltBridge.storage, VltBridge.notes, etc.\n"
+            "console.log('Artifact loaded:', document.title);\n"
+        )
+        manifest = {**DEFAULT_MANIFEST}
+
+    # Write manifest (potentially overwritten with template values)
     (disk_path / "manifest.json").write_text(json.dumps(manifest, indent=2))
+
+    # Write README.md so the vault file browser picks up this directory
+    readme = f"# {name}\n\n{description or 'Artifact'}\n\n"
+    readme += f"- **Type**: {artifact_type}\n"
+    readme += f"- **ID**: {artifact_id}\n"
+    readme += f"- **Created**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+    if manifest.get("pipeline"):
+        stages = manifest["pipeline"].get("stages", [])
+        readme += f"- **Pipeline**: {len(stages)} stages\n"
+        for s in stages:
+            readme += f"  - {s.get('type', '?')} ({s.get('connector', '?')}/{s.get('model', '?')})\n"
+    (disk_path / "README.md").write_text(readme)
 
     # Git init
     try:
@@ -332,9 +402,11 @@ async def start_backend(artifact_id: str) -> dict:
         "proc": proc,
         "cwd": str(backend_dir),
         "restart_count": 0,
+        "pending_responses": {},  # req_id -> asyncio.Future
+        "manifest": manifest,
     }
 
-    # Start reader task
+    # Start reader task — sole consumer of proc.stdout
     reader_task = asyncio.create_task(_backend_stdout_reader(artifact_id, proc))
     _artifact_processes[artifact_id]["reader_task"] = reader_task
 
@@ -366,26 +438,52 @@ async def stop_backend(artifact_id: str, save_state: bool = False) -> dict:
     return {"status": "stopped"}
 
 
-async def call_backend(artifact_id: str, action: str, params: dict) -> dict:
-    """Send a request to the artifact backend and wait for response."""
+async def _send_to_backend(artifact_id: str, data: dict) -> None:
+    """Write a JSON line to the backend's stdin.
+
+    Used by both call_backend() and the harness dispatcher to send replies to
+    backend-initiated connector/storage calls.
+    """
+    proc_info = _artifact_processes.get(artifact_id)
+    if not proc_info:
+        raise ValueError(f"Backend not running for artifact {artifact_id}")
+    proc = proc_info["proc"]
+    if proc.returncode is not None:
+        raise ValueError(f"Backend process exited for artifact {artifact_id}")
+    line = json.dumps(data) + "\n"
+    proc.stdin.write(line.encode())
+    await proc.stdin.drain()
+
+
+async def call_backend(artifact_id: str, action: str, params: dict, timeout: float = 30.0) -> dict:
+    """Send a request to the artifact backend and await the response.
+
+    Uses an ID-based Future so that _backend_stdout_reader() is the SOLE reader
+    of proc.stdout.  No direct readline() here — the reader resolves our Future
+    when the matching response line arrives.
+    """
     if artifact_id not in _artifact_processes:
         raise ValueError(f"Backend not running for artifact {artifact_id}")
 
-    proc = _artifact_processes[artifact_id]["proc"]
+    proc_info = _artifact_processes[artifact_id]
+    proc = proc_info["proc"]
     if proc.returncode is not None:
         raise ValueError(f"Backend process exited for artifact {artifact_id}")
 
-    request = json.dumps({"action": action, "params": params}) + "\n"
-    proc.stdin.write(request.encode())
-    await proc.stdin.drain()
+    req_id = uuid.uuid4().hex[:8]
+    loop = asyncio.get_event_loop()
+    future: asyncio.Future = loop.create_future()
+    proc_info["pending_responses"][req_id] = future
 
     try:
-        line = await asyncio.wait_for(proc.stdout.readline(), timeout=30)
-        if not line:
-            raise ValueError("Backend process closed stdout")
-        return json.loads(line.decode())
-    except asyncio.TimeoutError:
-        raise ValueError("Backend call timed out after 30s")
+        await _send_to_backend(artifact_id, {"id": req_id, "action": action, "params": params})
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise ValueError(f"Backend call '{action}' timed out after {timeout}s")
+    finally:
+        # Always clean up the pending entry regardless of success/failure/cancel
+        proc_info["pending_responses"].pop(req_id, None)
 
 
 def _register_event_subscriptions(artifact_id: str, manifest: dict):
@@ -469,29 +567,139 @@ async def _request_state_save(artifact_id: str):
 
 
 async def _backend_stdout_reader(artifact_id: str, proc):
-    """Read backend stdout and handle responses."""
+    """Sole reader of the backend process stdout.
+
+    Dispatches each line to one of:
+      - pending_responses Future  (lines with "id" matching a call_backend() request)
+      - harness_dispatcher        (lines with "_type" — backend-initiated calls/events)
+      - log handler               (lines with "log" key or plain text)
+
+    This eliminates the race condition where call_backend() and this reader
+    competed for the same readline().
+    """
     try:
         while True:
             line = await proc.stdout.readline()
             if not line:
                 break
-            # Log stderr-like output but don't parse as JSON
+
+            raw = line.decode().strip()
+            if not raw:
+                continue
+
+            # Parse JSON
             try:
-                data = json.loads(line.decode())
-                # Response messages are handled by call_backend's readline
-                # Here we just log non-response output
-                if "log" in data:
-                    log.info(f"Artifact {artifact_id}: {data['log']}")
+                data = json.loads(raw)
             except json.JSONDecodeError:
-                log.debug(f"Artifact {artifact_id} stdout: {line.decode().strip()}")
+                log.debug(f"Artifact {artifact_id} non-JSON stdout: {raw}")
+                continue
+
+            # ------------------------------------------------------------------
+            # 1. Backend-initiated outbound message (_type field present)
+            # ------------------------------------------------------------------
+            msg_type = data.get("_type")
+            if msg_type:
+                if msg_type == "log":
+                    level = data.get("level", "info")
+                    getattr(log, level, log.info)(
+                        f"Artifact {artifact_id}: {data.get('message', raw)}"
+                    )
+                elif msg_type in ("event", "notification"):
+                    log.debug(f"Artifact {artifact_id} {msg_type}: {raw}")
+                    # Forward to WS clients if routing is set up
+                    try:
+                        from vlt.daemon.artifact_routes import broadcast_events
+                        await broadcast_events(artifact_id, data)
+                    except Exception as e:
+                        log.debug(f"Event broadcast skipped for {artifact_id}: {e}")
+                else:
+                    # connector_call, storage, or custom — delegate to dispatcher
+                    try:
+                        from vlt.daemon.harness_dispatcher import dispatch_backend_message
+                        await dispatch_backend_message(artifact_id, data, _send_to_backend)
+                    except ImportError:
+                        log.warning(
+                            f"harness_dispatcher not available — dropping {msg_type} "
+                            f"from {artifact_id}"
+                        )
+                    except Exception as e:
+                        log.error(
+                            f"Dispatcher error for {artifact_id} ({msg_type}): {e}"
+                        )
+                continue
+
+            # ------------------------------------------------------------------
+            # 2. Response to a call_backend() request (has "id" field)
+            # ------------------------------------------------------------------
+            resp_id = data.get("id")
+            if resp_id:
+                proc_info = _artifact_processes.get(artifact_id)
+                if proc_info:
+                    future = proc_info["pending_responses"].get(resp_id)
+                    if future and not future.done():
+                        future.set_result(data)
+                        continue
+                    elif future:
+                        log.warning(
+                            f"Artifact {artifact_id}: received response for already-done "
+                            f"request id={resp_id}"
+                        )
+                        continue
+                # Unknown id — fall through to log
+                log.debug(f"Artifact {artifact_id}: unmatched response id={resp_id}")
+                continue
+
+            # ------------------------------------------------------------------
+            # 2b. Skip harness startup "ready" signal — not a response to any request
+            # ------------------------------------------------------------------
+            if data.get("status") == "ready" and len(data) == 1:
+                log.info(f"Artifact {artifact_id} backend ready")
+                continue
+
+            # ------------------------------------------------------------------
+            # 3. Legacy response without id (backwards compatibility)
+            #    Try to match to the oldest pending Future, if any.
+            # ------------------------------------------------------------------
+            proc_info = _artifact_processes.get(artifact_id)
+            if proc_info:
+                pending = proc_info["pending_responses"]
+                if pending:
+                    # Resolve the oldest pending request (FIFO)
+                    oldest_id = next(iter(pending))
+                    future = pending[oldest_id]
+                    if not future.done():
+                        log.debug(
+                            f"Artifact {artifact_id}: legacy (no-id) response matched to "
+                            f"oldest pending id={oldest_id}"
+                        )
+                        future.set_result(data)
+                        continue
+
+            # ------------------------------------------------------------------
+            # 4. Diagnostic / log messages
+            # ------------------------------------------------------------------
+            if "log" in data:
+                log.info(f"Artifact {artifact_id}: {data['log']}")
+            else:
+                log.debug(f"Artifact {artifact_id} stdout (unrouted): {raw}")
+
     except asyncio.CancelledError:
         pass
     except Exception as e:
         log.error(f"Backend reader error for {artifact_id}: {e}")
     finally:
+        # Fail all pending futures so callers don't hang indefinitely
+        proc_info = _artifact_processes.get(artifact_id)
+        if proc_info:
+            for req_id, future in list(proc_info.get("pending_responses", {}).items()):
+                if not future.done():
+                    future.set_exception(
+                        ValueError(f"Backend process for {artifact_id} exited unexpectedly")
+                    )
+            proc_info["pending_responses"].clear()
+
         if artifact_id in _artifact_processes:
-            proc_info = _artifact_processes.get(artifact_id, {})
-            restart_count = proc_info.get("restart_count", 0)
+            restart_count = (proc_info or {}).get("restart_count", 0)
 
             # Auto-restart if appropriate
             artifact = get_artifact(artifact_id)
@@ -500,7 +708,7 @@ async def _backend_stdout_reader(artifact_id: str, proc):
                 _artifact_processes.pop(artifact_id, None)
                 await asyncio.sleep(2)
                 try:
-                    result = await start_backend(artifact_id)
+                    await start_backend(artifact_id)
                     _artifact_processes[artifact_id]["restart_count"] = restart_count + 1
                 except Exception as e:
                     log.error(f"Auto-restart failed for {artifact_id}: {e}")
