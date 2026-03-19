@@ -75,6 +75,10 @@ The Cognitive Loop: Manage reasoning streams.
 
 Use these commands to Create (new), Log (push), Resume (read), and Recall (seek)
 your train of thought. This is your primary interface for interacting with the Vault.
+
+Project context: Most commands need a project_id. If vlt.toml exists in your
+working directory, thread new will auto-detect it. You can also pass --project/-p
+explicitly. Use 'vlt overview' or 'vlt thread seek' to explore existing threads.
 """
 
 app = typer.Typer(name="vlt", help=APP_HELP, no_args_is_help=True)

@@ -98,7 +98,11 @@ def register_meta_tools(mcp) -> None:
     def vlt_project_detect(
         path: Optional[str] = None,
     ) -> dict:
-        """Detect vlt project context from a directory path.
+        """Detect the current project_id from the working directory.
+
+        CALL THIS FIRST before using any tool that takes a project_id
+        (vlt_thread_create, vlt_thread_list, vlt_thread_seek, vlt_code_*,
+        vlt_oracle_query, etc.).
 
         Walks up the directory tree from ``path`` (defaults to cwd) looking
         for a ``vlt.toml`` file. If found, reads the project_id and checks

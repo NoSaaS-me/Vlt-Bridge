@@ -35,8 +35,12 @@ def register_thread_tools(mcp) -> None:
         The thread ID is derived from ``name`` (lowercased, spaces → hyphens).
         Auto-creates the project if it does not exist — always safe to call.
 
+        TIP: Don't know the project_id? Call vlt_project_detect() first —
+        it reads vlt.toml from your working directory and returns the slug.
+
         Args:
             project_id: Project identifier slug (e.g. "my-project"). Created if new.
+                        Use vlt_project_detect() to find this from cwd.
             name: Thread name. Becomes the thread_id slug (e.g. "Auth Design" → "auth-design").
             initial_thought: First entry written into the new thread.
             author: Author label for the initial node (default: "agent").
@@ -195,9 +199,13 @@ def register_thread_tools(mcp) -> None:
         The ``search_mode`` field in the response tells you which strategy
         was used, so you know if results may be incomplete.
 
+        TIP: Pass project_id to scope results to the current project.
+        Use vlt_project_detect() to get it from cwd.
+
         Args:
             query: Natural language or keyword search query.
-            project_id: Scope search to a specific project (optional).
+            project_id: Scope search to a specific project (recommended).
+                        Use vlt_project_detect() to find this from cwd.
             limit: Maximum number of results. Default: 10.
 
         Returns:
@@ -280,9 +288,14 @@ def register_thread_tools(mcp) -> None:
     ) -> dict:
         """List vlt threads, optionally filtered by project.
 
+        WARNING: Omitting project_id returns threads from ALL projects, which
+        can be very large. Always pass project_id to scope results.
+        Use vlt_project_detect() to get the current project_id from cwd.
+
         Args:
-            project_id: Filter to this project slug (optional).
-                        Lists threads across all projects if omitted.
+            project_id: Filter to this project slug. STRONGLY RECOMMENDED.
+                        Use vlt_project_detect() to find this from cwd.
+                        Lists threads across ALL projects if omitted (can be 100+).
 
         Returns:
             {status, project_id, threads: [{id, project_id, status, created_at, node_count}]}

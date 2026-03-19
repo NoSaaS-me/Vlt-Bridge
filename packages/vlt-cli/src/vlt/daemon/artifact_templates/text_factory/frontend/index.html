@@ -504,6 +504,20 @@
           No stages yet. Add one below.
         </div>
       </div>
+      <!-- Outputs config -->
+      <div id="outputs-section">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);padding:8px 0 4px;border-top:1px solid var(--border);margin-top:6px;">Output Destinations</div>
+        <div id="outputs-list"></div>
+        <div id="add-output-wrap" style="position:relative;">
+          <button class="btn btn-outline btn-full btn-sm" onclick="toggleOutputMenu()">+ Add Output</button>
+          <div id="add-output-menu" class="add-stage-menu">
+            <div class="add-stage-option" onclick="addOutput('vault_note')">📓 Vault Note</div>
+            <div class="add-stage-option" onclick="addOutput('file_save')">💾 File Save</div>
+            <div class="add-stage-option" onclick="addOutput('connector_publish')">🔗 Connector Publish</div>
+          </div>
+        </div>
+      </div>
+
       <div id="left-footer">
         <div id="topic-row">
           <input type="text" id="test-topic" placeholder="Test topic…" />
@@ -587,6 +601,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 const state = {
   stages: [],       // Array of stage config objects
+  outputs: [],      // Array of output destination configs
   history: [],      // Test results for current session
   historyIdx: 0,    // Current position in history
   queue: [],        // Content queue items
@@ -869,7 +884,131 @@ function toggleAddMenu(force) {
 }
 document.addEventListener('click', e => {
   if (!$('add-stage-wrap').contains(e.target)) toggleAddMenu(false);
+  if (!$('add-output-wrap').contains(e.target)) toggleOutputMenu(false);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Output destination management
+// ─────────────────────────────────────────────────────────────────────────────
+function toggleOutputMenu(force) {
+  const menu = $('add-output-menu');
+  const open = typeof force === 'boolean' ? force : !menu.classList.contains('open');
+  menu.classList.toggle('open', open);
+}
+
+function outputDefaults(type) {
+  const base = { id: type + '_' + Math.random().toString(36).slice(2, 6), type };
+  if (type === 'vault_note') {
+    return { ...base, folder: 'ContentForge/{{date}}', title: '{{topic}}', include_metadata: true, embed_images: true };
+  }
+  if (type === 'file_save') {
+    return { ...base, output_dir: 'outputs/{{date}}', filename: '{{slug}}', format: 'md', include_metadata: true, save_images: true };
+  }
+  if (type === 'connector_publish') {
+    return { ...base, connector: 'custom_openai', action: 'generate_text', params: { model: '', prompt: '{{content}}' } };
+  }
+  return base;
+}
+
+function addOutput(type) {
+  state.outputs.push(outputDefaults(type));
+  renderOutputs();
+  toggleOutputMenu(false);
+  syncConfig();
+}
+
+function removeOutput(idx) {
+  state.outputs.splice(idx, 1);
+  renderOutputs();
+  syncConfig();
+}
+
+function updateOutput(idx, key, value) {
+  // Handle nested params
+  if (key.startsWith('params.')) {
+    const paramKey = key.slice(7);
+    state.outputs[idx].params = state.outputs[idx].params || {};
+    state.outputs[idx].params[paramKey] = value;
+  } else {
+    state.outputs[idx][key] = value;
+  }
+  syncConfig();
+}
+
+function renderOutputs() {
+  const list = $('outputs-list');
+  list.innerHTML = '';
+  if (state.outputs.length === 0) {
+    list.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:4px 0;">No outputs configured.</div>';
+    return;
+  }
+  state.outputs.forEach((output, idx) => {
+    const card = document.createElement('div');
+    card.className = 'stage-card';
+    card.innerHTML = outputCardHTML(output, idx);
+    list.appendChild(card);
+  });
+}
+
+function outputCardHTML(output, idx) {
+  const labels = { vault_note: '📓 Vault Note', file_save: '💾 File Save', connector_publish: '🔗 Connector' };
+  const tagColors = { vault_note: 'background:#1e3a5f;color:#93c5fd;', file_save: 'background:#3f3713;color:#fde68a;', connector_publish: 'background:#3b1f47;color:#d8b4fe;' };
+  const label = labels[output.type] || output.type;
+  const tagStyle = tagColors[output.type] || '';
+
+  let fields = '';
+
+  if (output.type === 'vault_note') {
+    fields = `
+    <div class="form-row"><label>Folder</label>
+      <input type="text" value="${esc(output.folder || '')}" oninput="updateOutput(${idx},'folder',this.value)" placeholder="ContentForge/{{date}}" /></div>
+    <div class="form-row"><label>Title</label>
+      <input type="text" value="${esc(output.title || '')}" oninput="updateOutput(${idx},'title',this.value)" placeholder="{{topic}}" /></div>
+    <div class="form-row" style="display:flex;gap:12px;">
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="checkbox" ${output.include_metadata ? 'checked' : ''} onchange="updateOutput(${idx},'include_metadata',this.checked)" /> Metadata</label>
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="checkbox" ${output.embed_images ? 'checked' : ''} onchange="updateOutput(${idx},'embed_images',this.checked)" /> Embed images</label>
+    </div>`;
+  }
+
+  if (output.type === 'file_save') {
+    fields = `
+    <div class="form-row"><label>Directory</label>
+      <input type="text" value="${esc(output.output_dir || '')}" oninput="updateOutput(${idx},'output_dir',this.value)" placeholder="outputs/{{date}}" /></div>
+    <div class="form-row"><label>Filename</label>
+      <input type="text" value="${esc(output.filename || '')}" oninput="updateOutput(${idx},'filename',this.value)" placeholder="{{slug}}" /></div>
+    <div class="form-row"><label>Format</label>
+      <select onchange="updateOutput(${idx},'format',this.value)" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 8px;font-size:13px;width:100%;">
+        ${['md','txt','html','json'].map(f => `<option value="${f}" ${output.format === f ? 'selected' : ''}>${f}</option>`).join('')}
+      </select></div>
+    <div class="form-row" style="display:flex;gap:12px;">
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="checkbox" ${output.include_metadata ? 'checked' : ''} onchange="updateOutput(${idx},'include_metadata',this.checked)" /> Metadata .json</label>
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="checkbox" ${output.save_images ? 'checked' : ''} onchange="updateOutput(${idx},'save_images',this.checked)" /> Save images</label>
+    </div>`;
+  }
+
+  if (output.type === 'connector_publish') {
+    const connectorOptions = ['openrouter', 'zai', 'custom_openai', 'zai_vision']
+      .map(c => `<option value="${c}" ${output.connector === c ? 'selected' : ''}>${c}</option>`)
+      .join('');
+    const paramsStr = output.params ? JSON.stringify(output.params, null, 2) : '{}';
+    fields = `
+    <div class="form-row"><label>Connector</label>
+      <select onchange="updateOutput(${idx},'connector',this.value)" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 8px;font-size:13px;width:100%;">
+        ${connectorOptions}
+      </select></div>
+    <div class="form-row"><label>Action</label>
+      <input type="text" value="${esc(output.action || '')}" oninput="updateOutput(${idx},'action',this.value)" placeholder="generate_text" /></div>
+    <div class="form-row"><label>Params (JSON, use {{content}} {{topic}} {{image}})</label>
+      <textarea style="min-height:60px;font-family:monospace;font-size:11px;" oninput="try{updateOutput(${idx},'params',JSON.parse(this.value))}catch(e){}">${esc(paramsStr)}</textarea></div>`;
+  }
+
+  return `
+    <div class="stage-card-header">
+      <span class="stage-type-tag" style="${tagStyle}">${label}</span>
+      <button class="btn-remove-stage" onclick="removeOutput(${idx})" title="Remove output">×</button>
+    </div>
+    ${fields}`;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test pipeline
@@ -957,9 +1096,20 @@ async function approveResult() {
   const entry = state.history[state.historyIdx];
   if (!entry) return;
   try {
-    await Bridge.call('approve', { item_id: entry.item_id, text: entry.text });
+    const result = await Bridge.call('approve', { item_id: entry.item_id, text: entry.text });
     Bridge.log('Approved: ' + entry.item_id);
-    addToQueue({ ...entry, status: 'approved' });
+    const outputResults = result?.output_results || [];
+    addToQueue({ ...entry, status: 'approved', output_results: outputResults });
+    // Show output results
+    if (outputResults.length > 0) {
+      const succeeded = outputResults.filter(r => r.success).length;
+      const failed = outputResults.length - succeeded;
+      const msg = `Outputs: ${succeeded} succeeded` + (failed ? `, ${failed} failed` : '');
+      const feedbackEl = $('feedback-line');
+      feedbackEl.textContent = '📤 ' + msg;
+      feedbackEl.style.display = 'block';
+      feedbackEl.style.color = failed ? 'var(--warning)' : 'var(--success)';
+    }
   } catch (err) {
     showError('Approve failed: ' + (err.message || err));
   }
@@ -1052,7 +1202,7 @@ function syncConfig() {
   clearTimeout(syncTimer);
   syncTimer = setTimeout(async () => {
     try {
-      await Bridge.call('update_config', { stages: state.stages });
+      await Bridge.call('update_config', { stages: state.stages, outputs: state.outputs });
     } catch (err) {
       console.warn('[ContentFactory] config sync failed:', err.message);
     }
@@ -1068,7 +1218,9 @@ async function init() {
     // Load config
     const config = await Bridge.call('get_config', {});
     state.stages = (config && config.stages) ? config.stages : defaultStages();
+    state.outputs = (config && config.outputs) ? config.outputs : [];
     renderStages();
+    renderOutputs();
 
     // Load queue
     try {
@@ -1082,7 +1234,9 @@ async function init() {
     setState('Ready', '');
   } catch (err) {
     state.stages = defaultStages();
+    state.outputs = [];
     renderStages();
+    renderOutputs();
     renderQueue();
     setState('Ready (offline)', '');
     console.warn('[ContentFactory] init error:', err.message);

@@ -67,7 +67,7 @@ def _estimate_cost(stages: dict) -> float:
 # Public API
 # ---------------------------------------------------------------------------
 
-def add_item(stages_result: dict) -> dict:
+def add_item(stages_result: dict, topic: str = "") -> dict:
     """Create a new content item from pipeline stage results.
 
     Status is set to 'auto_approved' if the last QC stage auto-approved,
@@ -75,6 +75,7 @@ def add_item(stages_result: dict) -> dict:
 
     Args:
         stages_result: Dict of stage_id → stage result from execute_pipeline().
+        topic:         Original topic string (preserved for output routing).
 
     Returns:
         The created content item dict.
@@ -86,6 +87,7 @@ def add_item(stages_result: dict) -> dict:
 
     item: dict = {
         "id": item_id,
+        "topic": topic,
         "pipeline_version": 1,
         "stages": stages_result,
         "status": status,
@@ -93,6 +95,7 @@ def add_item(stages_result: dict) -> dict:
         "approved_at": None,
         "rejected_at": None,
         "reject_reason": None,
+        "output_results": None,
         "total_cost_usd": _estimate_cost(stages_result),
     }
     _write_item(item)

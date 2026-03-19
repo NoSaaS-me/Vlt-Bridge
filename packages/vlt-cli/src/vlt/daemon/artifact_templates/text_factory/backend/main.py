@@ -69,6 +69,7 @@ def _default_pipeline_config() -> dict:
     return {
         "version": 1,
         "stages": [],
+        "outputs": [],
         "cost_limits": {
             "per_item_usd": 0.10,
             "daily_usd": 5.00,
@@ -136,6 +137,8 @@ def _handle_update_config(params: dict) -> dict:
     config = _get_config()
     if "stages" in params:
         config["stages"] = params["stages"]
+    if "outputs" in params:
+        config["outputs"] = params["outputs"]
     if "cost_limits" in params:
         config["cost_limits"].update(params["cost_limits"])
     if "auto_approve_threshold" in params:
@@ -201,7 +204,11 @@ def _handle_test(params: dict) -> dict:
 
 
 def _handle_generate(params: dict) -> dict:
-    """Run pipeline and add result to content queue."""
+    """Run pipeline and add result to content queue.
+
+    If the content is auto-approved by the review stage, outputs fire
+    immediately (vault_note, file_save, connector_publish).
+    """
     from pipeline import execute_pipeline  # type: ignore[import]
     from queue import add_item  # type: ignore[import]
 
@@ -210,17 +217,45 @@ def _handle_generate(params: dict) -> dict:
     stages = params.get("stages") or config.get("stages", [])
 
     stage_results = execute_pipeline(stages, topic=topic)
-    item = add_item(stage_results)
+    item = add_item(stage_results, topic=topic)
 
-    return {"item": item, "stages": stage_results}
+    result: dict = {"item": item, "stages": stage_results}
+
+    # Fire outputs if auto-approved
+    if item.get("status") == "auto_approved":
+        output_results = _fire_outputs(config, stage_results, topic, item)
+        item["output_results"] = output_results
+        result["output_results"] = output_results
+        # Persist updated item with output results
+        from queue import _write_item  # type: ignore[import]
+        _write_item(item)
+        _emit_approved_event(item, topic, output_results)
+
+    return result
 
 
 def _handle_approve(params: dict) -> dict:
-    from queue import approve_item  # type: ignore[import]
+    """Manually approve a queue item and fire configured outputs."""
+    from queue import approve_item, get_item, _write_item  # type: ignore[import]
+
     item_id = params.get("item_id", "")
     if not item_id:
         raise ValueError("item_id is required")
-    return {"item": approve_item(item_id)}
+
+    item = approve_item(item_id)
+
+    # Fire outputs
+    config = _get_config()
+    stages = item.get("stages", {})
+    # Recover topic from item or params
+    topic = params.get("topic", "") or item.get("topic", "")
+
+    output_results = _fire_outputs(config, stages, topic, item)
+    item["output_results"] = output_results
+    _write_item(item)
+    _emit_approved_event(item, topic, output_results)
+
+    return {"item": item, "output_results": output_results}
 
 
 def _handle_reject(params: dict) -> dict:
@@ -294,6 +329,43 @@ def _handle_run_runbook(params: dict) -> dict:
     stages = runbook_config.get("stages", [])
 
     return _handle_generate({"topic": topic, "stages": stages})
+
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+def _fire_outputs(config: dict, stages: dict, topic: str, item: dict) -> list[dict]:
+    """Execute all configured outputs. Returns list of output results."""
+    outputs_config = config.get("outputs", [])
+    if not outputs_config:
+        return []
+
+    from outputs import execute_outputs  # type: ignore[import]
+    metadata = {
+        "item_id": item.get("id", ""),
+        "pipeline_version": item.get("pipeline_version", 1),
+    }
+    return execute_outputs(outputs_config, stages, topic=topic, metadata=metadata)
+
+
+def _emit_approved_event(item: dict, topic: str, output_results: list[dict]) -> None:
+    """Emit content.approved event via stdout for the harness event bus."""
+    import sys as _sys
+    payload = {
+        "item_id": item.get("id", ""),
+        "topic": topic,
+        "status": item.get("status", "approved"),
+        "output_count": len(output_results),
+        "outputs_succeeded": sum(1 for r in output_results if r.get("success")),
+        "outputs_failed": sum(1 for r in output_results if not r.get("success")),
+    }
+    _sys.stdout.write(json.dumps({
+        "_type": "event",
+        "event_type": "content.approved",
+        "payload": payload,
+    }) + "\n")
+    _sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------

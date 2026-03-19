@@ -277,6 +277,13 @@ def artifact_call(
         console.print(f"[cyan]Pipeline:[/cyan] {len(stages)} stages")
         for s in stages:
             console.print(f"  {s.get('id', '?')}: {s.get('type', '?')} → {s.get('connector', '?')}/{s.get('model', '?')}")
+        outputs = result.get("outputs", [])
+        if outputs:
+            console.print(f"[cyan]Outputs:[/cyan] {len(outputs)} destinations")
+            for o in outputs:
+                label = o.get("type", "?")
+                detail = o.get("folder", o.get("output_dir", o.get("connector", "")))
+                console.print(f"  {label}: {detail}")
 
     elif action == "test":
         text = result.get("text", "")

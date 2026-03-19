@@ -35,8 +35,10 @@ def create_server():
             "VLT: Persistent cognitive state, code intelligence, and documentation for AI agents.\n\n"
 
             "QUICK START:\n"
-            "1. Call vlt_status — see projects, daemon status, backend health.\n"
-            "2. Call vlt_project_detect — auto-detect project from working directory.\n\n"
+            "1. Call vlt_project_detect — auto-detect project_id from working directory.\n"
+            "   IMPORTANT: Most tools require a project_id. Call this FIRST to get it.\n"
+            "   It reads vlt.toml from the cwd and returns the project_id slug.\n"
+            "2. Call vlt_status — see projects, daemon status, backend health.\n\n"
 
             "TOOL GROUPS & WORKFLOWS:\n\n"
 
@@ -44,7 +46,9 @@ def create_server():
             "  vlt_thread_create → vlt_thread_push → vlt_thread_read\n"
             "  Push is <50ms — use liberally to offload context.\n"
             "  vlt_thread_seek searches across all threads (semantic + keyword fallback).\n"
-            "  vlt_thread_list shows all threads in a project.\n\n"
+            "  vlt_thread_list shows all threads in a project.\n"
+            "  NOTE: vlt_thread_create and vlt_thread_list need a project_id.\n"
+            "  Call vlt_project_detect first to get it from the working directory.\n\n"
 
             "CODE INTELLIGENCE:\n"
             "  vlt_code_init(project_id, path) → indexes a codebase (runs async).\n"

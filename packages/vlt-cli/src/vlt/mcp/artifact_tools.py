@@ -307,17 +307,22 @@ def register_artifact_tools(mcp) -> None:
         "building", then the backend starts automatically; or start it manually).
 
         Common actions for text_factory artifacts:
-            get_config      — returns pipeline stage configuration
-            test            — run the pipeline once on a topic: {"topic": "..."}
-            generate        — run pipeline and add result to content queue
-            update_config   — update pipeline stages: {"stages": [...]}
-            get_queue       — list content queue items
+            get_config      — returns pipeline stages + output destinations config
+            test            — run the pipeline once (preview only, no outputs fired): {"topic": "..."}
+            generate        — run pipeline, add to queue; auto-fires outputs if auto-approved
+            update_config   — update pipeline: {"stages": [...], "outputs": [...]}
+            get_queue       — list content queue items (includes output_results if fired)
             get_history     — list test run history
-            approve         — approve a queue item: {"item_id": "cnt_..."}
+            approve         — approve a queue item AND fire outputs: {"item_id": "cnt_..."}
             reject          — reject a queue item: {"item_id": "cnt_...", "reason": "..."}
             save_runbook    — save current pipeline as named config: {"name": "..."}
             list_runbooks   — list saved runbooks
             run_runbook     — execute a saved runbook: {"name": "...", "topic": "..."}
+
+        Output types (configured in outputs array):
+            vault_note         — save as markdown note with embedded images in vault
+            file_save          — write to artifact's outputs/ directory
+            connector_publish  — push through any connector (API, CMS, etc.)
 
         Args:
             artifact_id: Artifact UUID.
