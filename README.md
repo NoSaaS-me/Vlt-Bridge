@@ -1,6 +1,6 @@
 # Vlt-Bridge
 
-Persistent memory, code intelligence, and documentation platform for AI agents.
+Persistent memory, code intelligence, and runtime platform for AI agents.
 
 ## What it does
 
@@ -10,47 +10,62 @@ Persistent memory, code intelligence, and documentation platform for AI agents.
 - **Oracle** — multi-source Q&A over threads, code, and vault. RLM REPL harness: LLM gets a Python sandbox, writes code to explore, sets `Final` to answer.
 
 **Vault & Web UI**
-- Markdown notes with wikilinks, FTS5 search (BM25, title 3x weight), backlinks, graph view.
-- Split-pane editor with live preview. AI chat (RAG + Gemini). TTS (ElevenLabs).
-- Optimistic concurrency on saves. HF OAuth or local single-user mode.
+- File vault with wikilinks, FTS5 search (BM25, title 3x weight), backlinks, graph view. Stores any file type — markdown, images, PDFs, audio, video — with OCR indexing for search.
+- Split-pane editor with live preview. AI chat (RAG + Gemini). TTS (ElevenLabs). Asset upload with drag-and-drop, inline embedding via `[[embed:file.png]]`.
+
+**Agent Sessions**
+- Niri-style terminal compositor for managing multiple Claude Code sessions side by side.
+- Live session view with bidirectional control (send prompts, see responses in real-time).
+- Hook-based session tracking — Claude Code HTTP hooks (SessionStart, Stop, PreToolUse, etc.) report session state to the daemon automatically.
+- SDK sessions: persistent Claude subprocess that stays alive between messages.
 
 **Daemon (port 8765)**
 - Central hub. Agent session management (Claude Code hooks + SDK subprocess control).
 - Artifact sandbox lifecycle. Connector routing. Cronban scheduling. CodeRAG job queue.
 
 **Artifact Sandboxes**
-- Sandboxed apps: frontend (HTML/JS) + backend (Python) with bidirectional harness protocol.
-- Multi-stage pipelines. Configurable outputs (vault notes, files, connector publish).
-- Templates (e.g. `text_factory`: content generation + review + cleanup).
+- Self-contained apps that run inside the platform. Each artifact has its own frontend (HTML/JS served in an iframe), backend (Python subprocess managed by the daemon), and working directory inside the vault.
+- The daemon provides a bidirectional harness: the backend can initiate calls outward (connector invocations, storage, event emission) via stdout, and receives requests from the frontend via stdin. The frontend talks to the backend through a PostMessage bridge (`VltBridge`) injected into the iframe.
+- Multi-stage pipelines with configurable stage types (text generation, text cleanup, text review, image generation, vision review). Stages chain outputs forward.
+- Configurable output destinations fire on approval: write to vault as notes, save files locally, or publish through connectors.
+- State machine lifecycle: draft → building → testing → reviewing → approved → deployed.
+- Folder sync: `vlt artifact sync` pushes a local directory to an artifact like rsync. `vlt artifact pull` downloads it.
+- Templates: `text_factory` ships a complete content generation pipeline (generate → cleanup → review → output).
 
 **Connectors**
-- Pluggable AI model connectors: OpenRouter, z.ai, z.ai Vision, custom OpenAI-compatible endpoints.
+- Pluggable AI model connectors: OpenRouter, z.ai, z.ai Vision, custom OpenAI-compatible endpoints (vLLM, Ollama, self-hosted).
 - Composio integrations for external services (Gmail, GitHub, etc).
+- Used by artifact backends for LLM calls, and available directly via CLI/MCP.
 
 **Cronban**
-- Schedule recurring prompts into live Claude sessions. 5-field cron expressions.
+- Schedule recurring prompts into live Claude Code sessions. 5-field cron expressions or one-shot timers.
+- Visual kanban board in the web UI for managing scheduled tasks.
+- Can trigger artifact runbooks on a schedule for automated content pipelines.
 
-**MCP**
-- Unified `vlt-mcp` server: threads + code + oracle + vault + connectors + cronban + artifacts as tools.
-
-## Quick start
+## Install
 
 ```bash
-# Web UI + backend
-./start-dev.sh                    # backend :8000, frontend :5173
-
-# CLI
+# From source (dev)
 cd packages/vlt-cli
 pip install -e ".[oracle]"
 vlt profile init
 vlt config set-key <OPENROUTER_KEY>
-
-# MCP (Claude Desktop/Code)
-claude mcp add --scope user vlt vlt-mcp
-
-# Daemon
 vlt daemon start
 ```
+
+CLI is the primary interface. MCP is also available for agents that prefer tool-use over shell:
+
+```bash
+claude mcp add --scope user vlt vlt-mcp
+```
+
+To run the web UI (vault browser, agent compositor, cronban board, artifact viewer):
+
+```bash
+./start-dev.sh    # backend :8000, frontend :5173
+```
+
+> **Future:** `pip install vlt-bridge && vlt setup` — single install that bundles CLI + daemon + connectors + web UI. Not yet published to PyPI.
 
 ## Architecture
 
@@ -69,7 +84,7 @@ flowchart TB
 
   Backend["Backend :8000\n(FastAPI)"]
   Connectors[Connectors]
-  Vault[("Vault\n(markdown + SQLite FTS)")]
+  Vault[("Vault\n(files + SQLite FTS)")]
   ThreadDB[("Thread DB\n(SQLite)")]
 
   CLI --> ThreadDB
@@ -89,13 +104,16 @@ flowchart TB
 
 ```
 Vlt-Bridge/
-├── backend/                # FastAPI — vault CRUD, search, auth, Oracle, RAG, TTS
+├── backend/                # FastAPI — vault CRUD, search, auth, Oracle, RAG, TTS, assets
 │   └── src/
 │       ├── api/            # REST routes + middleware
 │       ├── mcp/            # MCP server (vault tools, STDIO/HTTP)
 │       ├── models/         # Pydantic schemas
-│       └── services/       # vault, indexer, database, rlm_oracle, ans, ...
+│       └── services/       # vault, asset_vault, indexer, rlm_oracle, ans, ...
 ├── frontend/               # React 19, Vite 7, shadcn/ui
+│   └── src/
+│       ├── pages/          # AgentsPage (compositor), ConnectorsPage, ...
+│       └── components/     # agents/, artifacts/, cronban/, ...
 ├── packages/
 │   ├── vlt-cli/            # CLI + daemon + vlt-mcp server
 │   │   └── src/vlt/daemon/ # Daemon: sessions, artifacts, cronban, harness
@@ -118,8 +136,6 @@ Vlt-Bridge/
 | `vlt thread read <id> --search "jwt"` | Filtered read |
 | `vlt thread seek "query"` | Semantic search across all threads |
 | `vlt thread list --project <id>` | List threads in a project |
-| `vlt tag <node-id> "#bug"` | Tag a node |
-| `vlt link <node-id> <thread-id>` | Cross-link nodes |
 
 Use `--author "AgentName"` on `push` for multi-agent attribution.
 
@@ -131,7 +147,6 @@ Use `--author "AgentName"` on `push` for multi-agent attribution.
 | `vlt coderag status --project <id>` | Check indexing progress |
 | `vlt coderag search "query" --project <id>` | Hybrid search |
 | `vlt coderag map --project <id>` | Repo structure overview |
-| `vlt coderag map --project <id> --scope src/api/` | Scoped map |
 
 ### Oracle
 
@@ -149,11 +164,12 @@ Use `--author "AgentName"` on `push` for multi-agent attribution.
 | `vlt artifact list` | List all artifacts |
 | `vlt artifact create <name> --template text_factory` | Create from template |
 | `vlt artifact get <id>` | Inspect artifact details |
-| `vlt artifact sync <id> <folder>` | Push local folder to artifact |
-| `vlt artifact pull <id> <folder>` | Download artifact to local |
-| `vlt artifact call <id> <action> [params_json]` | Run backend action |
+| `vlt artifact files <id>` | List files with sizes and hashes |
+| `vlt artifact sync <id> <folder>` | Push local folder to artifact (delta sync) |
+| `vlt artifact pull <id> <folder>` | Download artifact to local folder |
+| `vlt artifact call <id> <action> [params]` | Run backend action (test, generate, approve, ...) |
 | `vlt artifact start/stop <id>` | Control backend process |
-| `vlt artifact state <id> <state>` | Transition state |
+| `vlt artifact state <id> <state>` | Transition state machine |
 | `vlt artifact templates` | List available templates |
 
 ### Connectors & Cronban
@@ -162,8 +178,8 @@ Use `--author "AgentName"` on `push` for multi-agent attribution.
 |---------|-------------|
 | `vlt connectors list` | Available connectors |
 | `vlt connectors actions <name>` | Connector action schemas |
-| `vlt cron sessions` | List live Claude sessions |
-| `vlt cron add <title> <expr> <prompt> --session <id>` | Schedule a prompt |
+| `vlt cron sessions` | List live Claude Code sessions |
+| `vlt cron add <title> <expr> <prompt> --session <id>` | Schedule recurring prompt |
 | `vlt cron list` | Show active schedules |
 | `vlt cron pause/resume/delete <id>` | Manage schedules |
 
@@ -185,8 +201,6 @@ Source of truth: [backend/src/services/config.py](backend/src/services/config.py
 | `VAULT_BASE_PATH` | no | `./data/vaults` | Per-user vault root |
 | `ENABLE_LOCAL_MODE` | no | `true` | Single-user local mode |
 | `LOCAL_USER_ID` | no | `local-dev` | User ID in local mode |
-| `HF_OAUTH_CLIENT_ID` | space | -- | HF OAuth client ID |
-| `HF_OAUTH_CLIENT_SECRET` | space | -- | HF OAuth client secret |
 | `GOOGLE_API_KEY` | no | -- | Gemini for RAG / AI chat |
 | `ELEVENLABS_API_KEY` | no | -- | TTS |
 | `ELEVENLABS_VOICE_ID` | no | -- | ElevenLabs voice |
@@ -201,4 +215,4 @@ docker build -t vlt-bridge .
 docker run -p 7860:7860 -e JWT_SECRET_KEY="dev-secret" vlt-bridge
 ```
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for HF Spaces setup, OAuth config, and secrets.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for production setup.
