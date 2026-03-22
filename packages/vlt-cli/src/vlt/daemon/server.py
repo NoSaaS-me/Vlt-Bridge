@@ -2500,6 +2500,11 @@ async def _spawn_relay_session(
     existing = _relay_sessions.get(session_id)
     if existing and existing.get("proc") and existing["proc"].returncode is None:
         logger.info(f"Relay session already running: {session_id}")
+        # If caller passed a prompt, inject it into the existing relay's queue
+        # instead of silently dropping it.
+        if prompt and session_id in _session_inject_queues:
+            await _session_inject_queues[session_id].put((prompt + "\r").encode())
+            logger.info(f"Injected prompt into existing relay {session_id}")
         return True
     if existing:
         _relay_sessions.pop(session_id)

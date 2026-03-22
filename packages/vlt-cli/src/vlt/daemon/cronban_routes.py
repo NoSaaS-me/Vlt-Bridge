@@ -256,11 +256,34 @@ async def _dispatch_to_session(
 
         if target_session_id:
             # 0. Relay session — inject text into the PTY queue
+            # Only use this path if the relay process is actually alive.
+            # Orphaned queues (from zombie relay processes) silently eat prompts.
             _relay_queues = getattr(_srv, '_session_inject_queues', {})
+            _relay_sessions = getattr(_srv, '_relay_sessions', {})
             if target_session_id in _relay_queues:
-                await _relay_queues[target_session_id].put((prompt + "\r").encode())
-                logger.info(f"_dispatch: relay inject for {target_session_id}")
-                return target_session_id
+                relay_info = _relay_sessions.get(target_session_id)
+                relay_alive = (
+                    relay_info
+                    and relay_info.get("proc")
+                    and relay_info["proc"].returncode is None
+                )
+                if relay_alive:
+                    await _relay_queues[target_session_id].put((prompt + "\r").encode())
+                    logger.info(f"_dispatch: relay inject for {target_session_id}")
+                    return target_session_id
+                else:
+                    # Orphaned queue — clean it up and fall through to other paths
+                    logger.warning(
+                        f"_dispatch: relay queue exists for {target_session_id} but "
+                        f"relay process is dead — cleaning up orphaned queue"
+                    )
+                    _relay_queues.pop(target_session_id, None)
+                    _relay_sessions.pop(target_session_id, None)
+                    # Also clean up stream/scrollback
+                    _streams = getattr(_srv, '_session_streams', {})
+                    _scrollback = getattr(_srv, '_session_scrollback', {})
+                    _streams.pop(target_session_id, None)
+                    _scrollback.pop(target_session_id, None)
 
             # 1. SDK session already running
             sdk = _sdk_sessions.get(target_session_id)
@@ -296,6 +319,23 @@ async def _dispatch_to_session(
                 sess = db.get(AgentSession, target_session_id)
 
             if sess and sess.cwd:
+                # Guard: if session is running externally (hook-based Claude Code
+                # process), we cannot --resume it — that would spawn a conflicting
+                # process. Detect this via status=executing/thinking + not in our
+                # managed dicts (relay or SDK).
+                _is_externally_active = (
+                    sess.status in ("executing", "thinking")
+                    and target_session_id not in _sdk_sessions
+                    and target_session_id not in getattr(_srv, '_relay_sessions', {})
+                )
+                if _is_externally_active:
+                    logger.error(
+                        f"_dispatch: session {target_session_id} is running externally "
+                        f"(status={sess.status}, source={sess.source}) — cannot inject. "
+                        f"Session must be idle or managed by daemon."
+                    )
+                    return None
+
                 cwd_key = str(_Path(sess.cwd).resolve())
 
                 if prefer_relay and _spawn_relay:
