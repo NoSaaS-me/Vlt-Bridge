@@ -1,0 +1,73 @@
+{
+  "frontend": {
+    "entry": "frontend/index.html",
+    "deps": []
+  },
+  "backend": {
+    "entry": "backend/main.py",
+    "deps": []
+  },
+  "connectors": [
+    {
+      "connector": "openrouter",
+      "required": true,
+      "actions": ["chat_completion", "generate_text", "generate_image"]
+    },
+    {
+      "connector": "zai",
+      "required": false,
+      "actions": ["chat_completion", "generate_text"]
+    },
+    {
+      "connector": "zai_vision",
+      "required": false,
+      "actions": ["image_analysis"]
+    },
+    {
+      "connector": "custom_openai",
+      "required": false,
+      "actions": ["chat_completion", "generate_text"]
+    }
+  ],
+  "mcp_tools": [],
+  "events": {
+    "emits": ["content.approved", "content.rejected", "content.generated"],
+    "subscribes": []
+  },
+  "quotas": {
+    "max_cpu_seconds": 120,
+    "max_memory_mb": 512,
+    "max_storage_mb": 100
+  },
+  "cost_limits": {
+    "openrouter": { "daily_usd": 5.00 },
+    "zai": { "daily_usd": 2.00 },
+    "zai_vision": { "daily_usd": 1.00 },
+    "custom_openai": { "daily_usd": 0 }
+  },
+  "pipeline": {
+    "stages": [
+      {
+        "id": "text_gen",
+        "type": "text_generation",
+        "connector": "openrouter",
+        "model": "anthropic/claude-sonnet-4",
+        "prompt_file": "prompts/blog_voice.md",
+        "params": {
+          "temperature": 0.7,
+          "max_tokens": 4096
+        }
+      },
+      {
+        "id": "text_review",
+        "type": "text_review",
+        "connector": "openrouter",
+        "model": "anthropic/claude-haiku-4.5",
+        "review_prompt_file": "prompts/review_criteria.md",
+        "criteria": ["engagement", "clarity", "accuracy", "actionability"],
+        "auto_approve_threshold": 7.5
+      }
+    ]
+  },
+  "tests": null
+}

@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import AsyncGenerator, Dict, Union
+import sqlite3
+from typing import AsyncGenerator, Dict, List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -24,9 +25,15 @@ from ...models.oracle import (
     OracleStreamChunk,
     ConversationHistoryResponse,
     ConversationMessage,
+    OracleThreadHistoryMessage,
+    OracleThreadHistoryResponse,
+    OracleThreadListResponse,
+    OracleThreadSummary,
     SourceReference,
 )
 from ...services.rlm_oracle import RLMOracleWrapper
+from ...services.oracle_v2 import OracleV2Wrapper
+from ...services.deep_research import DeepResearchWrapper
 from ...services.oracle_bridge import OracleBridge, OracleBridgeError
 from ...services.user_settings import UserSettingsService, get_user_settings_service
 from ...services.context_tree_service import ContextTreeService, get_context_tree_service
@@ -40,8 +47,8 @@ router = APIRouter(prefix="/api/oracle", tags=["oracle"])
 _oracle_bridge: OracleBridge | None = None
 
 # Active Oracle sessions for cancellation support
-# Maps user_id to active RLMOracleWrapper instance
-_active_sessions: Dict[str, RLMOracleWrapper] = {}
+# Maps user_id to active wrapper (OracleV2Wrapper, RLMOracleWrapper, or DeepResearchWrapper)
+_active_sessions: Dict[str, Union[OracleV2Wrapper, RLMOracleWrapper, DeepResearchWrapper]] = {}
 
 
 def get_oracle_bridge() -> OracleBridge:
@@ -214,6 +221,7 @@ async def query_oracle(
 @router.post("/stream")
 async def query_oracle_stream(
     request: OracleRequest,
+    http_request: Request,
     auth: AuthContext = Depends(require_auth_context),
     settings_service: UserSettingsService = Depends(get_user_settings_service),
     tree_service: ContextTreeService = Depends(get_context_tree_service),
@@ -282,21 +290,38 @@ async def query_oracle_stream(
 
     logger.debug(f"Stream using oracle_model={oracle_model} provider={'z.ai/glm' if is_glm else 'openrouter'}")
 
-    # Create RLMOracleWrapper
-    wrapper = RLMOracleWrapper(
-        user_id=auth.user_id,
-        api_key=api_key,
-        project_id=request.project_id or "default",
-        model=oracle_model,
-        max_tokens=request.max_tokens or 4096,
-        base_url=base_url,
-    )
+    # Route to deep research or standard RLM oracle
+    if request.deep_research and not is_glm:
+        search_provider = settings_service.get_search_provider(auth.user_id)
+        wrapper = DeepResearchWrapper(
+            openrouter_api_key=api_key,
+            model=oracle_model,
+            search_provider=search_provider,
+            tavily_api_key=settings_service.get_tavily_api_key(auth.user_id),
+            openrouter_search_api_key=api_key,  # same key used for Perplexity search
+        )
+        logger.info(f"Deep research mode for user {auth.user_id}, model={oracle_model}, search={search_provider}")
+    else:
+        # Retrieve app-level checkpointer and graphiti if available
+        _app_state = getattr(http_request.app, "state", None)
+        _checkpointer = getattr(_app_state, "oracle_checkpointer", None)
+        _graphiti = getattr(_app_state, "graphiti", None)
+        wrapper = OracleV2Wrapper(
+            user_id=auth.user_id,
+            api_key=api_key,
+            project_id=request.project_id or "default",
+            model=oracle_model,
+            max_tokens=request.max_tokens or 16000,
+            base_url=base_url,
+            checkpointer=_checkpointer,
+            graphiti=_graphiti,
+        )
 
     # Register the wrapper for cancellation support
     _active_sessions[auth.user_id] = wrapper
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        """Generate SSE events from RLMOracleWrapper stream."""
+        """Generate SSE events from oracle wrapper stream."""
         chunk_counter = 0
         answer_parts: list[str] = []
         model_used_final: Optional[str] = oracle_model
@@ -317,8 +342,8 @@ async def query_oracle_stream(
                 if chunk.type == "content" and chunk.content:
                     answer_parts.append(chunk.content)
                 elif chunk.type == "done":
-                    # Persist Q&A turn to context tree, get back new node ID
-                    new_context_id = _save_oracle_turn_to_tree(
+                    # Persist Q&A turn to context tree (for history UI)
+                    tree_node_id = _save_oracle_turn_to_tree(
                         tree_service=tree_service,
                         settings_service=settings_service,
                         user_id=auth.user_id,
@@ -328,11 +353,19 @@ async def query_oracle_stream(
                         parent_context_id=request.context_id,
                         model_used=model_used_final,
                     )
-                    # Emit done chunk with context_id so frontend can continue the thread
+                    # CRITICAL: context_id must be the LangGraph thread_id
+                    # (from oracle_to_sse's done chunk), NOT the context tree
+                    # node ID. The frontend sends this back on the next turn
+                    # and the wrapper uses it as the LangGraph thread_id for
+                    # checkpoint loading. Using the tree node ID breaks
+                    # multi-turn because no checkpoint exists for it.
+                    done_metadata = dict(chunk.metadata or {})
+                    if tree_node_id:
+                        done_metadata["tree_node_id"] = tree_node_id
                     done_chunk = OracleStreamChunk(
                         type="done",
-                        context_id=new_context_id,
-                        metadata=chunk.metadata,
+                        context_id=chunk.context_id,  # LangGraph thread_id
+                        metadata=done_metadata,
                     )
                     yield json.dumps(done_chunk.model_dump(exclude_none=True))
                     continue
@@ -380,6 +413,41 @@ async def cancel_oracle_session(
 
     logger.debug(f"No active Oracle session to cancel for user {session_id}")
     return {"status": "no_active_session"}
+
+
+@router.get("/memory")
+async def search_oracle_memory(
+    request: Request,
+    query: str = "",
+    project_id: str = "default",
+    limit: int = 20,
+    auth: AuthContext = Depends(require_auth_context),
+):
+    """Search Oracle cross-session memory (Graphiti facts) for the current user.
+
+    Returns a list of fact strings matching the query. When Graphiti is not
+    connected, returns ``available: false`` so the UI can show a helpful message.
+    """
+    graphiti = getattr(getattr(request.app, "state", None), "graphiti", None)
+    if graphiti is None:
+        return {"facts": [], "available": False, "message": "Graphiti memory not connected"}
+
+    if not query.strip():
+        return {"facts": [], "available": True, "message": "Enter a query to search memory"}
+
+    try:
+        from ...services.memory.loader import load_recalled_facts
+        facts = await load_recalled_facts(
+            graphiti=graphiti,
+            query=query.strip(),
+            user_id=auth.user_id,
+            project_id=project_id,
+            limit=limit,
+        )
+        return {"facts": facts, "available": True}
+    except Exception as exc:
+        logger.exception("search_oracle_memory: Graphiti search failed")
+        return {"facts": [], "available": True, "error": str(exc)}
 
 
 @router.get("/history", response_model=ConversationHistoryResponse)
@@ -462,3 +530,207 @@ async def clear_conversation_history(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to clear history: {str(e)}",
         )
+
+
+# ---------------------------------------------------------------------------
+# Oracle V2 thread management (023-oracle-codeact-rework, T042)
+# ---------------------------------------------------------------------------
+
+def _get_db_path() -> str:
+    from ...services.database import DEFAULT_DB_PATH
+    return str(DEFAULT_DB_PATH)
+
+
+@router.get("/threads", response_model=OracleThreadListResponse)
+async def list_oracle_threads(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+    auth: AuthContext = Depends(require_auth_context),
+):
+    """List Oracle V2 conversation threads for the current user."""
+    db_path = _get_db_path()
+    try:
+        with sqlite3.connect(db_path, timeout=5) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT thread_id, project_id, title, created_at, last_active_at
+                FROM oracle_threads
+                WHERE user_id = ?
+                ORDER BY last_active_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (auth.user_id, limit, offset),
+            ).fetchall()
+            total = conn.execute(
+                "SELECT COUNT(*) FROM oracle_threads WHERE user_id = ?",
+                (auth.user_id,),
+            ).fetchone()[0]
+    except sqlite3.Error as exc:
+        logger.exception("Failed to list oracle_threads")
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+    threads = [
+        OracleThreadSummary(
+            thread_id=r["thread_id"],
+            project_id=r["project_id"],
+            title=r["title"],
+            created_at=r["created_at"],
+            last_active_at=r["last_active_at"],
+        )
+        for r in rows
+    ]
+    return OracleThreadListResponse(threads=threads, total=total)
+
+
+@router.get("/threads/{thread_id}", response_model=OracleThreadSummary)
+async def get_oracle_thread(
+    thread_id: str,
+    request: Request,
+    auth: AuthContext = Depends(require_auth_context),
+):
+    """Get metadata for a single Oracle V2 thread."""
+    db_path = _get_db_path()
+    try:
+        with sqlite3.connect(db_path, timeout=5) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT thread_id, project_id, title, created_at, last_active_at
+                FROM oracle_threads
+                WHERE thread_id = ? AND user_id = ?
+                """,
+                (thread_id, auth.user_id),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    return OracleThreadSummary(
+        thread_id=row["thread_id"],
+        project_id=row["project_id"],
+        title=row["title"],
+        created_at=row["created_at"],
+        last_active_at=row["last_active_at"],
+    )
+
+
+@router.delete("/threads/{thread_id}", status_code=204)
+async def delete_oracle_thread(
+    thread_id: str,
+    request: Request,
+    auth: AuthContext = Depends(require_auth_context),
+):
+    """Delete an Oracle V2 thread and its LangGraph checkpoint data."""
+    db_path = _get_db_path()
+    try:
+        with sqlite3.connect(db_path, timeout=5) as conn:
+            deleted = conn.execute(
+                "DELETE FROM oracle_threads WHERE thread_id = ? AND user_id = ?",
+                (thread_id, auth.user_id),
+            ).rowcount
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+
+@router.patch("/threads/{thread_id}", response_model=OracleThreadSummary)
+async def update_oracle_thread(
+    thread_id: str,
+    request: Request,
+    auth: AuthContext = Depends(require_auth_context),
+):
+    """Update the title of an Oracle V2 thread."""
+    body = await request.json()
+    new_title = body.get("title", "").strip()
+    if not new_title:
+        raise HTTPException(status_code=400, detail="'title' field required and must be non-empty")
+
+    db_path = _get_db_path()
+    try:
+        with sqlite3.connect(db_path, timeout=5) as conn:
+            conn.row_factory = sqlite3.Row
+            updated = conn.execute(
+                "UPDATE oracle_threads SET title = ? WHERE thread_id = ? AND user_id = ?",
+                (new_title, thread_id, auth.user_id),
+            ).rowcount
+            conn.commit()
+            if updated == 0:
+                raise HTTPException(status_code=404, detail="Thread not found")
+            row = conn.execute(
+                """
+                SELECT thread_id, project_id, title, created_at, last_active_at
+                FROM oracle_threads WHERE thread_id = ?
+                """,
+                (thread_id,),
+            ).fetchone()
+    except HTTPException:
+        raise
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+    return OracleThreadSummary(
+        thread_id=row["thread_id"],
+        project_id=row["project_id"],
+        title=row["title"],
+        created_at=row["created_at"],
+        last_active_at=row["last_active_at"],
+    )
+
+
+@router.get("/threads/{thread_id}/history", response_model=OracleThreadHistoryResponse)
+async def get_oracle_thread_history(
+    thread_id: str,
+    request: Request,
+    auth: AuthContext = Depends(require_auth_context),
+):
+    """Get message history for an Oracle V2 thread from the LangGraph checkpoint."""
+    # Verify thread ownership
+    db_path = _get_db_path()
+    try:
+        with sqlite3.connect(db_path, timeout=5) as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM oracle_threads WHERE thread_id = ? AND user_id = ?",
+                (thread_id, auth.user_id),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+    if not exists:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Load history from LangGraph checkpointer (async — never use sync get_state)
+    checkpointer = getattr(getattr(request.app, "state", None), "oracle_checkpointer", None)
+    if checkpointer is None:
+        return OracleThreadHistoryResponse(thread_id=thread_id, messages=[])
+
+    try:
+        config = {"configurable": {"thread_id": thread_id}}
+        state = await checkpointer.aget(config)
+        if state is None:
+            return OracleThreadHistoryResponse(thread_id=thread_id, messages=[])
+
+        raw_messages = (state.values or {}).get("messages", [])
+        messages: List[OracleThreadHistoryMessage] = []
+        for msg in raw_messages:
+            role = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else None)
+            content = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else "")
+            if isinstance(content, list):
+                content = " ".join(
+                    p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+                )
+            if role in ("human", "user"):
+                messages.append(OracleThreadHistoryMessage(role="user", content=str(content or "")))
+            elif role in ("ai", "assistant"):
+                messages.append(OracleThreadHistoryMessage(role="assistant", content=str(content or "")))
+    except Exception as exc:
+        logger.warning("get_oracle_thread_history: checkpointer read failed: %s", exc)
+        return OracleThreadHistoryResponse(thread_id=thread_id, messages=[])
+
+    return OracleThreadHistoryResponse(thread_id=thread_id, messages=messages)

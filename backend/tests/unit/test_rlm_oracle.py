@@ -385,9 +385,13 @@ class TestSubOracleCallable:
             project_id="proj",
         )
 
-    def test_recursion_depth_exceeded_raises(self):
-        """Parent at depth >= 2 should raise RecursionDepthExceeded immediately."""
-        sub_oracle = self._make_sub_oracle(recursion_depth=2, call_count=0)
+    def test_recursion_prevented_by_toolkit_exclusion(self):
+        """Recursion is now prevented by toolkit exclusion (children don't get
+        sub_oracle in their namespace), not by depth checks. The depth check
+        has been removed from SubOracleCallable.__call__().
+        See test_sub_oracle_patterns.py for full toolkit exclusion tests."""
+        # Verify call_count guard still works (the remaining recursion safety)
+        sub_oracle = self._make_sub_oracle(recursion_depth=0, call_count=3)
         with pytest.raises(RecursionDepthExceeded):
             sub_oracle("some prompt")
 
@@ -399,9 +403,9 @@ class TestSubOracleCallable:
 
     def test_extra_args_accepted_without_error(self):
         """LLMs sometimes pass extra args; sub_oracle should accept and ignore them."""
-        sub_oracle = self._make_sub_oracle(recursion_depth=2, call_count=0)
-        # Even though it will raise RecursionDepthExceeded, the extra args should
-        # not cause a TypeError
+        # Use exhausted call_count so it raises before attempting the child loop
+        sub_oracle = self._make_sub_oracle(recursion_depth=0, call_count=3)
+        # Extra args should not cause a TypeError — only RecursionDepthExceeded
         with pytest.raises(RecursionDepthExceeded):
             sub_oracle("prompt", "extra_context", model="override")
 

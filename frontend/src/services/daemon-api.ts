@@ -269,12 +269,14 @@ export async function injectContext(
  */
 export async function spawnSession(
   cwd: string,
-  options?: { model?: string; prompt?: string; resume_session_id?: string },
-): Promise<{ ok: boolean; cwd: string; queued: number; session_id?: string }> {
-  const response = await fetch('/vlt/api/sessions/spawn', {
+  options?: { model?: string; prompt?: string; resume_session_id?: string; mode?: 'sdk' | 'relay' },
+): Promise<{ ok: boolean; cwd: string; queued?: number; session_id?: string; mode?: string }> {
+  const { mode = 'relay', ...rest } = options ?? {};
+  const endpoint = mode === 'relay' ? '/vlt/api/sessions/spawn/relay' : '/vlt/api/sessions/spawn';
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cwd, ...options }),
+    body: JSON.stringify({ cwd, ...rest }),
     signal: AbortSignal.timeout(10000),
   });
   if (!response.ok) throw new Error(`Spawn failed: ${response.status}`);

@@ -35,6 +35,7 @@ import signal
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -270,17 +271,21 @@ state = DaemonState()
 # =============================================================================
 
 async def check_backend_connection():
-    """Check if we can connect to the backend."""
-    if not state.http_client:
-        state.backend_connected = False
-        return
+    """Check if we can connect to the backend.
 
+    Uses a short-lived client to avoid holding a persistent TCP connection
+    to the frontend/backend port. A persistent connection causes the daemon
+    to appear in `lsof -ti tcp:5173`, which makes stop-dev.sh kill the daemon
+    when restarting the frontend.
+    """
     try:
-        response = await state.http_client.get(
-            f"{state.vault_url}/health",
-            timeout=5.0
-        )
-        state.backend_connected = response.status_code == 200
+        import httpx as _httpx
+        async with _httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{state.vault_url}/health",
+                timeout=5.0,
+            )
+            state.backend_connected = response.status_code == 200
     except Exception as e:
         logger.debug(f"Backend health check failed: {e}")
         state.backend_connected = False
@@ -644,6 +649,15 @@ async def _run_indexing_job(job):
             progress_callback=on_progress
         )
 
+        # CGC graph indexing (structural: symbols, call graph, hierarchy)
+        try:
+            from vlt.core.coderag.code_graph import get_code_graph_service
+            graph_svc = get_code_graph_service()
+            await asyncio.to_thread(graph_svc.index_project_sync, target_path)
+            logger.info(f"CGC graph indexing completed for job {job_id}")
+        except Exception as cgc_exc:
+            logger.warning(f"CGC graph indexing failed for job {job_id} (non-fatal): {cgc_exc}")
+
         # T028: Update job status to COMPLETED
         with Session(engine) as session:
             j = session.get(CodeRAGIndexJob, job_id)
@@ -880,6 +894,14 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning(f"Cronban scheduler not available: {_e}")
 
+    # Initialize artifact watcher observer (Phase 5: hot reload)
+    try:
+        from vlt.daemon.artifact_watcher import _get_observer
+        _get_observer()  # Start the shared watchdog observer
+        logger.info("Artifact file watcher ready")
+    except Exception as _e:
+        logger.warning(f"Artifact watcher not available: {_e}")
+
     logger.info(f"VLT Daemon started (backend: {state.vault_url}, connected: {state.backend_connected})")
 
     yield
@@ -887,6 +909,16 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("VLT Daemon shutting down...")
     state._shutdown_event.set()
+
+    # Stop artifact watchers and backend processes
+    try:
+        from vlt.daemon.artifact_watcher import stop_all_watchers
+        stop_all_watchers()
+        from vlt.daemon.artifact_service import _artifact_processes, _stop_backend_process
+        for aid in list(_artifact_processes.keys()):
+            await _stop_backend_process(aid)
+    except Exception:
+        pass
 
     # Stop Cronban scheduler
     try:
@@ -901,6 +933,38 @@ async def lifespan(app: FastAPI):
             await asyncio.wait_for(task, timeout=5.0)
         except asyncio.TimeoutError:
             task.cancel()
+
+    # Clean up relay sessions — terminate processes, close FDs, cancel I/O tasks
+    for sid, info in list(_relay_sessions.items()):
+        logger.info(f"Shutting down relay session: {sid}")
+        proc = info.get("proc")
+        master_fd = info.get("master_fd")
+        reader_task = info.get("reader_task")
+        writer_task = info.get("writer_task")
+        # Cancel I/O tasks first
+        for task in (reader_task, writer_task):
+            if task and not task.done():
+                task.cancel()
+        # Terminate the child process
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        # Close the master FD
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+    _relay_sessions.clear()
+
+    # Shut down the dedicated PTY thread pool
+    _pty_executor.shutdown(wait=False)
 
     # Close HTTP client
     if state.http_client:
@@ -927,6 +991,14 @@ try:
 except Exception as _e:
     import logging as _l
     _l.getLogger(__name__).warning(f"Cronban routes unavailable: {_e}")
+
+# Mount Artifact Sandbox router
+try:
+    from vlt.daemon.artifact_routes import router as _artifact_router
+    app.include_router(_artifact_router)
+except Exception as _e:
+    import logging as _l
+    _l.getLogger(__name__).warning(f"Artifact routes unavailable: {_e}")
 
 
 # =============================================================================
@@ -1265,7 +1337,29 @@ async def list_sessions(
         if untagged:
             db.commit()
 
-        # Step 2: Build the filtered query
+        # Step 2: Reap stale relay/managed sessions whose processes have died.
+        # After a daemon restart, DB records persist but processes don't.
+        import os as _os
+        stale = db.scalars(
+            select(AgentSession)
+            .where(AgentSession.status != "dead")
+            .where(AgentSession.pid.isnot(None))
+            .where(AgentSession.source.in_(["relay", "managed"]))
+        ).all()
+        reaped = 0
+        for s in stale:
+            try:
+                _os.kill(s.pid, 0)
+            except ProcessLookupError:
+                s.status = "dead"
+                reaped += 1
+            except (PermissionError, OSError):
+                pass  # process exists or signal error — leave it
+        if reaped:
+            db.commit()
+            logger.info(f"Reaped {reaped} stale sessions with dead processes")
+
+        # Step 3: Build the filtered query
         query = select(AgentSession)
         if helper:
             # Helper sessions only
@@ -1342,8 +1436,8 @@ async def inject_to_session(session_id: str, request: Request):
     text = payload.get("text", "")
     press_enter = payload.get("press_enter", False)
 
-    if press_enter and not text.endswith("\n"):
-        text = text + "\n"
+    if press_enter and not text.endswith("\r"):
+        text = text + "\r"
 
     await _session_inject_queues[session_id].put(text.encode())
     logger.debug(f"Injected {len(text)} bytes into session {session_id}")
@@ -2375,6 +2469,302 @@ async def spawn_managed_session(request: Request):
         "session_id": sid,
     }
 
+
+# =============================================================================
+# Server-Side Relay Spawn (PTY sessions managed by daemon)
+# =============================================================================
+
+# Tracks daemon-owned relay sessions: session_id → {master_fd, proc, cwd, reader_task, writer_task}
+_relay_sessions: Dict[str, dict] = {}
+
+# Dedicated thread pool for PTY blocking reads — avoids exhausting the default executor
+_pty_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="pty-read")
+
+
+async def _spawn_relay_session(
+    session_id: str,
+    cwd: str,
+    prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    resume: bool = False,
+) -> bool:
+    """
+    Spawn a Claude Code session with a real PTY, managed by the daemon.
+
+    Unlike SDK sessions (pipes + JSON), relay sessions get a full pseudo-terminal
+    so the frontend can render them via xterm.js. The daemon owns the master side
+    of the PTY and bridges I/O through _session_streams/_session_inject_queues.
+    """
+    import struct
+
+    existing = _relay_sessions.get(session_id)
+    if existing and existing.get("proc") and existing["proc"].returncode is None:
+        logger.info(f"Relay session already running: {session_id}")
+        # If caller passed a prompt, inject it into the existing relay's queue
+        # instead of silently dropping it.
+        if prompt and session_id in _session_inject_queues:
+            await _session_inject_queues[session_id].put((prompt + "\r").encode())
+            logger.info(f"Injected prompt into existing relay {session_id}")
+        return True
+    if existing:
+        _relay_sessions.pop(session_id)
+
+    claude_bin = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
+    if not os.path.isfile(claude_bin):
+        logger.error(f"claude binary not found: {claude_bin}")
+        return False
+
+    if not os.path.isdir(cwd):
+        logger.error(f"Relay session: cwd does not exist: {cwd}")
+        return False
+
+    # Create PTY pair
+    master_fd, slave_fd = os.openpty()
+
+    # Set a reasonable default terminal size
+    try:
+        import fcntl
+        win = struct.pack("HHHH", 50, 200, 0, 0)  # 50 rows, 200 cols
+        fcntl.ioctl(master_fd, 0x5414, win)  # TIOCSWINSZ
+    except Exception:
+        pass
+
+    # Build command — interactive mode (no positional prompt; prompt sent via PTY stdin)
+    if resume:
+        cmd = [claude_bin, "--resume", session_id, "--dangerously-skip-permissions"]
+    else:
+        cmd = [claude_bin, "--session-id", session_id, "--dangerously-skip-permissions"]
+    if model:
+        cmd += ["--model", model]
+
+    _STRIP_VARS = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}
+    spawn_env = {k: v for k, v in os.environ.items() if k not in _STRIP_VARS}
+    spawn_env["TERM"] = "xterm-256color"
+    spawn_env["VLT_SESSION_ID"] = session_id
+
+    import subprocess
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+            cwd=cwd,
+            env=spawn_env,
+        )
+    except Exception as e:
+        logger.error(f"Failed to spawn relay session: {e}")
+        os.close(master_fd)
+        os.close(slave_fd)
+        return False
+
+    os.close(slave_fd)  # daemon only needs the master side
+
+    # Set up stream + inject queues (same infra that external relays use)
+    _session_streams[session_id] = asyncio.Queue(maxsize=4096)
+    _session_inject_queues[session_id] = asyncio.Queue(maxsize=256)
+    _session_scrollback[session_id] = bytearray()
+
+    _relay_sessions[session_id] = {
+        "master_fd": master_fd,
+        "proc": proc,
+        "cwd": cwd,
+    }
+
+    # Register in DB as relay session
+    from vlt.db import engine as _engine
+    from vlt.core.models import AgentSession as _AgentSession
+    proj_id = _infer_project_id(cwd)
+    with Session(_engine) as db:
+        existing_db = db.get(_AgentSession, session_id)
+        if existing_db:
+            existing_db.cwd = cwd
+            existing_db.project_id = proj_id
+            existing_db.pid = proc.pid
+            existing_db.status = "idle"
+            existing_db.source = "relay"
+        else:
+            db.add(_AgentSession(
+                id=session_id,
+                cwd=cwd,
+                name=Path(cwd).name,
+                project_id=proj_id,
+                pid=proc.pid,
+                status="idle",
+                source="relay",
+            ))
+        db.commit()
+
+    # Start background I/O tasks (tracked for shutdown cancellation)
+    reader_task = asyncio.create_task(_relay_pty_reader(session_id, master_fd, proc))
+    writer_task = asyncio.create_task(_relay_inject_writer(session_id, master_fd))
+    _relay_sessions[session_id]["reader_task"] = reader_task
+    _relay_sessions[session_id]["writer_task"] = writer_task
+
+    # If there's an initial prompt, send it via PTY after Claude's TUI initializes
+    if prompt:
+        async def _send_initial_prompt():
+            # Wait for Claude to render its TUI — check that process is still alive
+            for _ in range(20):  # up to 10s
+                await asyncio.sleep(0.5)
+                if proc.poll() is not None:
+                    return  # process died
+            # Guard against session cleanup racing with this write
+            if session_id not in _relay_sessions:
+                return
+            try:
+                os.write(master_fd, (prompt + "\r").encode())
+                logger.info(f"Sent initial prompt to relay {session_id}")
+            except OSError as e:
+                logger.debug(f"Initial prompt write failed (FD likely closed) for {session_id}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to send initial prompt to relay {session_id}: {e}")
+        asyncio.create_task(_send_initial_prompt())
+
+    logger.info(f"Relay session spawned: sid={session_id} cwd={cwd} pid={proc.pid}")
+    return True
+
+
+async def _relay_pty_reader(session_id: str, master_fd: int, proc) -> None:
+    """Read PTY output from master_fd → push into _session_streams + scrollback."""
+    loop = asyncio.get_event_loop()
+    buf = _session_scrollback.get(session_id, bytearray())
+
+    try:
+        while proc.poll() is None:
+            try:
+                data = await loop.run_in_executor(_pty_executor, _blocking_pty_read, master_fd)
+                if data is None:
+                    continue  # select timeout, no data yet — keep waiting
+                if len(data) == 0:
+                    break  # real EOF
+                # Scrollback
+                buf.extend(data)
+                if len(buf) > _MAX_SCROLLBACK:
+                    del buf[:len(buf) - _MAX_SCROLLBACK]
+                _schedule_scrollback_persist(session_id, buf)
+                # Look up stream_q each iteration to avoid stale reference
+                stream_q = _session_streams.get(session_id)
+                if stream_q:
+                    try:
+                        stream_q.put_nowait(data)
+                    except asyncio.QueueFull:
+                        pass
+            except OSError:
+                break
+    except Exception as e:
+        logger.debug(f"Relay PTY reader error {session_id}: {e}")
+    finally:
+        # Process exited — clean up
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        proc.wait()
+        _relay_sessions.pop(session_id, None)
+        # Send close sentinel to stream
+        closing_q = _session_streams.get(session_id)
+        if closing_q:
+            try:
+                await closing_q.put(None)
+            except Exception:
+                pass
+        _session_inject_queues.pop(session_id, None)
+        # Update DB status
+        try:
+            from vlt.db import engine as _engine
+            from vlt.core.models import AgentSession as _AgentSession
+            with Session(_engine) as db:
+                sess = db.get(_AgentSession, session_id)
+                if sess:
+                    sess.status = "dead"
+                    db.commit()
+        except Exception:
+            pass
+        _push_status_to_live(session_id, "dead", "RelayProcessExit")
+        logger.info(f"Relay PTY reader exited: {session_id} rc={proc.returncode}")
+
+
+def _blocking_pty_read(master_fd: int) -> Optional[bytes]:
+    """Blocking read from PTY master_fd (called in executor thread).
+
+    Returns bytes on data, None on timeout (no data yet), empty bytes on EOF.
+    """
+    import select as _select
+    # Wait up to 0.5s for data to avoid busy-spinning
+    r, _, _ = _select.select([master_fd], [], [], 0.5)
+    if master_fd in r:
+        return os.read(master_fd, 4096)
+    return None  # timeout, not EOF
+
+
+async def _relay_inject_writer(session_id: str, master_fd: int) -> None:
+    """Drain _session_inject_queues → write to PTY master_fd (keyboard input from browser)."""
+    inject_q = _session_inject_queues.get(session_id)
+    if not inject_q:
+        return
+
+    while session_id in _relay_sessions:
+        try:
+            data = await asyncio.wait_for(inject_q.get(), timeout=1.0)
+            text = data.decode(errors="replace")
+            # JSON control messages (resize)
+            if text.startswith("{"):
+                try:
+                    msg = json.loads(text)
+                    if msg.get("type") == "resize":
+                        import struct, fcntl
+                        cols = msg.get("cols", 200)
+                        rows = msg.get("rows", 50)
+                        win = struct.pack("HHHH", rows, cols, 0, 0)
+                        fcntl.ioctl(master_fd, 0x5414, win)  # TIOCSWINSZ
+                        continue
+                except (json.JSONDecodeError, Exception):
+                    pass
+            # Regular input — write to PTY
+            try:
+                os.write(master_fd, data)
+            except OSError:
+                break
+        except asyncio.TimeoutError:
+            continue
+        except Exception:
+            break
+
+
+@app.post("/api/sessions/spawn/relay")
+async def spawn_relay_session_endpoint(request: Request):
+    """
+    Spawn a new Claude Code session with a full PTY (relay mode).
+
+    Unlike /api/sessions/spawn (SDK mode with JSON pipes), this creates a real
+    pseudo-terminal so the session can be rendered in xterm.js in the browser.
+
+    Body: {cwd, prompt?, model?}
+    """
+    body = await request.json()
+    cwd = body.get("cwd", os.path.expanduser("~"))
+    prompt = body.get("prompt")
+    model = body.get("model")
+
+    cwd_path = str(Path(cwd).expanduser().resolve())
+    if not Path(cwd_path).is_dir():
+        raise HTTPException(status_code=400, detail=f"Invalid cwd: {cwd}")
+
+    sid = str(uuid.uuid4())
+    ok = await _spawn_relay_session(sid, cwd_path, prompt=prompt, model=model)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to spawn relay session")
+
+    _push_status_to_live(sid, "idle", "RelaySpawned")
+
+    return {
+        "ok": True,
+        "cwd": cwd_path,
+        "session_id": sid,
+        "mode": "relay",
+    }
 
 
 # =============================================================================

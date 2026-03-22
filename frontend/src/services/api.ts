@@ -3,19 +3,6 @@ import type { SearchResult, Tag, IndexHealth } from '@/types/search';
 import type { User } from '@/types/user';
 import type { APIError } from '@/types/auth';
 import type { AssetSummary, AssetMetadata, AssetUploadResponse } from '@/types/asset';
-// Token refresh callback — set by auth.ts to avoid circular import.
-// When a 401 occurs on a demo session, apiFetch calls this to get a fresh token.
-let _tokenRefresher: (() => Promise<string | null>) | null = null;
-let _isDemoSession: (() => boolean) | null = null;
-
-export function registerTokenRefresher(
-  refresher: () => Promise<string | null>,
-  isDemoCheck: () => boolean,
-): void {
-  _tokenRefresher = refresher;
-  _isDemoSession = isDemoCheck;
-}
-
 /**
  * Custom error class for API errors
  */
@@ -107,15 +94,6 @@ export async function apiFetch<T>(
     headers,
   });
 
-  // Auto-refresh stale demo tokens on 401 and retry once
-  if (response.status === 401 && _isDemoSession?.()) {
-    const newToken = await _tokenRefresher?.() ?? null;
-    if (newToken) {
-      headers['Authorization'] = `Bearer ${newToken}`;
-      response = await fetch(url, { ...options, headers });
-    }
-  }
-
   if (!response.ok) {
     let errorData: APIError;
     try {
@@ -206,17 +184,6 @@ export async function getBacklinks(path: string, projectId?: string): Promise<Ba
   }
   const query = params.toString();
   return apiFetch<BacklinkResult[]>(`/api/backlinks/${encodedPath}${query ? `?${query}` : ''}`);
-}
-
-export interface DemoTokenResponse {
-  token: string;
-  token_type: string;
-  expires_at: string;
-  user_id: string;
-}
-
-export async function getDemoToken(): Promise<DemoTokenResponse> {
-  return apiFetch<DemoTokenResponse>('/api/demo/token');
 }
 
 /**
@@ -404,6 +371,83 @@ export async function updateOracleSettings(enabled: boolean): Promise<OracleSett
     method: 'PUT',
     body: JSON.stringify({ oracle_mcp_enabled: enabled }),
   });
+}
+
+// ============ Oracle V2 Thread & Memory API ============
+
+export interface OracleThreadSummary {
+  thread_id: string;
+  project_id: string | null;
+  title: string | null;
+  created_at: string;
+  last_active_at: string;
+}
+
+export interface OracleThreadListResponse {
+  threads: OracleThreadSummary[];
+  total: number;
+}
+
+export interface OracleThreadHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface OracleThreadHistoryResponse {
+  thread_id: string;
+  messages: OracleThreadHistoryMessage[];
+}
+
+export interface OracleMemorySearchResponse {
+  facts: string[];
+  available: boolean;
+  message?: string;
+  error?: string;
+}
+
+export async function listOracleThreads(
+  limit = 50,
+  offset = 0,
+): Promise<OracleThreadListResponse> {
+  return apiFetch<OracleThreadListResponse>(
+    `/api/oracle/threads?limit=${limit}&offset=${offset}`,
+  );
+}
+
+export async function getOracleThreadHistory(
+  threadId: string,
+): Promise<OracleThreadHistoryResponse> {
+  return apiFetch<OracleThreadHistoryResponse>(
+    `/api/oracle/threads/${encodeURIComponent(threadId)}/history`,
+  );
+}
+
+export async function deleteOracleThread(threadId: string): Promise<void> {
+  await apiFetch<void>(`/api/oracle/threads/${encodeURIComponent(threadId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function renameOracleThread(
+  threadId: string,
+  title: string,
+): Promise<OracleThreadSummary> {
+  return apiFetch<OracleThreadSummary>(
+    `/api/oracle/threads/${encodeURIComponent(threadId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    },
+  );
+}
+
+export async function searchOracleMemory(
+  query: string,
+  projectId = 'default',
+  limit = 20,
+): Promise<OracleMemorySearchResponse> {
+  const params = new URLSearchParams({ query, project_id: projectId, limit: String(limit) });
+  return apiFetch<OracleMemorySearchResponse>(`/api/oracle/memory?${params}`);
 }
 
 // ============ Asset API ============

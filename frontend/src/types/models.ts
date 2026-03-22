@@ -11,6 +11,7 @@ export interface ModelInfo {
   provider: ModelProvider;
   is_free: boolean;
   supports_thinking: boolean;
+  supports_vision?: boolean;
   context_length: number | null;
   description?: string;
 }
@@ -22,6 +23,8 @@ export interface ModelSettings {
   oracle_provider: ModelProvider;
   subagent_model: string;
   subagent_provider: ModelProvider;
+  vision_model?: string | null;
+  vision_provider?: ModelProvider | null;
   thinking_enabled: boolean;
   chat_center_mode: boolean;
   librarian_timeout: number;

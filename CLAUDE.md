@@ -591,10 +591,8 @@ async for chunk in wrapper.process_query(query="Hello", context_id=None):
 | `backend/src/api/routes/oracle.py` | Oracle API routes (updated to use RLMOracleWrapper) |
 
 ## Recent Changes
-- 022-rlm-oracle: Replaced BT Oracle with RLM Oracle harness; LLM writes Python in REPL with `project`/`sub_oracle`/`Final` namespace; deleted entire `backend/src/bt/` directory; added `REPLExecutor` (RestrictedPython), `ProjectContext` (file/thread/note handles), `RLMOracleWrapper`; Go symbol extraction + `end_line` field in CodeRAG repomap
-- 018-vlt-mcp-server: Added vlt-mcp unified MCP server (`packages/vlt-cli/src/vlt/mcp/`) with 17 tools across 5 modules (thread_tools, meta_tools, code_tools, oracle_tools, vault_tools); Oracle toggle backend route (`/api/settings/oracle`); Oracle tab in Settings.tsx; 164ms cold-start via STDIO; registered as user-scope MCP in Claude Code
+- 025-artifact-sandbox: Added Python 3.11+ (daemon/backend), TypeScript (frontend, React 19) + FastAPI (daemon routes), watchdog 4.0+ (file watching), Playwright (screenshots), Pydantic (models), SQLModel/SQLAlchemy (DB), shadcn/ui (frontend components)
+- 025-artifact-sandbox: Added Python 3.11+ (daemon/backend), TypeScript (frontend, React 19) + FastAPI (daemon routes), watchdog 4.0+ (file watching), Playwright (screenshots), Pydantic (models), SQLModel/SQLAlchemy (DB), shadcn/ui (frontend components)
+- 023-oracle-codeact-rework: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 
 ## Active Technologies
-- Python 3.11+ (backend only; no frontend changes) (022-rlm-oracle)
-- RestrictedPython>=8.0 for REPL sandbox (022-rlm-oracle)
-- No new persistence. Ephemeral `RLMSession` per query. `OracleBridge` (existing) handles conversation history via existing `context_nodes` table. (022-rlm-oracle)

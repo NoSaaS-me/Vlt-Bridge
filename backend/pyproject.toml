@@ -38,6 +38,7 @@ dependencies = [
     "python-magic>=0.4.27",
     "vlt-connectors",
     "composio-core>=0.7",
+    "open-deep-research>=0.0.16",
 ]
 
 [dependency-groups]
@@ -45,4 +46,11 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
+]
+
+[project.optional-dependencies]
+oracle-v2 = [
+    "langgraph-codeact>=0.1.3",
+    "langgraph-checkpoint-sqlite",
+    "graphiti-core[anthropic]>=0.28.1",
 ]

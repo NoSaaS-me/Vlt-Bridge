@@ -75,6 +75,10 @@ The Cognitive Loop: Manage reasoning streams.
 
 Use these commands to Create (new), Log (push), Resume (read), and Recall (seek)
 your train of thought. This is your primary interface for interacting with the Vault.
+
+Project context: Most commands need a project_id. If vlt.toml exists in your
+working directory, thread new will auto-detect it. You can also pass --project/-p
+explicitly. Use 'vlt overview' or 'vlt thread seek' to explore existing threads.
 """
 
 app = typer.Typer(name="vlt", help=APP_HELP, no_args_is_help=True)
@@ -101,7 +105,7 @@ If no --session is given you must supply --cwd (working directory) and
 optionally --new-session to spawn a fresh Claude session on each fire.
 """
 cron_app = typer.Typer(name="cron", help=CRON_HELP, no_args_is_help=True)
-connectors_app = typer.Typer(name="connectors", help="List and invoke external service connectors.", no_args_is_help=True)
+connectors_app = typer.Typer(name="connectors", help="List and invoke external service connectors (native + Composio).", no_args_is_help=True)
 app.add_typer(thread_app, name="thread")
 app.add_typer(config_app, name="config")
 app.add_typer(sync_app, name="sync")
@@ -109,8 +113,8 @@ app.add_typer(daemon_app, name="daemon")
 app.add_typer(profile_app, name="profile")
 app.add_typer(cron_app, name="cron")
 app.add_typer(connectors_app, name="connectors")
-hub_app = typer.Typer(name="hub", help="Composio Integration Hub — browse and connect 100+ app integrations.", no_args_is_help=True)
-connectors_app.add_typer(hub_app, name="hub")
+from vlt.artifact_cli import artifact_app
+app.add_typer(artifact_app, name="artifact")
 
 service = SqliteVaultService()
 
@@ -122,14 +126,16 @@ def set_key(
     """
     Set the server sync token for backend authentication.
 
+    Prefer [bold]vlt login[/bold] for interactive GitHub OAuth — this command is for
+    manually pasting a token obtained from the backend settings page or /api/tokens.
+
     This saves the token to the active profile's .env file as VLT_SYNC_TOKEN so you
     don't have to export it every time. The token authenticates vlt-cli with the
     backend server for syncing threads and using server-side features like summarization.
 
-    Get your token from the backend server's settings page or via the /api/tokens endpoint.
-
     Examples:
-        vlt config set-key sk-abc123xyz
+        vlt login                                         # Preferred: GitHub OAuth
+        vlt config set-key sk-abc123xyz                   # Manual token paste
         vlt config set-key sk-abc123xyz --server https://my-vault.example.com
         vlt --profile work config set-key sk-work-token  # Set for specific profile
     """
@@ -416,7 +422,7 @@ def profile_show():
     if settings.sync_token:
         print(f"  Sync:        [green]Configured[/green] (server: {settings.vault_url})")
     else:
-        print(f"  Sync:        [dim]Not configured[/dim] (run 'vlt config set-key <token>')")
+        print(f"  Sync:        [dim]Not configured[/dim] (run 'vlt login')")
 
 
 @profile_app.command("add")
@@ -1827,7 +1833,7 @@ def run_librarian(
         # Check for sync token
         if not librarian.sync_token:
             print("[red]Error: No sync token configured.[/red]")
-            print("Run: vlt config set-key <your-sync-token>")
+            print("Run: vlt login")
             print("[dim]Or use --legacy flag to use local LLM calls (deprecated)[/dim]")
             raise typer.Exit(code=1)
 
@@ -3294,6 +3300,289 @@ def coderag_delete(
 
 
 # ============================================================================
+# CGC Graph Commands - Phase 4 (callers, callees, hierarchy, dead-code)
+# ============================================================================
+
+def _resolve_cgc_project_and_path(project: str | None, console) -> tuple[str, str | None]:
+    """Resolve project_id and latest completed target_path for CGC commands."""
+    from vlt.core.identity import load_project_identity
+    from sqlalchemy.orm import Session
+    from sqlalchemy import select
+    from vlt.db import engine
+    from vlt.core.models import CodeRAGIndexJob, JobStatus
+
+    if not project:
+        identity = load_project_identity()
+        if identity:
+            project = identity.id
+        else:
+            console.print("[red]Error: No project specified and no vlt.toml found.[/red]")
+            raise typer.Exit(code=1)
+
+    with Session(engine) as session:
+        job = session.scalars(
+            select(CodeRAGIndexJob)
+            .where(CodeRAGIndexJob.project_id == project)
+            .where(CodeRAGIndexJob.status == JobStatus.COMPLETED)
+            .order_by(CodeRAGIndexJob.completed_at.desc())
+            .limit(1)
+        ).first()
+        target_path = job.target_path if job else None
+
+    return project, target_path
+
+
+@coderag_app.command("callers")
+def coderag_callers(
+    function_name: str = typer.Argument(..., help="Function name to find callers of"),
+    project: str = typer.Option(None, "--project", "-p", help="Project ID (auto-detected from vlt.toml if not specified)"),
+    transitive: bool = typer.Option(False, "--transitive", "-t", help="Find all callers recursively"),
+    path: str = typer.Option(None, "--path", help="File path for disambiguation"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Find functions that call a given function."""
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    resolved_project, target_path = _resolve_cgc_project_and_path(project, console)
+
+    try:
+        from vlt.core.coderag.code_graph import get_code_graph_service
+        svc = get_code_graph_service()
+        results = svc.find_callers(
+            function_name,
+            transitive=transitive,
+            path=path or "",
+            repo_path=target_path or "",
+        )
+    except Exception as e:
+        if json_output:
+            import sys
+            sys.stdout.write(json_lib.dumps({"error": str(e)}) + "\n")
+        else:
+            console.print(f"[red]Error querying call graph: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if not results:
+        if json_output:
+            import sys
+            sys.stdout.write("[]\n")
+        else:
+            label = "transitive callers" if transitive else "callers"
+            console.print(f"[yellow]No {label} found for '{function_name}'.[/yellow]")
+        return
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(results, indent=2) + "\n")
+        return
+
+    label = "Transitive Callers" if transitive else "Callers"
+    table = Table(title=f"{label} of '{function_name}'")
+    table.add_column("Function", style="cyan")
+    table.add_column("File", style="dim")
+    table.add_column("Line", style="magenta", justify="right")
+
+    for r in results:
+        name = r.get("name") or r.get("function_name") or r.get("caller") or ""
+        file_ = r.get("path") or r.get("file_path") or r.get("file") or ""
+        line = str(r.get("line_number") or r.get("line") or r.get("lineno") or "")
+        table.add_row(name, file_, line)
+
+    console.print(table)
+
+
+@coderag_app.command("callees")
+def coderag_callees(
+    function_name: str = typer.Argument(..., help="Function name to find callees of"),
+    project: str = typer.Option(None, "--project", "-p", help="Project ID (auto-detected from vlt.toml if not specified)"),
+    transitive: bool = typer.Option(False, "--transitive", "-t", help="Find all callees recursively"),
+    path: str = typer.Option(None, "--path", help="File path for disambiguation"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Find functions called by a given function."""
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    resolved_project, target_path = _resolve_cgc_project_and_path(project, console)
+
+    try:
+        from vlt.core.coderag.code_graph import get_code_graph_service
+        svc = get_code_graph_service()
+        results = svc.find_callees(
+            function_name,
+            transitive=transitive,
+            path=path or "",
+            repo_path=target_path or "",
+        )
+    except Exception as e:
+        if json_output:
+            import sys
+            sys.stdout.write(json_lib.dumps({"error": str(e)}) + "\n")
+        else:
+            console.print(f"[red]Error querying call graph: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if not results:
+        if json_output:
+            import sys
+            sys.stdout.write("[]\n")
+        else:
+            label = "transitive callees" if transitive else "callees"
+            console.print(f"[yellow]No {label} found for '{function_name}'.[/yellow]")
+        return
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(results, indent=2) + "\n")
+        return
+
+    label = "Transitive Callees" if transitive else "Callees"
+    table = Table(title=f"{label} of '{function_name}'")
+    table.add_column("Function", style="cyan")
+    table.add_column("File", style="dim")
+    table.add_column("Line", style="magenta", justify="right")
+
+    for r in results:
+        name = r.get("name") or r.get("function_name") or r.get("callee") or ""
+        file_ = r.get("path") or r.get("file_path") or r.get("file") or ""
+        line = str(r.get("line_number") or r.get("line") or r.get("lineno") or "")
+        table.add_row(name, file_, line)
+
+    console.print(table)
+
+
+@coderag_app.command("hierarchy")
+def coderag_hierarchy(
+    class_name: str = typer.Argument(..., help="Class name to show hierarchy for"),
+    project: str = typer.Option(None, "--project", "-p", help="Project ID (auto-detected from vlt.toml if not specified)"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Show class inheritance hierarchy (parents and children)."""
+    from rich.console import Console
+    import json as json_lib
+
+    console = Console()
+
+    resolved_project, target_path = _resolve_cgc_project_and_path(project, console)
+
+    try:
+        from vlt.core.coderag.code_graph import get_code_graph_service
+        svc = get_code_graph_service()
+        result = svc.class_hierarchy(class_name, repo_path=target_path or "")
+    except Exception as e:
+        if json_output:
+            import sys
+            sys.stdout.write(json_lib.dumps({"error": str(e)}) + "\n")
+        else:
+            console.print(f"[red]Error querying class hierarchy: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(result, indent=2) + "\n")
+        return
+
+    # Tree-style display: parents above, class in middle, children below
+    parents = result.get("parents") or result.get("superclasses") or []
+    children = result.get("children") or result.get("subclasses") or []
+    target = result.get("class_name") or class_name
+
+    console.print()
+    console.print(f"[bold blue]Class Hierarchy: {target}[/bold blue]")
+    console.print()
+
+    if parents:
+        console.print("[bold]Parents (superclasses):[/bold]")
+        for p in parents:
+            name = p.get("name") or p if isinstance(p, str) else str(p)
+            file_ = p.get("path") or p.get("file_path") or "" if isinstance(p, dict) else ""
+            loc = f"  [dim]({file_})[/dim]" if file_ else ""
+            console.print(f"  ▲ [cyan]{name}[/cyan]{loc}")
+        console.print()
+
+    console.print(f"  ● [bold yellow]{target}[/bold yellow]")
+
+    if children:
+        console.print()
+        console.print("[bold]Children (subclasses):[/bold]")
+        for c in children:
+            name = c.get("name") or c if isinstance(c, str) else str(c)
+            file_ = c.get("path") or c.get("file_path") or "" if isinstance(c, dict) else ""
+            loc = f"  [dim]({file_})[/dim]" if file_ else ""
+            console.print(f"  ▼ [cyan]{name}[/cyan]{loc}")
+
+    if not parents and not children:
+        console.print()
+        console.print("[yellow]No inheritance relationships found.[/yellow]")
+
+    console.print()
+
+
+@coderag_app.command("dead-code")
+def coderag_dead_code(
+    project: str = typer.Option(None, "--project", "-p", help="Project ID (auto-detected from vlt.toml if not specified)"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Find potentially unused functions (no callers)."""
+    from rich.console import Console
+    from rich.table import Table
+    import json as json_lib
+
+    console = Console()
+
+    resolved_project, target_path = _resolve_cgc_project_and_path(project, console)
+
+    try:
+        from vlt.core.coderag.code_graph import get_code_graph_service
+        svc = get_code_graph_service()
+        result = svc.find_dead_code(repo_path=target_path or "")
+    except Exception as e:
+        if json_output:
+            import sys
+            sys.stdout.write(json_lib.dumps({"error": str(e)}) + "\n")
+        else:
+            console.print(f"[red]Error finding dead code: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    # Normalise: result may be {"results": [...]} or {"functions": [...]} or a raw list
+    if isinstance(result, list):
+        items = result
+    else:
+        items = result.get("results") or result.get("functions") or result.get("dead_functions") or []
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(items, indent=2) + "\n")
+        return
+
+    if not items:
+        console.print("[green]No dead code found — all functions have callers.[/green]")
+        return
+
+    table = Table(title=f"Potentially Unused Functions ({len(items)} found)")
+    table.add_column("Function", style="cyan")
+    table.add_column("File", style="dim")
+    table.add_column("Line", style="magenta", justify="right")
+
+    for r in items:
+        name = r.get("name") or r.get("function_name") or ""
+        file_ = r.get("path") or r.get("file_path") or r.get("file") or ""
+        line = str(r.get("line_number") or r.get("line") or r.get("lineno") or "")
+        table.add_row(name, file_, line)
+
+    console.print(table)
+    console.print()
+    console.print("[dim]Note: Decorated functions (e.g. route handlers, event listeners) may appear here but are not truly dead.[/dim]")
+
+
+# ============================================================================
 # Oracle Commands (T076-T078) - Phase 10
 # ============================================================================
 
@@ -3653,8 +3942,8 @@ def _oracle_local(
     if not settings.openrouter_api_key and not settings.sync_token:
         console.print("[red]Error: No API credentials configured for local mode.[/red]")
         console.print()
-        console.print("Option 1 (Recommended): Configure server sync token:")
-        console.print("  vlt config set-key <your-sync-token>")
+        console.print("Option 1 (Recommended): Authenticate via GitHub:")
+        console.print("  vlt login")
         console.print()
         console.print("Option 2 (Legacy): Set OpenRouter API key directly:")
         console.print("  export VLT_OPENROUTER_API_KEY=<your-api-key>")
@@ -3812,7 +4101,7 @@ def context_list(
 
     if not client.token:
         console.print("[yellow]No sync token configured. Context tree requires backend.[/yellow]")
-        console.print("[dim]Run: vlt config set-key <your-sync-token>[/dim]")
+        console.print("[dim]Run: vlt login[/dim]")
         raise typer.Exit(code=1)
 
     if not client.is_available():
@@ -3892,7 +4181,7 @@ def context_new(
 
     if not client.token:
         console.print("[yellow]No sync token configured. Context tree requires backend.[/yellow]")
-        console.print("[dim]Run: vlt config set-key <your-sync-token>[/dim]")
+        console.print("[dim]Run: vlt login[/dim]")
         raise typer.Exit(code=1)
 
     if not client.is_available():
@@ -4173,7 +4462,7 @@ def context_history(
 
     if not client.token:
         console.print("[yellow]No sync token configured.[/yellow]")
-        console.print("[dim]Run: vlt config set-key <your-sync-token>[/dim]")
+        console.print("[dim]Run: vlt login[/dim]")
         raise typer.Exit(code=1)
 
     if not client.is_available():
@@ -4927,7 +5216,9 @@ def cron_list(
         if t.get("next_fire_at"):
             console.print(f"       next: [dim]{t['next_fire_at']}[/dim]")
         if t.get("last_fired_at"):
-            console.print(f"       last: [dim]{t['last_fired_at']}[/dim]  (fired {t.get('fire_count', 0)}×)")
+            max_f = t.get("max_fires")
+            count_str = f"{t.get('fire_count', 0)}/{max_f}" if max_f else f"{t.get('fire_count', 0)}"
+            console.print(f"       last: [dim]{t['last_fired_at']}[/dim]  (fired {count_str}×)")
         target = t.get("target_session_id")
         if target:
             console.print(f"       target: session [dim]{target[:12]}…[/dim]")
@@ -4949,6 +5240,7 @@ def cron_add(
     skill: Optional[str] = typer.Option(None, "--skill", help="Skill ID to use instead of inline prompt"),
     project_id: Optional[str] = typer.Option(None, "--project", "-p", help="Associate with project slug"),
     timezone: str = typer.Option("UTC", "--tz", help="IANA timezone, e.g. America/New_York"),
+    max_fires: Optional[int] = typer.Option(None, "--max-fires", help="Auto-complete after N fires (default: unlimited)"),
 ):
     """Create a new CronTrigger.
 
@@ -4957,8 +5249,8 @@ def cron_add(
       vlt cron add "Daily standup" "0 9 * * 1-5" "Run the standup script" --session <id>\n\n
       # One-off: fire in 90 minutes:\n
       vlt cron add "Deploy check" "" "Verify the deployment is healthy" --in 1:30 --session <id>\n\n
-      # One-off: fire at a specific date and time:\n
-      vlt cron add "Release prep" "" "Prepare the release notes" --at "2026-03-10 14:30" --session <id>
+      # Fire every 15 min, stop after 5 fires:\n
+      vlt cron add "Build check" "*/15 * * * *" "Check CI status" --session <id> --max-fires 5
     """
     import httpx
     daemon_url = _cron_daemon_url()
@@ -4991,6 +5283,8 @@ def cron_add(
         payload["skill_id"] = skill
     if project_id:
         payload["project_id"] = project_id
+    if max_fires is not None:
+        payload["max_fires"] = max_fires
 
     try:
         r = httpx.post(f"{daemon_url}/api/cronban/crons", json=payload, timeout=5.0)
@@ -5003,6 +5297,8 @@ def cron_add(
     console.print(f"\n[green]✓ Created:[/green] [bold]{t['title']}[/bold]")
     console.print(f"  id:   [dim]{t['id']}[/dim]")
     console.print(f"  expr: [cyan]{t.get('cron_expression')}[/cyan]  tz: {t.get('timezone', 'UTC')}")
+    if t.get("max_fires"):
+        console.print(f"  max:  {t['max_fires']} fires")
     if t.get("next_fire_at"):
         console.print(f"  next: {t['next_fire_at']}")
 
@@ -5296,6 +5592,218 @@ def setup_wizard(
 
 
 # ---------------------------------------------------------------------------
+# Auth commands (login / logout / whoami)
+# ---------------------------------------------------------------------------
+
+@app.command("login")
+def login_cmd(
+    server: Optional[str] = typer.Argument(None, help="Backend server URL (default: from config)"),
+):
+    """
+    Authenticate with the vlt backend via GitHub OAuth.
+
+    Opens your browser to sign in with GitHub. The resulting token is
+    stored in your active profile's .env as VLT_SYNC_TOKEN.
+    """
+    import threading
+    import webbrowser
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from urllib.parse import urlparse, parse_qs
+
+    from vlt.config import settings as _settings
+    from vlt.profile import get_active_profile_dir
+
+    raw_url = (server or _settings.vault_url).rstrip("/")
+    # Accept bare host:port (e.g., "localhost:5173" → "http://localhost:5173")
+    vault_url = raw_url if raw_url.startswith("http") else f"http://{raw_url}"
+
+    # Result holder shared between server thread and main thread
+    result: dict = {}
+    server_ready = threading.Event()
+
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            params = parse_qs(parsed.query)
+
+            if parsed.path == "/callback":
+                token = params.get("token", [None])[0]
+                user_id = params.get("user_id", [None])[0]
+                error = params.get("error", [None])[0]
+
+                if token and user_id:
+                    result["token"] = token
+                    result["user_id"] = user_id
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.end_headers()
+                    self.wfile.write(b"""<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#fff">
+                    <div style="text-align:center"><h1 style="color:#22c55e">&#10003; Authenticated</h1><p>You can close this tab and return to the terminal.</p></div>
+                    </body></html>""")
+                elif error:
+                    result["error"] = error
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.end_headers()
+                    self.wfile.write(f"""<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#fff">
+                    <div style="text-align:center"><h1 style="color:#ef4444">&#10007; Login Failed</h1><p>{error}</p></div>
+                    </body></html>""".encode())
+                else:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            pass  # Suppress default HTTP server logging
+
+    # Find an available port (OS assigns by binding to port 0)
+    httpd = HTTPServer(("127.0.0.1", 0), CallbackHandler)
+    port = httpd.server_address[1]
+
+    def serve():
+        server_ready.set()
+        # Loop until we get the real /callback with token or error.
+        # Browsers may send favicon/preflight requests first.
+        while not result:
+            httpd.handle_request()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    server_ready.wait()
+
+    login_url = f"{vault_url}/auth/cli/login?port={port}"
+
+    console.print(f"\n[bold]Opening browser for GitHub authentication...[/bold]")
+    console.print(f"[dim]If the browser doesn't open, visit:[/dim]")
+    console.print(f"[blue underline]{login_url}[/blue underline]\n")
+
+    webbrowser.open(login_url)
+
+    # Wait for callback (timeout after 120 seconds)
+    console.print("[dim]Waiting for authentication...[/dim]")
+    thread.join(timeout=120)
+    httpd.server_close()
+
+    if not result:
+        console.print("[red]✗[/red] Authentication timed out (120s). Try again.")
+        raise typer.Exit(1)
+
+    if "error" in result:
+        console.print(f"[red]✗[/red] Login failed: {result['error']}")
+        raise typer.Exit(1)
+
+    token = result["token"]
+    user_id = result["user_id"]
+
+    # Store token in profile .env
+    profile_dir = get_active_profile_dir()
+    env_file = profile_dir / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Read existing .env, update or add VLT_SYNC_TOKEN and VLT_VAULT_URL
+    existing_lines = []
+    if env_file.exists():
+        existing_lines = env_file.read_text().splitlines()
+
+    new_lines = []
+    found_token = False
+    found_url = False
+    for line in existing_lines:
+        if line.startswith("VLT_SYNC_TOKEN="):
+            new_lines.append(f"VLT_SYNC_TOKEN={token}")
+            found_token = True
+        elif line.startswith("VLT_VAULT_URL="):
+            new_lines.append(f"VLT_VAULT_URL={vault_url}")
+            found_url = True
+        else:
+            new_lines.append(line)
+
+    if not found_token:
+        new_lines.append(f"VLT_SYNC_TOKEN={token}")
+    if not found_url:
+        new_lines.append(f"VLT_VAULT_URL={vault_url}")
+
+    env_file.write_text("\n".join(new_lines) + "\n")
+
+    console.print(f"[green]✓[/green] Logged in as [bold]{user_id}[/bold]")
+    console.print(f"[dim]Token saved to {env_file}[/dim]")
+    console.print(f"[dim]Server: {vault_url}[/dim]")
+
+
+@app.command("logout")
+def logout_cmd():
+    """
+    Clear stored authentication token.
+    """
+    from vlt.profile import get_active_profile_dir
+
+    profile_dir = get_active_profile_dir()
+    env_file = profile_dir / ".env"
+
+    if not env_file.exists():
+        console.print("[yellow]No credentials found.[/yellow]")
+        return
+
+    lines = env_file.read_text().splitlines()
+    new_lines = [l for l in lines if not l.startswith("VLT_SYNC_TOKEN=")]
+
+    if len(new_lines) == len(lines):
+        console.print("[yellow]No credentials found.[/yellow]")
+        return
+
+    env_file.write_text("\n".join(new_lines) + "\n")
+    console.print("[green]✓[/green] Logged out. Token removed.")
+
+
+@app.command("whoami")
+def whoami_cmd():
+    """
+    Show the currently authenticated user.
+    """
+    import httpx as _httpx
+    from vlt.config import settings as _settings
+
+    if not _settings.sync_token:
+        console.print("[yellow]Not logged in.[/yellow] Run [bold]vlt login[/bold] to authenticate.")
+        raise typer.Exit(1)
+
+    try:
+        r = _httpx.get(
+            f"{_settings.vault_url}/api/me",
+            headers={"Authorization": f"Bearer {_settings.sync_token}"},
+            timeout=10.0,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            console.print(f"[green]✓[/green] Logged in as [bold]{data.get('user_id', 'unknown')}[/bold]")
+            if data.get("gh_profile", {}).get("username"):
+                console.print(f"[dim]GitHub: {data['gh_profile']['username']}[/dim]")
+            console.print(f"[dim]Server: {_settings.vault_url}[/dim]")
+        elif r.status_code == 401:
+            console.print("[red]✗[/red] Token expired or invalid. Run [bold]vlt login[/bold] to re-authenticate.")
+            raise typer.Exit(1)
+        elif r.status_code == 403:
+            detail = r.json().get("detail", {})
+            error = detail.get("error", "forbidden") if isinstance(detail, dict) else "forbidden"
+            if error == "account_pending":
+                console.print("[yellow]![/yellow] Account pending admin approval.")
+            elif error == "account_blocked":
+                console.print("[red]✗[/red] Account has been blocked.")
+            else:
+                console.print(f"[red]✗[/red] Access denied: {error}")
+            raise typer.Exit(1)
+        else:
+            console.print(f"[red]✗[/red] Server returned {r.status_code}")
+            raise typer.Exit(1)
+    except _httpx.ConnectError:
+        console.print(f"[red]✗[/red] Cannot reach server at {_settings.vault_url}")
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Connectors subcommands
 # ---------------------------------------------------------------------------
 
@@ -5324,125 +5832,214 @@ def _composio_client():
 
 
 # ---------------------------------------------------------------------------
-# Hub commands
+# Connectors commands (unified native + Composio)
 # ---------------------------------------------------------------------------
 
-@hub_app.command("status")
-def hub_status():
-    """Check if Composio is configured on the backend."""
-    import httpx
-
-    base_url, headers = _composio_client()
-    try:
-        resp = httpx.get(f"{base_url}/status", headers=headers, timeout=10.0)
-    except httpx.ConnectError:
-        console.print("[red]Error: Cannot connect to backend.[/red]")
-        raise typer.Exit(1)
-    data = resp.json()
-    if data.get("configured"):
-        console.print("[green]✓ Composio is configured.[/green]")
-    else:
-        console.print("[yellow]⚠ Composio is not configured. Set COMPOSIO_API_KEY on the backend.[/yellow]")
-        console.print("  Get your key at: https://app.composio.dev/settings")
-
-
-@hub_app.command("list")
-def hub_list(
-    search: str = typer.Option("", "--search", "-s", help="Filter by name or category"),
-    connected_only: bool = typer.Option(False, "--connected", help="Show only connected apps"),
+@connectors_app.command("list")
+def connectors_list(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """List available Composio integrations."""
+    """List all available connectors — native and Composio integrations."""
     import httpx
     import json as json_lib
     from rich.table import Table
 
-    base_url, headers = _composio_client()
+    vault_url, headers = _connectors_client()
+    rows: list[dict] = []
+
+    # Native connectors
     try:
-        resp = httpx.get(f"{base_url}/apps", headers=headers, timeout=15.0)
+        resp = httpx.get(f"{vault_url}/api/connectors", headers=headers, timeout=10.0)
+        if resp.status_code == 200:
+            for c in resp.json().get("connectors", []):
+                if c.get("enabled") and c.get("configured"):
+                    rows.append({
+                        "name": c["name"],
+                        "display_name": c["display_name"],
+                        "type": "native",
+                        "actions": [a["name"] for a in c.get("actions", [])],
+                    })
     except httpx.ConnectError:
-        console.print("[red]Error: Cannot connect to backend.[/red]")
-        raise typer.Exit(1)
+        console.print(f"[red]Error: Cannot connect to backend at {vault_url}[/red]")
+        raise typer.Exit(code=1)
 
-    if resp.status_code != 200:
-        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
-        raise typer.Exit(1)
-
-    apps = resp.json().get("apps", [])
-
-    if search:
-        apps = [a for a in apps if search.lower() in a["name"].lower() or search.lower() in a["display_name"].lower() or any(search.lower() in c.lower() for c in a.get("categories", []))]
-    if connected_only:
-        apps = [a for a in apps if a.get("connected")]
+    # Composio connected apps
+    try:
+        resp = httpx.get(f"{vault_url}/api/composio/connected", headers=headers, timeout=10.0)
+        if resp.status_code == 200:
+            for c in resp.json().get("connections", []):
+                app_name = c.get("app_name", "")
+                if app_name:
+                    # Fetch action count
+                    action_names: list[str] = []
+                    try:
+                        ar = httpx.get(f"{vault_url}/api/composio/{app_name}/actions", headers=headers, timeout=10.0)
+                        if ar.status_code == 200:
+                            action_names = [a["name"] for a in ar.json().get("actions", [])]
+                    except Exception:
+                        pass
+                    rows.append({
+                        "name": f"composio:{app_name}",
+                        "display_name": app_name.capitalize(),
+                        "type": "composio",
+                        "actions": action_names,
+                    })
+    except Exception:
+        pass  # Composio may not be configured
 
     if json_output:
         import sys
-        sys.stdout.write(json_lib.dumps(apps, indent=2) + "\n")
+        sys.stdout.write(json_lib.dumps(rows, indent=2) + "\n")
         return
 
-    if not apps:
-        console.print("[yellow]No apps found.[/yellow]")
+    if not rows:
+        console.print("[yellow]No connectors available. Configure them in the Connectors tab.[/yellow]")
         return
 
-    table = Table(title=f"Composio Apps ({len(apps)})")
+    table = Table(title=f"Connectors ({len(rows)})")
     table.add_column("Name", style="cyan")
-    table.add_column("Display Name")
-    table.add_column("Categories")
-    table.add_column("Status")
+    table.add_column("Type", style="dim")
+    table.add_column("Actions")
 
-    for a in apps:
-        status = "[green]Connected[/green]" if a.get("connected") else "[dim]—[/dim]"
-        cats = ", ".join(a.get("categories", [])[:3])
-        table.add_row(a["name"], a["display_name"], cats, status)
+    for r in rows:
+        actions_str = ", ".join(r["actions"][:5])
+        if len(r["actions"]) > 5:
+            actions_str += f" (+{len(r['actions']) - 5} more)"
+        table.add_row(r["name"], r["type"], actions_str)
 
     console.print(table)
 
 
-@hub_app.command("connected")
-def hub_connected(
+@connectors_app.command("call")
+def connectors_call(
+    connector: str = typer.Argument(..., help="Connector name, e.g. mailgun or composio:gmail"),
+    action: str = typer.Argument(..., help="Action name, e.g. send_email or GMAIL_SEND_EMAIL"),
+    params: str = typer.Argument("{}", help="JSON string of action parameters"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Invoke a connector action.
+
+    Use composio:<app> prefix for Composio integrations.
+
+    Examples:
+
+        vlt connectors call mailgun send_email '{"to":"a@b.com","subject":"Hi","body":"Hello"}'
+        vlt connectors call composio:gmail GMAIL_SEND_EMAIL '{"recipient_email":"a@b.com","body":"Hi"}'
+    """
+    import httpx
+    import json as json_lib
+
+    try:
+        params_dict = json_lib.loads(params)
+    except json_lib.JSONDecodeError as e:
+        console.print(f"[red]Error: params must be valid JSON: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    vault_url, headers = _connectors_client()
+
+    # Route composio:<app> to /api/composio/<app>/invoke, native to /api/connectors/<name>/invoke
+    if connector.startswith("composio:"):
+        app_name = connector.split(":", 1)[1]
+        url = f"{vault_url}/api/composio/{app_name}/invoke"
+    else:
+        url = f"{vault_url}/api/connectors/{connector}/invoke"
+
+    try:
+        resp = httpx.post(url, json={"action": action, "params": params_dict}, headers=headers, timeout=30.0)
+    except httpx.ConnectError:
+        console.print(f"[red]Error: Cannot connect to backend at {vault_url}[/red]")
+        raise typer.Exit(code=1)
+
+    if resp.status_code == 403:
+        console.print(f"[red]Error: Action '{action}' is disabled for '{connector}'. Enable it in Connectors settings.[/red]")
+        raise typer.Exit(code=1)
+    if resp.status_code == 404:
+        console.print(f"[red]Error: Connector '{connector}' not found.[/red]")
+        raise typer.Exit(code=1)
+    if resp.status_code >= 400:
+        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
+        raise typer.Exit(code=1)
+
+    data = resp.json()
+
+    if json_output:
+        import sys
+        sys.stdout.write(json_lib.dumps(data, indent=2) + "\n")
+        return
+
+    if data.get("success"):
+        console.print("[green]✓ Success[/green]")
+        result = data.get("data") or data.get("result") or {}
+        if result:
+            console.print(json_lib.dumps(result, indent=2))
+    else:
+        console.print(f"[red]✗ Failed:[/red] {data.get('error', 'Unknown error')}")
+        raise typer.Exit(code=1)
+
+
+@connectors_app.command("actions")
+def connectors_actions(
+    connector: str = typer.Argument(..., help="Connector name, e.g. mailgun or composio:gmail"),
     json_output: bool = typer.Option(False, "--json"),
 ):
-    """Show your connected Composio apps."""
+    """List available actions for a connector."""
     import httpx
     import json as json_lib
     from rich.table import Table
 
-    base_url, headers = _composio_client()
+    vault_url, headers = _connectors_client()
+
+    if connector.startswith("composio:"):
+        app_name = connector.split(":", 1)[1]
+        url = f"{vault_url}/api/composio/{app_name}/actions"
+    else:
+        # Native: pull from connector list
+        url = f"{vault_url}/api/connectors"
+
     try:
-        resp = httpx.get(f"{base_url}/connected", headers=headers, timeout=10.0)
+        resp = httpx.get(url, headers=headers, timeout=15.0)
     except httpx.ConnectError:
-        console.print("[red]Error: Cannot connect to backend.[/red]")
+        console.print(f"[red]Error: Cannot connect to backend at {vault_url}[/red]")
         raise typer.Exit(1)
 
     if resp.status_code != 200:
         console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
         raise typer.Exit(1)
 
-    connections = resp.json().get("connections", [])
+    if connector.startswith("composio:"):
+        actions = resp.json().get("actions", [])
+    else:
+        # Find matching native connector
+        connectors = resp.json().get("connectors", [])
+        match = next((c for c in connectors if c["name"] == connector), None)
+        if not match:
+            console.print(f"[red]Error: Connector '{connector}' not found.[/red]")
+            raise typer.Exit(1)
+        actions = match.get("actions", [])
 
     if json_output:
         import sys
-        sys.stdout.write(json_lib.dumps(connections, indent=2) + "\n")
+        sys.stdout.write(json_lib.dumps(actions, indent=2) + "\n")
         return
 
-    if not connections:
-        console.print("[yellow]No apps connected. Run [bold]vlt connectors hub connect <app>[/bold] to get started.[/yellow]")
+    if not actions:
+        console.print(f"[yellow]No actions found for {connector}.[/yellow]")
         return
 
-    table = Table(title="Connected Apps")
-    table.add_column("App", style="cyan")
-    table.add_column("Status")
-    table.add_column("Connection ID", style="dim")
+    table = Table(title=f"{connector} — Actions ({len(actions)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Description")
 
-    for c in connections:
-        table.add_row(c["app_name"], c.get("status", "active"), c.get("connection_id", "")[:12] + "…")
+    for a in actions:
+        desc = a.get("description", "") or ""
+        table.add_row(a["name"], desc[:80])
 
     console.print(table)
 
 
-@hub_app.command("connect")
-def hub_connect(
-    app: str = typer.Argument(..., help="App name e.g. gmail, slack, linear"),
+@connectors_app.command("connect")
+def connectors_connect(
+    app: str = typer.Argument(..., help="Composio app name, e.g. gmail, slack, linear"),
 ):
     """Connect a Composio app via OAuth. Opens the authorization URL."""
     import httpx
@@ -5462,12 +6059,12 @@ def hub_connect(
     url = data.get("redirect_url", "")
     console.print(f"\n[green]Open this URL to connect {app}:[/green]")
     console.print(f"  [link={url}]{url}[/link]")
-    console.print("\n[dim]After authorizing, run [bold]vlt connectors hub connected[/bold] to verify.[/dim]")
+    console.print(f"\n[dim]After authorizing, run [bold]vlt connectors list[/bold] to verify.[/dim]")
 
 
-@hub_app.command("disconnect")
-def hub_disconnect(
-    app: str = typer.Argument(..., help="App name to disconnect"),
+@connectors_app.command("disconnect")
+def connectors_disconnect(
+    app: str = typer.Argument(..., help="Composio app name to disconnect"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ):
     """Disconnect a Composio app."""
@@ -5490,217 +6087,6 @@ def hub_disconnect(
         raise typer.Exit(1)
 
     console.print(f"[green]✓ {app} disconnected.[/green]")
-
-
-@hub_app.command("call")
-def hub_call(
-    app: str = typer.Argument(..., help="App name e.g. gmail"),
-    action: str = typer.Argument(..., help="Action name e.g. GMAIL_SEND_EMAIL"),
-    params: str = typer.Argument("{}", help="JSON params string"),
-    json_output: bool = typer.Option(False, "--json"),
-):
-    """Invoke a Composio action.
-
-    Examples:
-
-        vlt connectors hub call gmail GMAIL_SEND_EMAIL '{"recipient_email":"you@test.com","subject":"Hi","body":"Hello"}'
-    """
-    import httpx
-    import json as json_lib
-
-    try:
-        params_dict = json_lib.loads(params)
-    except json_lib.JSONDecodeError as e:
-        console.print(f"[red]Error: params must be valid JSON: {e}[/red]")
-        raise typer.Exit(1)
-
-    base_url, headers = _composio_client()
-    try:
-        resp = httpx.post(
-            f"{base_url}/{app}/invoke",
-            json={"action": action, "params": params_dict},
-            headers=headers,
-            timeout=30.0,
-        )
-    except httpx.ConnectError:
-        console.print("[red]Error: Cannot connect to backend.[/red]")
-        raise typer.Exit(1)
-
-    if resp.status_code >= 400:
-        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
-        raise typer.Exit(1)
-
-    data = resp.json()
-
-    if json_output:
-        import sys
-        sys.stdout.write(json_lib.dumps(data, indent=2) + "\n")
-        return
-
-    if data.get("success"):
-        console.print("[green]✓ Success[/green]")
-        result = data.get("data", {})
-        if result:
-            console.print(json_lib.dumps(result, indent=2))
-    else:
-        console.print("[red]✗ Failed[/red]")
-        raise typer.Exit(1)
-
-
-@hub_app.command("actions")
-def hub_actions(
-    app: str = typer.Argument(..., help="App name e.g. gmail"),
-    json_output: bool = typer.Option(False, "--json"),
-):
-    """List available actions for a Composio app."""
-    import httpx
-    import json as json_lib
-    from rich.table import Table
-
-    base_url, headers = _composio_client()
-    try:
-        resp = httpx.get(f"{base_url}/{app}/actions", headers=headers, timeout=15.0)
-    except httpx.ConnectError:
-        console.print("[red]Error: Cannot connect to backend.[/red]")
-        raise typer.Exit(1)
-
-    if resp.status_code != 200:
-        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
-        raise typer.Exit(1)
-
-    actions = resp.json().get("actions", [])
-
-    if json_output:
-        import sys
-        sys.stdout.write(json_lib.dumps(actions, indent=2) + "\n")
-        return
-
-    if not actions:
-        console.print(f"[yellow]No actions found for {app}.[/yellow]")
-        return
-
-    table = Table(title=f"{app} Actions ({len(actions)})")
-    table.add_column("Name", style="cyan")
-    table.add_column("Display Name")
-    table.add_column("Description")
-
-    for a in actions:
-        table.add_row(a["name"], a.get("display_name", ""), (a.get("description", "") or "")[:60])
-
-    console.print(table)
-
-
-@connectors_app.command("list")
-def connectors_list(
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
-):
-    """List connectors enabled for your account, with their available actions."""
-    import httpx
-    import json as json_lib
-    from rich.console import Console
-    from rich.table import Table
-
-    console = Console()
-    vault_url, headers = _connectors_client()
-
-    try:
-        resp = httpx.get(f"{vault_url}/api/connectors", headers=headers, timeout=10.0)
-    except httpx.ConnectError:
-        console.print(f"[red]Error: Cannot connect to backend at {vault_url}[/red]")
-        raise typer.Exit(code=1)
-
-    if resp.status_code != 200:
-        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
-        raise typer.Exit(code=1)
-
-    data = resp.json()
-    connectors = [c for c in data.get("connectors", []) if c.get("enabled") and c.get("configured")]
-
-    if json_output:
-        import sys
-        sys.stdout.write(json_lib.dumps(connectors, indent=2) + "\n")
-        return
-
-    if not connectors:
-        console.print("[yellow]No connectors enabled. Configure them in the Connectors tab.[/yellow]")
-        return
-
-    table = Table(title="Enabled Connectors")
-    table.add_column("Name", style="cyan")
-    table.add_column("Display Name")
-    table.add_column("Actions")
-
-    for c in connectors:
-        actions = ", ".join(a["name"] for a in c.get("actions", []))
-        table.add_row(c["name"], c["display_name"], actions)
-
-    console.print(table)
-
-
-@connectors_app.command("call")
-def connectors_call(
-    connector: str = typer.Argument(..., help="Connector name, e.g. mailgun"),
-    action: str = typer.Argument(..., help="Action name, e.g. send_email"),
-    params: str = typer.Argument("{}", help="JSON string of action parameters"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
-):
-    """Invoke a connector action.
-
-    Examples:
-
-        vlt connectors call mailgun send_email '{"to":"you@example.com","subject":"Hi","body":"Hello!"}'
-    """
-    import httpx
-    import json as json_lib
-    from rich.console import Console
-
-    console = Console()
-
-    try:
-        params_dict = json_lib.loads(params)
-    except json_lib.JSONDecodeError as e:
-        console.print(f"[red]Error: params must be valid JSON: {e}[/red]")
-        raise typer.Exit(code=1)
-
-    vault_url, headers = _connectors_client()
-
-    try:
-        resp = httpx.post(
-            f"{vault_url}/api/connectors/{connector}/invoke",
-            json={"action": action, "params": params_dict},
-            headers=headers,
-            timeout=30.0,
-        )
-    except httpx.ConnectError:
-        console.print(f"[red]Error: Cannot connect to backend at {vault_url}[/red]")
-        raise typer.Exit(code=1)
-
-    if resp.status_code == 403:
-        console.print(f"[red]Error: Connector '{connector}' is not enabled. Configure it in the Connectors tab.[/red]")
-        raise typer.Exit(code=1)
-    if resp.status_code == 404:
-        console.print(f"[red]Error: Connector '{connector}' not found.[/red]")
-        raise typer.Exit(code=1)
-    if resp.status_code >= 400:
-        console.print(f"[red]Error: HTTP {resp.status_code}: {resp.text[:200]}[/red]")
-        raise typer.Exit(code=1)
-
-    data = resp.json()
-
-    if json_output:
-        import sys
-        sys.stdout.write(json_lib.dumps(data, indent=2) + "\n")
-        return
-
-    if data.get("success"):
-        console.print("[green]✓ Success[/green]")
-        result = data.get("result", {})
-        if result:
-            for k, v in result.items():
-                console.print(f"  [dim]{k}:[/dim] {v}")
-    else:
-        console.print(f"[red]✗ Failed:[/red] {data.get('error', 'Unknown error')}")
-        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

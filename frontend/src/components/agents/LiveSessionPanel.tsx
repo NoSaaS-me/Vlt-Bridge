@@ -450,17 +450,15 @@ export function LiveSessionPanel({
       >
         <div className="max-w-3xl mx-auto p-4 space-y-3">
           {(() => {
-            const visible = showHistory ? messages : messages.filter((m) => !m.historical);
+            // If no live messages exist yet, show historical messages regardless of toggle
+            const hasLiveMessages = messages.some((m) => !m.historical);
+            const effectiveShowHistory = showHistory || !hasLiveMessages;
+            const visible = effectiveShowHistory ? messages : messages.filter((m) => !m.historical);
             const liveStart = messages.findIndex((m) => !m.historical);
             if (visible.length === 0) return (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <Loader2 className="h-8 w-8 text-muted-foreground/30 animate-spin mb-3" />
                 <p className="text-sm text-muted-foreground">Waiting for new messages…</p>
-                {messages.some((m) => m.historical) && (
-                  <p className="mt-2 text-xs text-muted-foreground/60">
-                    Enable "Show session history" in Settings → Agents to see past messages.
-                  </p>
-                )}
               </div>
             );
             return visible.map((msg, i) => (

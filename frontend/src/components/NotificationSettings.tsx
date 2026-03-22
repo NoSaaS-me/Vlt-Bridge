@@ -71,7 +71,7 @@ interface NotificationSettingsProps {
   canTestNotifications?: boolean;
 }
 
-export function NotificationSettings({ isDemoMode = false, canTestNotifications = false }: NotificationSettingsProps) {
+export function NotificationSettings({ canTestNotifications = true }: NotificationSettingsProps) {
   const [subscribers, setSubscribers] = useState<SubscriberInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -99,11 +99,6 @@ export function NotificationSettings({ isDemoMode = false, canTestNotifications 
   };
 
   const handleToggle = async (subscriberId: string, newEnabled: boolean) => {
-    if (isDemoMode) {
-      setError('Demo mode is read-only. Sign in to change notification settings.');
-      return;
-    }
-
     // Prevent double-toggling
     if (togglingIds.has(subscriberId)) {
       return;
@@ -264,7 +259,6 @@ export function NotificationSettings({ isDemoMode = false, canTestNotifications 
                       subscriber={subscriber}
                       isToggling={togglingIds.has(subscriber.id)}
                       onToggle={handleToggle}
-                      isDemoMode={isDemoMode}
                       canTestNotifications={canTestNotifications}
                       isTesting={testingIds.has(subscriber.id)}
                       isTested={testedIds.has(subscriber.id)}
@@ -290,15 +284,14 @@ interface SubscriberRowProps {
   subscriber: SubscriberInfo;
   isToggling: boolean;
   onToggle: (id: string, newEnabled: boolean) => void;
-  isDemoMode: boolean;
   canTestNotifications: boolean;
   isTesting: boolean;
   isTested: boolean;
   onTest: (id: string) => void;
 }
 
-function SubscriberRow({ subscriber, isToggling, onToggle, isDemoMode, canTestNotifications, isTesting, isTested, onTest }: SubscriberRowProps) {
-  const isDisabled = subscriber.is_core || isToggling || isDemoMode;
+function SubscriberRow({ subscriber, isToggling, onToggle, canTestNotifications, isTesting, isTested, onTest }: SubscriberRowProps) {
+  const isDisabled = subscriber.is_core || isToggling;
 
   return (
     <div
@@ -346,7 +339,6 @@ function SubscriberRow({ subscriber, isToggling, onToggle, isDemoMode, canTestNo
       </div>
 
       <div className="ml-4 flex items-center gap-2">
-        {/* Test button - only shown for demo users (user_id === 'demo-user') */}
         {canTestNotifications && (
           <TooltipProvider>
             <Tooltip>

@@ -50,6 +50,21 @@ class ConnectorRegistry:
             self.register_action(GitHubOAuthConnector())
         except ImportError as e:
             logger.warning("Could not load GitHubOAuthConnector: %s", e)
+        # AI Model connectors (ContentForge)
+        _ai_connectors = [
+            (".connectors.openrouter", "OpenRouterConnector"),
+            (".connectors.zai", "ZaiConnector"),
+            (".connectors.zai_vision", "ZaiVisionConnector"),
+            (".connectors.custom_openai", "CustomOpenAIConnector"),
+        ]
+        for module_path, class_name in _ai_connectors:
+            try:
+                import importlib
+                mod = importlib.import_module(module_path, package=__package__)
+                cls = getattr(mod, class_name)
+                self.register_action(cls())
+            except (ImportError, AttributeError) as e:
+                logger.debug("Could not load %s: %s", class_name, e)
 
     def register_action(self, connector: "ActionConnector") -> None:
         self._action[connector.name] = connector

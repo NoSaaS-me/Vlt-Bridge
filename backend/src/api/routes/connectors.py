@@ -101,6 +101,78 @@ async def get_connector_credentials(
     return {"connector": connector_name, "credentials": credentials}
 
 
+@router.get("/{connector_name}/instances")
+async def list_instances(
+    connector_name: str,
+    auth: AuthContext = Depends(require_auth_context),
+    svc: ConnectorService = Depends(get_connector_service),
+) -> dict:
+    """List all instances for a connector with their enabled/configured status."""
+    registry = get_registry()
+    if not registry.get(connector_name):
+        raise HTTPException(status_code=404, detail=f"Connector '{connector_name}' not found")
+    instances = svc.list_instances(auth.user_id, connector_name)
+    return {"connector": connector_name, "instances": instances}
+
+
+@router.get("/{connector_name}/instances/{instance_id}/config")
+async def get_instance_config(
+    connector_name: str,
+    instance_id: str,
+    auth: AuthContext = Depends(require_auth_context),
+    svc: ConnectorService = Depends(get_connector_service),
+) -> dict:
+    """Get config for a specific connector instance (secrets masked)."""
+    registry = get_registry()
+    connector = registry.get(connector_name)
+    if not connector:
+        raise HTTPException(status_code=404, detail=f"Connector '{connector_name}' not found")
+
+    raw = svc.get_config(auth.user_id, connector_name, instance_id=instance_id)
+    secret_field_names = {f.name for f in connector.credential_fields if f.secret}
+    masked = {
+        k: ("••••••••" if k in secret_field_names and v else v)
+        for k, v in raw.items()
+    }
+    return {"connector": connector_name, "instance_id": instance_id, "config": masked}
+
+
+@router.put("/{connector_name}/instances/{instance_id}/config")
+async def set_instance_config(
+    connector_name: str,
+    instance_id: str,
+    body: ConnectorConfigUpdate,
+    auth: AuthContext = Depends(require_auth_context),
+    svc: ConnectorService = Depends(get_connector_service),
+) -> dict:
+    """Save connector config for a specific instance."""
+    registry = get_registry()
+    if not registry.get(connector_name):
+        raise HTTPException(status_code=404, detail=f"Connector '{connector_name}' not found")
+    filtered = {k: v for k, v in body.config.items() if v != "••••••••"}
+    svc.set_config(auth.user_id, connector_name, filtered, instance_id=instance_id)
+    return {"connector": connector_name, "instance_id": instance_id, "saved": True}
+
+
+@router.delete("/{connector_name}/instances/{instance_id}")
+async def delete_instance(
+    connector_name: str,
+    instance_id: str,
+    auth: AuthContext = Depends(require_auth_context),
+    svc: ConnectorService = Depends(get_connector_service),
+) -> dict:
+    """Delete all config for a connector instance."""
+    if instance_id == "default":
+        raise HTTPException(status_code=400, detail="Cannot delete the 'default' instance")
+    registry = get_registry()
+    if not registry.get(connector_name):
+        raise HTTPException(status_code=404, detail=f"Connector '{connector_name}' not found")
+    deleted = svc.delete_instance(auth.user_id, connector_name, instance_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+    return {"connector": connector_name, "instance_id": instance_id, "deleted": True}
+
+
 @router.post("/{connector_name}/invoke", response_model=ConnectorInvokeResponse)
 async def invoke_connector(
     connector_name: str,
@@ -114,10 +186,18 @@ async def invoke_connector(
     if not connector:
         raise HTTPException(status_code=404, detail=f"Connector '{connector_name}' not found")
 
-    if not svc.is_enabled(auth.user_id, connector_name):
+    if not svc.is_enabled(auth.user_id, connector_name, instance_id=body.instance_id):
         raise HTTPException(status_code=403, detail=f"Connector '{connector_name}' is not enabled for this user")
 
-    credentials = svc.get_credentials(auth.user_id, connector_name)
+    # Per-action permission check — "off" blocks execution; "ask"/"allow" proceed
+    permission = svc.get_action_permission(auth.user_id, connector_name, body.action, instance_id=body.instance_id)
+    if permission == "off":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Action '{body.action}' is disabled for connector '{connector_name}'. Enable it in Connectors settings.",
+        )
+
+    credentials = svc.get_credentials(auth.user_id, connector_name, instance_id=body.instance_id)
 
     try:
         result = await connector.invoke(body.action, body.params, credentials)

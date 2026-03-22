@@ -91,6 +91,14 @@ class ModelSettings(BaseModel):
         default=ModelProvider.GOOGLE,
         description="Provider for subagent model"
     )
+    vision_model: Optional[str] = Field(
+        default=None,
+        description="Model to use for artifact visual review (must support image input)"
+    )
+    vision_provider: Optional[ModelProvider] = Field(
+        default=None,
+        description="Provider for vision model"
+    )
     thinking_enabled: bool = Field(
         default=False,
         description="Enable extended thinking mode (adds :thinking suffix for supported models)"
@@ -150,6 +158,10 @@ class ModelInfo(BaseModel):
     supports_thinking: bool = Field(
         default=False,
         description="Whether model supports :thinking suffix for extended reasoning"
+    )
+    supports_vision: bool = Field(
+        default=False,
+        description="Whether model supports image/vision input"
     )
     context_length: Optional[int] = Field(
         None,

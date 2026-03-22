@@ -43,6 +43,7 @@ class OracleRequest(BaseModel):
     max_tokens: int = Field(16000, ge=1000, le=100000, description="Maximum tokens for context assembly")
     context_id: Optional[str] = Field(None, description="Context ID to continue conversation (None = create new)")
     project_id: Optional[str] = Field(None, description="Project ID for context scoping")
+    deep_research: bool = Field(False, description="Enable deep research mode: multi-step web search + synthesis via open_deep_research")
 
 
 class OracleStreamChunk(BaseModel):
@@ -89,3 +90,34 @@ class ConversationHistoryResponse(BaseModel):
     session_id: Optional[str] = Field(None, description="Session identifier")
     compressed: bool = Field(False, description="Whether history has been compressed")
     token_count: Optional[int] = Field(None, description="Approximate token count")
+
+
+# ---------------------------------------------------------------------------
+# Oracle V2 thread management models (023-oracle-codeact-rework)
+# ---------------------------------------------------------------------------
+
+class OracleThreadSummary(BaseModel):
+    """Metadata for a single Oracle V2 conversation thread."""
+    thread_id: str = Field(..., description="UUID thread identifier")
+    project_id: Optional[str] = Field(None, description="Project this thread belongs to")
+    title: Optional[str] = Field(None, description="Auto-derived from first user message")
+    created_at: str = Field(..., description="Thread creation timestamp (ISO 8601 UTC)")
+    last_active_at: str = Field(..., description="Last turn timestamp (ISO 8601 UTC)")
+
+
+class OracleThreadListResponse(BaseModel):
+    """Response for listing Oracle V2 threads."""
+    threads: List[OracleThreadSummary] = Field(default_factory=list)
+    total: int = Field(..., description="Total count before limit/offset")
+
+
+class OracleThreadHistoryMessage(BaseModel):
+    """A single message in a thread's history (for the /history endpoint)."""
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class OracleThreadHistoryResponse(BaseModel):
+    """Response for fetching thread message history."""
+    thread_id: str
+    messages: List[OracleThreadHistoryMessage] = Field(default_factory=list)

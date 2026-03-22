@@ -14,6 +14,7 @@ export interface OracleRequest {
   max_tokens?: number;       // Maximum tokens for context assembly
   context_id?: string;       // Context tree node ID for conversation continuity
   project_id?: string;       // Project scope for multi-project support
+  deep_research?: boolean;   // Enable multi-step web research via open_deep_research
 }
 
 /**

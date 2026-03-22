@@ -55,6 +55,7 @@ GLM_MODELS_FALLBACK = [
         provider=ModelProvider.GLM,
         is_free=False,
         supports_thinking=False,
+        supports_vision=True,
         context_length=128000,
         description="Z.AI vision + coding model"
     ),
@@ -104,6 +105,7 @@ GOOGLE_MODELS = [
         provider=ModelProvider.GOOGLE,
         is_free=True,
         supports_thinking=False,
+        supports_vision=True,
         context_length=1000000,
         description="Latest experimental Gemini model with 1M token context"
     ),
@@ -113,6 +115,7 @@ GOOGLE_MODELS = [
         provider=ModelProvider.GOOGLE,
         is_free=False,
         supports_thinking=False,
+        supports_vision=True,
         context_length=2000000,
         description="Advanced Gemini model with 2M token context"
     ),
@@ -189,12 +192,21 @@ class ModelProviderService:
                         or "/o3" in model_id.lower()
                     )
 
+                    # Check if model supports vision/image input
+                    arch = model_data.get("architecture", {})
+                    input_mods = model_data.get("input_modalities", [])
+                    supports_vision = (
+                        "image" in input_mods
+                        or "image" in str(arch.get("modality", "")).lower()
+                    )
+
                     models.append(ModelInfo(
                         id=model_id,
                         name=model_data.get("name", model_id),
                         provider=ModelProvider.OPENROUTER,
                         is_free=is_free,
                         supports_thinking=supports_thinking,
+                        supports_vision=supports_vision,
                         context_length=model_data.get("context_length"),
                         description=model_data.get("description")
                     ))

@@ -453,7 +453,10 @@ class REPLNamespace:
             **self._variables,
             # REPL-injected objects.
             "project": self._project_context,
-            "sub_oracle": self._sub_oracle_fn,
+            # sub_oracle is only injected for root sessions. Children get
+            # None (toolkit exclusion) — sub_oracle won't appear in their
+            # namespace, causing NameError if the LLM tries to call it.
+            **({"sub_oracle": self._sub_oracle_fn} if self._sub_oracle_fn is not None else {}),
             # Final sentinel — LLM sets this to signal completion.
             "Final": _FINAL_NOT_SET,
         }

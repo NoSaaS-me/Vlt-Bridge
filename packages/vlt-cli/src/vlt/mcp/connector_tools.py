@@ -41,14 +41,23 @@ def register_connector_tools(mcp) -> None:
         """List connectors available for the current user.
 
         Returns native connectors (fully configured) plus Composio Integration Hub
-        apps the user has connected. Each Composio connector includes a summary of
-        its available actions so you know what you can call.
+        apps the user has connected. Each connector includes a summary of its
+        available actions so you know what you can call.
 
-        To get the full parameter schema for a specific connector's actions, call
+        Composio connectors are prefixed with ``composio:`` (e.g. ``composio:gmail``).
+        Use this exact prefixed name when calling connector_actions or connector_call.
+
+        Each action has a ``permission`` field:
+          - ``"allow"`` — agent can call freely (default)
+          - ``"ask"``   — agent must request user approval before executing
+          - ``"off"``   — action is disabled and hidden (not returned in this list)
+
+        To get parameter schemas before calling an action, use
         connector_actions(connector_name).
 
         Returns:
-            {status, connectors: [{name, display_name, description, actions: [{name, description}]}], total}
+            {status, connectors: [{name, display_name, description,
+             actions: [{name, description, permission}]}], total}
         """
         import httpx
         from vlt.mcp import _err, _ok
@@ -62,21 +71,46 @@ def register_connector_tools(mcp) -> None:
         except Exception as e:
             return _err("INTERNAL_ERROR", str(e))
 
+        def _fetch_config(connector_name: str) -> dict:
+            """Fetch raw connector config dict; returns {} on failure."""
+            try:
+                cfg_resp = httpx.get(
+                    f"{vault_url}/api/connectors/{connector_name}/config",
+                    headers=headers,
+                    timeout=5.0,
+                )
+                if cfg_resp.status_code == 200:
+                    return cfg_resp.json().get("config", {})
+            except Exception:
+                pass
+            return {}
+
+        def _annotate_and_filter_actions(actions: list[dict], cfg: dict) -> list[dict]:
+            """Attach 'permission' to each action and strip any set to 'off'."""
+            annotated = []
+            for act in actions:
+                perm = cfg.get(f"__action_{act['name']}", "allow")
+                if perm == "off":
+                    continue
+                annotated.append({**act, "permission": perm})
+            return annotated
+
         try:
             # Native connectors
             native_connectors = []
             resp = httpx.get(f"{vault_url}/api/connectors", headers=headers, timeout=10.0)
             if resp.status_code == 200:
-                native_connectors = [
-                    {
+                for c in resp.json().get("connectors", []):
+                    if not (c.get("enabled") and c.get("configured")):
+                        continue
+                    cfg = _fetch_config(c["name"])
+                    actions = _annotate_and_filter_actions(c.get("actions", []), cfg)
+                    native_connectors.append({
                         "name": c["name"],
                         "display_name": c["display_name"],
                         "description": c["description"],
-                        "actions": c["actions"],
-                    }
-                    for c in resp.json().get("connectors", [])
-                    if c.get("enabled") and c.get("configured")
-                ]
+                        "actions": actions,
+                    })
             elif resp.status_code >= 400:
                 return _err("API_ERROR", f"Backend returned HTTP {resp.status_code}: {resp.text[:200]}")
 
@@ -106,6 +140,10 @@ def register_connector_tools(mcp) -> None:
                     except Exception:
                         pass  # Missing action list is non-fatal
 
+                    # Annotate composio actions with per-action permissions
+                    composio_cfg = _fetch_config(f"composio:{app_name}")
+                    action_summaries = _annotate_and_filter_actions(action_summaries, composio_cfg)
+
                     composio_connectors.append({
                         "name": f"composio:{app_name}",
                         "display_name": f"{app_name.title()} (via Composio)",
@@ -128,17 +166,24 @@ def register_connector_tools(mcp) -> None:
     def connector_actions(connector: str) -> dict:
         """Get the full list of actions and parameter schemas for a connector.
 
-        Use this after connector_list to discover exactly what parameters an action
-        needs before calling connector_call.
+        Call this before connector_call to discover exactly what parameters an
+        action expects. Works for both connected and unconnected Composio apps
+        (useful for previewing capabilities before connecting).
 
-        For Composio connectors, action names use UPPER_SNAKE_CASE (e.g. GMAIL_SEND_EMAIL).
-        The 'parameters' field contains a JSON Schema describing required/optional fields.
+        For Composio connectors, use the ``composio:`` prefix (e.g. ``composio:gmail``).
+        Composio action names use UPPER_SNAKE_CASE (e.g. ``GMAIL_SEND_EMAIL``).
+
+        The ``parameters`` field on each action is a JSON Schema object with
+        ``type``, ``properties``, and ``required`` keys describing the expected
+        input. Use this schema to construct the ``params`` JSON string for
+        connector_call.
 
         Args:
-            connector: Connector name, e.g. "mailgun" or "composio:gmail"
+            connector: Connector name, e.g. ``"mailgun"`` or ``"composio:gmail"``.
 
         Returns:
-            {status, connector, actions: [{name, display_name, description, parameters}], total}
+            {status, connector, actions: [{name, display_name, description,
+             parameters: {type, properties, required}}], total}
         """
         import httpx
         from vlt.mcp import _err, _ok
@@ -182,26 +227,40 @@ def register_connector_tools(mcp) -> None:
             return _err("INTERNAL_ERROR", str(e))
 
     @mcp.tool()
-    def connector_call(connector: str, action: str, params: str = "{}") -> dict:
+    def connector_call(connector: str, action: str, params: str = "{}", instance_id: str = "default") -> dict:
         """Invoke a connector action.
 
         Recommended workflow:
-            1. connector_list()              — see which connectors are available
+            1. connector_list()              — discover available connectors
             2. connector_actions(connector)  — get action names + parameter schemas
             3. connector_call(connector, action, params)  — execute
 
-        For Composio integrations, prefix the connector name with 'composio:',
-        e.g. 'composio:gmail'. Action names for Composio use UPPER_SNAKE_CASE,
-        e.g. 'GMAIL_SEND_EMAIL'. Use connector_actions to get the exact names and
-        required parameters before calling.
+        For Composio integrations, prefix the connector with ``composio:``
+        (e.g. ``composio:gmail``). Action names use UPPER_SNAKE_CASE
+        (e.g. ``GMAIL_SEND_EMAIL``). Always call connector_actions first to get
+        exact names and required parameters.
+
+        **WARNING**: ``params`` must be a JSON **string**, not a dict/object.
+        Example: ``params='{"to": "user@example.com", "subject": "Hello"}'``
+
+        Permission behaviour (set by the user in Connectors settings):
+          - ``allow`` → action executes normally
+          - ``ask`` → returns ``{success: false, result: {requires_approval: true}}``
+            with a message asking you to tell the user to approve it
+          - ``off`` → returns an ACTION_DISABLED error
 
         Args:
-            connector: Connector name, e.g. "mailgun" or "composio:gmail"
-            action: Action name, e.g. "send_email" or "GMAIL_SEND_EMAIL"
-            params: JSON string of action parameters
+            connector:   Connector name, e.g. ``"mailgun"`` or ``"composio:gmail"``.
+            action:      Action name, e.g. ``"send_email"`` or ``"GMAIL_SEND_EMAIL"``.
+            params:      **JSON string** of action parameters (default ``"{}"``).
+            instance_id: Instance of the connector to use (default ``"default"``).
+                         Multi-instance support allows separate credential sets for
+                         the same connector type (e.g. two Mailgun accounts).
 
         Returns:
-            {status, success, result} on success or {status: "error", ...} on failure
+            {status, success, result} on success.
+            {status, success: false, result: {requires_approval: true}, message} when permission is "ask".
+            {status: "error", error_code, message} on failure.
         """
         from vlt.mcp import _ok, _err
 
@@ -226,6 +285,37 @@ def register_connector_tools(mcp) -> None:
 
             headers = {"Authorization": f"Bearer {sync_token}"}
 
+            # Check per-action permission before dispatching to the backend.
+            # For composio: connectors, config is stored under "composio:{app_name}".
+            # A 404 on the config endpoint means no config exists → default "allow".
+            config_connector = connector  # e.g. "mailgun" or "composio:gmail"
+            try:
+                cfg_resp = httpx.get(
+                    f"{vault_url}/api/connectors/{config_connector}/instances/{instance_id}/config",
+                    headers=headers,
+                    timeout=5.0,
+                )
+                if cfg_resp.status_code == 200:
+                    cfg_data = cfg_resp.json().get("config", {})
+                    perm = cfg_data.get(f"__action_{action}", "allow")
+                    if perm == "off":
+                        return _err(
+                            "ACTION_DISABLED",
+                            f"Action '{action}' is disabled for '{connector}' (instance '{instance_id}'). Enable it in the Connectors settings.",
+                        )
+                    if perm == "ask":
+                        return _ok(
+                            success=False,
+                            result={"requires_approval": True},
+                            message=(
+                                f"Action '{action}' on '{connector}' (instance '{instance_id}') requires user approval. "
+                                "This action is in 'ask' mode — the user must grant permission before it executes. "
+                                "Ask the user to set it to 'allow' in Connectors settings, then retry."
+                            ),
+                        )
+            except Exception:
+                pass  # Config fetch failure is non-fatal — proceed with default "allow"
+
             # Route composio: prefixed connectors to the Hub API
             if connector.startswith("composio:"):
                 app_name = connector[len("composio:"):]
@@ -240,10 +330,10 @@ def register_connector_tools(mcp) -> None:
                 data = resp.json()
                 return _ok(success=data.get("success", True), result=data.get("data", {}))
 
-            # Native connector path
+            # Native connector path — pass instance_id through to backend
             resp = httpx.post(
                 f"{vault_url}/api/connectors/{connector}/invoke",
-                json={"action": action, "params": params_dict},
+                json={"action": action, "params": params_dict, "instance_id": instance_id},
                 headers=headers,
                 timeout=30.0,
             )

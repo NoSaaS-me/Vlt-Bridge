@@ -8,7 +8,7 @@
  *   Events ticker     — compact event strip at bottom
  */
 import { useState, useCallback, useMemo } from 'react';
-import { Bot, Clock, Plug, RefreshCw } from 'lucide-react';
+import { Bot, Clock, Plug, Puzzle, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type AgentSession, dismissSession, spawnSession, renameSession } from '@/services/daemon-api';
 import { useSessionPolling } from '@/hooks/useSessionPolling';
@@ -19,17 +19,19 @@ import { EventsTicker } from '@/components/agents/EventsTicker';
 import { LiveSessionPanel } from '@/components/agents/LiveSessionPanel';
 import { CronbanView as CronbanViewReal } from '@/components/cronban/CronbanView';
 import { ConnectorsPage } from '@/pages/ConnectorsPage';
+import { ArtifactsCompositorView } from '@/components/artifacts/ArtifactsCompositorView';
 
 // ---------------------------------------------------------------------------
 // Nav
 // ---------------------------------------------------------------------------
 
-type NavSection = 'agents' | 'cronban' | 'connectors';
+type NavSection = 'agents' | 'cronban' | 'connectors' | 'artifacts';
 
 const NAV_ITEMS: { id: NavSection; icon: React.ElementType; label: string }[] = [
   { id: 'agents', icon: Bot, label: 'Agents' },
   { id: 'cronban', icon: Clock, label: 'Cronban' },
   { id: 'connectors', icon: Plug, label: 'Connectors' },
+  { id: 'artifacts', icon: Puzzle, label: 'Artifacts' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -75,11 +77,6 @@ function AgentsCompositorView({
   onResumeSession: (session: AgentSession) => void;
   onRenameSession: (id: string, name: string) => void;
 }) {
-  const hasRelaySessions = useMemo(
-    () => polling.sessions.some((s) => s.source === 'relay' && s.status !== 'dead'),
-    [polling.sessions],
-  );
-
   return (
     <div className="h-full flex">
       {/* Session sidebar */}
@@ -109,12 +106,6 @@ function AgentsCompositorView({
               session={liveSession}
               onClose={onCloseLiveSession}
             />
-          ) : hasRelaySessions ? (
-            <TerminalCompositor
-              sessions={polling.sessions}
-              focusedSessionId={focusedSessionId}
-              onFocusSession={onSelectSession}
-            />
           ) : (
             <TerminalCompositor
               sessions={polling.sessions}
@@ -136,7 +127,7 @@ function AgentsCompositorView({
 export function AgentsPage() {
   const [activeSection, setActiveSection] = useState<NavSection>('agents');
   const { selectedProjectId } = useProjectContext();
-  const polling = useSessionPolling(selectedProjectId);
+  const polling = useSessionPolling(selectedProjectId, activeSection === 'agents');
   const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null);
   const [liveSession, setLiveSession] = useState<AgentSession | null>(null);
 
@@ -162,30 +153,16 @@ export function AgentsPage() {
 
   const handleStartFresh = useCallback(
     (prompt: string) => {
-      spawnSession(spawnCwd, { prompt })
+      spawnSession(spawnCwd, { prompt, mode: 'relay' })
         .then((result) => {
           setTimeout(() => polling.refresh(), 2000);
           if (result.session_id) {
-            setLiveSession({
-              id: result.session_id,
-              project_id: selectedProjectId,
-              name: 'New Session',
-              cwd: result.cwd,
-              status: 'thinking',
-              model: null,
-              ctx_pct: null,
-              pid: 0,
-              bypass_perms: true,
-              is_cronban_helper: false,
-              source: 'managed',
-              created_at: new Date().toISOString(),
-              last_activity: new Date().toISOString(),
-            });
+            setFocusedSessionId(result.session_id);
           }
         })
         .catch((err) => console.error('Spawn failed:', err));
     },
-    [polling, spawnCwd, selectedProjectId],
+    [polling, spawnCwd],
   );
 
   const handleResumeSession = useCallback((session: AgentSession) => {
@@ -229,7 +206,7 @@ export function AgentsPage() {
       </aside>
 
       {/* Content */}
-      <div className="flex-1 overflow-hidden">
+      <div className={cn('flex-1', activeSection === 'connectors' ? 'overflow-y-auto' : 'overflow-hidden')}>
         {activeSection === 'agents' && (
           <AgentsCompositorView
             polling={polling}
@@ -250,12 +227,18 @@ export function AgentsPage() {
           <CronbanView
             projectId={selectedProjectId ?? undefined}
             onViewSession={(sessionId) => {
-              // Switch to agents tab and open the live session
+              // Switch to agents tab and open the session
               const session = polling.sessions.find((s) => s.id === sessionId);
-              if (session) {
+              if (session?.source === 'relay') {
+                // Relay sessions render in the TerminalCompositor (xterm.js)
+                setLiveSession(null);
+                setFocusedSessionId(sessionId);
+              } else if (session) {
+                // Non-relay sessions open in the LiveSessionPanel (JSONL view)
                 setLiveSession(session);
               } else {
                 // Session might not be in current polling data — create minimal ref
+                // Default to LiveSessionPanel; it will auto-upgrade if relay
                 setLiveSession({
                   id: sessionId,
                   project_id: selectedProjectId,
@@ -277,6 +260,9 @@ export function AgentsPage() {
           />
         )}
         {activeSection === 'connectors' && <ConnectorsView />}
+        {activeSection === 'artifacts' && (
+          <ArtifactsCompositorView projectId={selectedProjectId ?? undefined} />
+        )}
       </div>
     </div>
   );

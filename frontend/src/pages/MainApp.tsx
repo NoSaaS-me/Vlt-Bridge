@@ -51,7 +51,6 @@ import type { IndexHealth } from '@/types/search';
 import type { Note, NoteSummary } from '@/types/note';
 import { normalizeSlug } from '@/lib/wikilink';
 import { Network } from 'lucide-react';
-import { AUTH_TOKEN_CHANGED_EVENT, isDemoSession, login } from '@/services/auth';
 import { synthesizeTts } from '@/services/tts';
 import { getTtsSettings, type TtsSettingsResponse } from '@/services/tts-settings';
 import { markdownToPlainText } from '@/lib/markdownToText';
@@ -97,7 +96,6 @@ export function MainApp() {
   const [isNewFolderDialogOpen, setIsNewFolderDialogOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isChatCenterView, setIsChatCenterView] = useState(false);
   const [isAgentsView, setIsAgentsView] = useState(false);
@@ -138,19 +136,6 @@ export function MainApp() {
     setIsSynthesizingTts(false);
   };
 
-  useEffect(() => {
-    const handleAuthChange = () => {
-      const demo = isDemoSession();
-      setIsDemoMode(demo);
-      if (demo) {
-        setIsEditMode(false);
-      }
-    };
-    window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, handleAuthChange);
-    return () => {
-      window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, handleAuthChange);
-    };
-  }, []);
 
   // Load chat center mode setting on mount
   useEffect(() => {
@@ -459,10 +444,6 @@ export function MainApp() {
 
   // T093: Handle edit button click
   const handleEdit = () => {
-    if (isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in with GitHub to edit notes.');
-      return;
-    }
     setIsEditMode(true);
   };
 
@@ -537,10 +518,6 @@ export function MainApp() {
 
   // Handle note dialog open change
   const handleDialogOpenChange = (open: boolean) => {
-    if (open && isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in with GitHub to create notes.');
-      return;
-    }
     setIsNewNoteDialogOpen(open);
     if (!open) {
       // Clear input when dialog closes
@@ -550,10 +527,6 @@ export function MainApp() {
 
   // Handle folder dialog open change
   const handleFolderDialogOpenChange = (open: boolean) => {
-    if (open && isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in with GitHub to create folders.');
-      return;
-    }
     setIsNewFolderDialogOpen(open);
     if (!open) {
       // Clear input when dialog closes
@@ -563,10 +536,6 @@ export function MainApp() {
 
   // Handle create new note
   const handleCreateNote = async () => {
-    if (isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in to create notes.');
-      return;
-    }
     if (!newNoteName.trim() || isCreatingNote) return;
 
     setIsCreatingNote(true);
@@ -630,10 +599,6 @@ export function MainApp() {
 
   // Handle create new folder
   const handleCreateFolder = async () => {
-    if (isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in to create folders.');
-      return;
-    }
     if (!newFolderName.trim() || isCreatingFolder) return;
 
     setIsCreatingFolder(true);
@@ -672,10 +637,6 @@ export function MainApp() {
 
   // Handle dragging file to folder
   const handleMoveNoteToFolder = async (oldPath: string, targetFolderPath: string) => {
-    if (isDemoMode) {
-      toast.error('Demo mode is read-only. Sign in to move notes.');
-      return;
-    }
     try {
       // Get the filename from the old path
       const fileName = oldPath.split('/').pop();
@@ -721,15 +682,6 @@ export function MainApp() {
   return (
     <GlowParticleEffect config="vibrant" triggerSelector="button">
       <div className="h-screen flex flex-col">
-      {/* Demo warning banner - conditional on isDemoMode */}
-      {isDemoMode && (
-        <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
-          <AlertDescription className="text-center">
-            DEMO ONLY - ALL DATA IS TEMPORARY AND MAY BE DELETED AT ANY TIME
-          </AlertDescription>
-        </Alert>
-      )}
-
       {/* Top bar */}
       <div className="border-b border-border p-2 animate-fade-in">
         <div className="relative flex items-center justify-center">
@@ -785,16 +737,6 @@ export function MainApp() {
             Vault.MCP
           </h1>
           <div className="absolute right-0 flex gap-2">
-            {isDemoMode && (
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => login()}
-                title="Sign in with GitHub"
-              >
-                Sign in
-              </Button>
-            )}
             {/* [T] Threads flyout button */}
             <Button
               data-tour="threads-button"
@@ -868,7 +810,7 @@ export function MainApp() {
                   onOpenChange={handleDialogOpenChange}
                 >
                   <DialogTrigger asChild>
-                    <Button variant="outline" size="sm" className="flex-1" disabled={isDemoMode}>
+                    <Button variant="outline" size="sm" className="flex-1">
                       <Plus className="h-4 w-4 mr-1" />
                       New Note
                     </Button>
@@ -917,7 +859,6 @@ export function MainApp() {
                   variant="outline"
                   size="sm"
                   className="flex-1"
-                  disabled={isDemoMode}
                   onClick={() => setShowUploadDialog(true)}
                 >
                   <Upload className="h-4 w-4 mr-1" />
@@ -929,7 +870,7 @@ export function MainApp() {
                   onOpenChange={handleFolderDialogOpenChange}
                 >
                   <DialogTrigger asChild>
-                    <Button variant="outline" size="sm" className="w-full" disabled={isDemoMode}>
+                    <Button variant="outline" size="sm" className="w-full">
                       <FolderPlus className="h-4 w-4 mr-1" />
                       New Folder
                     </Button>
@@ -1055,7 +996,7 @@ export function MainApp() {
                     <NoteViewer
                       note={currentNote}
                       backlinks={backlinks}
-                      onEdit={isDemoMode ? undefined : handleEdit}
+                      onEdit={handleEdit}
                       onWikilinkClick={handleWikilinkClick}
                       ttsStatus={ttsStatus}
                       onTtsToggle={handleTtsToggle}

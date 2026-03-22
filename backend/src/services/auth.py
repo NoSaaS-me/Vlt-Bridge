@@ -114,16 +114,16 @@ class AuthService:
         self.validators: List[TokenValidator] = []
         
         # 1. Local Dev Token (Highest priority)
-        # Maps to "demo-user" - writes are allowed via enable_local_mode check in routes
+        # Maps to "local-dev" when ENABLE_LOCAL_MODE=true
         if self.config.enable_local_mode:
             self.validators.append(
-                StaticTokenValidator(self.config.local_dev_token, "demo-user")
+                StaticTokenValidator(self.config.local_dev_token, "local-dev")
             )
-            
+
         # 2. ChatGPT Service Token
         if self.config.chatgpt_service_token:
             self.validators.append(
-                StaticTokenValidator(self.config.chatgpt_service_token, "demo-user")
+                StaticTokenValidator(self.config.chatgpt_service_token, "local-dev")
             )
             
         # 3. JWT Validator (Standard)

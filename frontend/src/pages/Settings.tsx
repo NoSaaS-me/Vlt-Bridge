@@ -20,8 +20,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SettingsSectionSkeleton } from '@/components/SettingsSectionSkeleton';
 import { NotificationSettings as NotificationSettingsComponent } from '@/components/NotificationSettings';
 import { RuleSettings } from '@/components/RuleSettings';
-import { getCurrentUser, getToken, logout, getStoredToken, isDemoSession, AUTH_TOKEN_CHANGED_EVENT } from '@/services/auth';
-import { getIndexHealth, rebuildIndex, type RebuildResponse, getOracleSettings, updateOracleSettings } from '@/services/api';
+import { AdminUsers } from '@/pages/AdminUsers';
+import { getCurrentUser, getToken, logout, getStoredToken } from '@/services/auth';
+import { apiFetch, getIndexHealth, rebuildIndex, type RebuildResponse, getOracleSettings, updateOracleSettings } from '@/services/api';
 import { getModels, getModelSettings, saveModelSettings, testTavilyConnection } from '@/services/models';
 import { getContextSettings, updateContextSettings } from '@/services/context';
 import type { User } from '@/types/user';
@@ -35,6 +36,7 @@ import { getGitHubStatus, getGitHubConnectUrl } from '@/services/github';
 import { SystemLogs } from '@/components/SystemLogs';
 import { CronbanSettings } from '@/components/cronban/CronbanSettings';
 import { TtsSettings } from '@/components/TtsSettings';
+import { OracleMemorySettings } from '@/components/OracleMemorySettings';
 import { useProjectContext } from '@/contexts/ProjectContext';
 
 const SHOW_HISTORY_KEY = 'vlt:livechat:showHistory';
@@ -93,8 +95,6 @@ export function Settings() {
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [rebuildResult, setRebuildResult] = useState<RebuildResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(isDemoSession());
-
   // Model settings state
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
@@ -124,14 +124,16 @@ export function Settings() {
   const [isSavingOracle, setIsSavingOracle] = useState(false);
   const [oracleSaved, setOracleSaved] = useState(false);
 
+  // Admin detection: probe /api/admin/users to see if current user is admin
+  const [isAdmin, setIsAdmin] = useState(false);
   useEffect(() => {
-    loadData();
+    apiFetch('/api/admin/users')
+      .then(() => setIsAdmin(true))
+      .catch(() => setIsAdmin(false));
   }, []);
 
   useEffect(() => {
-    const handler = () => setIsDemoMode(isDemoSession());
-    window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, handler);
-    return () => window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, handler);
+    loadData();
   }, []);
 
   // T046: Load CodeRAG status
@@ -185,21 +187,10 @@ export function Settings() {
     try {
       const token = getStoredToken();
 
-      // Handle local-dev-token as a special case
-      if (token === 'local-dev-token') {
-        setUser({
-          user_id: 'demo-user',
-          vault_path: '/data/vaults/demo-user',
-          created: new Date().toISOString(),
-        });
+      const userData = await getCurrentUser().catch(() => null);
+      setUser(userData);
+      if (token) {
         setApiToken(token);
-      } else {
-        // Real OAuth user
-        const userData = await getCurrentUser().catch(() => null);
-        setUser(userData);
-        if (token) {
-          setApiToken(token);
-        }
       }
 
       // Always try to load index health
@@ -496,6 +487,17 @@ export function Settings() {
     });
   };
 
+  const handleVisionProviderChange = (provider: ModelProvider) => {
+    if (!modelSettings) return;
+    const visionModels = modelsForProvider(provider).filter((m) => m.supports_vision);
+    const first = visionModels[0];
+    setModelSettings({
+      ...modelSettings,
+      vision_provider: provider,
+      vision_model: first?.id ?? modelSettings.vision_model,
+    });
+  };
+
   const getModelInfo = (modelId: string): ModelInfo | undefined => {
     return availableModels.find((m) => m.id === modelId);
   };
@@ -526,13 +528,6 @@ export function Settings() {
 
       {/* Content */}
       <div className="max-w-4xl mx-auto p-6 space-y-6">
-        {isDemoMode && (
-          <Alert variant="destructive">
-            <AlertDescription>
-              You are viewing the shared demo vault. Sign in with GitHub from the main app to enable token generation and index management.
-            </AlertDescription>
-          </Alert>
-        )}
         {error && (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
@@ -547,9 +542,11 @@ export function Settings() {
             <TabsTrigger value="rules">Rules</TabsTrigger>
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
             <TabsTrigger data-tour="settings-oracle-tab" value="oracle">Oracle</TabsTrigger>
+            <TabsTrigger value="memory">Memory</TabsTrigger>
             <TabsTrigger value="cronban">Cronban</TabsTrigger>
             <TabsTrigger value="tts">TTS</TabsTrigger>
             <TabsTrigger value="agents">Agents</TabsTrigger>
+            {isAdmin && <TabsTrigger value="users">Users</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="account" className="space-y-6 mt-6">
@@ -1054,6 +1051,61 @@ export function Settings() {
 
               <Separator />
 
+              {/* Vision Model */}
+              <div className="space-y-3">
+                <div>
+                  <h4 className="text-sm font-medium">Vision Model</h4>
+                  <p className="text-xs text-muted-foreground">Used for artifact screenshot review</p>
+                </div>
+                {/* Provider selector */}
+                <div className="flex gap-1 p-1 bg-muted rounded-md w-fit">
+                  {PROVIDERS.map((p) => (
+                    <Button
+                      key={p}
+                      variant={(modelSettings.vision_provider ?? 'openrouter') === p ? 'default' : 'ghost'}
+                      size="sm"
+                      className="h-7 px-3 text-xs"
+                      onClick={() => handleVisionProviderChange(p)}
+                    >
+                      {PROVIDER_LABELS[p]}
+                    </Button>
+                  ))}
+                </div>
+                {/* Model dropdown — filtered to vision-capable models */}
+                <Select
+                  value={modelSettings.vision_model ?? ''}
+                  onValueChange={(value) => setModelSettings({ ...modelSettings, vision_model: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Not configured" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelsForProvider(modelSettings.vision_provider ?? 'openrouter')
+                      .filter((m) => m.supports_vision)
+                      .map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          <div className="flex items-center gap-2">
+                            <span>{model.name}</span>
+                            {model.is_free && (
+                              <Badge variant="secondary" className="text-xs">FREE</Badge>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                {modelSettings.vision_model && getModelInfo(modelSettings.vision_model) && (
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
+                    <span>Context: {formatContextLength(getModelInfo(modelSettings.vision_model)!.context_length!)}</span>
+                    {getModelInfo(modelSettings.vision_model)!.is_free && (
+                      <Badge variant="outline" className="text-xs">Free Tier</Badge>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
               {/* Thinking Mode */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -1429,16 +1481,14 @@ export function Settings() {
           <TabsContent value="rules" className="space-y-6 mt-6">
             {/* Rule Settings */}
             <RuleSettings
-              isDemoMode={isDemoMode}
-              canTestRules={user?.user_id === 'demo-user'}
+              canTestRules={true}
             />
           </TabsContent>
 
           <TabsContent value="notifications" className="space-y-6 mt-6">
             {/* Notification Subscribers */}
             <NotificationSettingsComponent
-              isDemoMode={isDemoMode}
-              canTestNotifications={user?.user_id === 'demo-user'}
+              canTestNotifications={true}
             />
 
             {/* System Logs */}
@@ -1485,6 +1535,10 @@ export function Settings() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="memory" className="space-y-6 mt-6">
+            <OracleMemorySettings />
+          </TabsContent>
+
           <TabsContent value="cronban" className="space-y-6 mt-6">
             <CronbanSettings />
           </TabsContent>
@@ -1496,9 +1550,22 @@ export function Settings() {
           <TabsContent value="agents" className="space-y-6 mt-6">
             <AgentsSettings />
           </TabsContent>
+
+          {isAdmin && (
+            <TabsContent value="users" className="space-y-6 mt-6">
+              <AdminUsers />
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </div>
   );
 }
+
+// TODO (025-artifact-sandbox T055): Add connector instance management UI
+// - Per-connector instance list with add/delete
+// - Per-instance config form (reuse existing ConnectorConfigDialog)
+// - Proxy profile selector dropdown per instance
+// - "Proxy Profiles" management section (list, create, edit, delete)
+// Implement after core connector multi-instance backend is validated.
 

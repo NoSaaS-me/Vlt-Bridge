@@ -263,6 +263,90 @@ class DaemonManager:
                 "profile": self.profile_name,
             }
 
+    def _find_pid_by_port(self) -> Optional[int]:
+        """Find daemon PID by checking which process listens on our port.
+
+        Tries three methods in order:
+          1. lsof (common on macOS and many Linux distros)
+          2. ss (part of iproute2, common on Linux)
+          3. /proc/net/tcp + /proc/{pid}/fd (works on all Linux without external tools)
+        """
+        # Method 1: lsof
+        try:
+            import subprocess as _sp
+            # -sTCP:LISTEN filters to only the listening process (not clients)
+            result = _sp.run(
+                ["lsof", "-ti", f"tcp:{self.port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return int(result.stdout.strip().split('\n')[0])
+        except Exception:
+            pass
+        # Method 2: ss
+        try:
+            import subprocess as _sp
+            # ss is available on most Linux systems
+            result = _sp.run(
+                ["ss", "-tlnp", f"sport = :{self.port}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                # Parse pid from output like: pid=12345
+                import re
+                m = re.search(r'pid=(\d+)', result.stdout)
+                if m:
+                    return int(m.group(1))
+        except Exception:
+            pass
+        # Method 3: /proc/net/tcp — works on all Linux without external tools
+        try:
+            hex_port = f"{self.port:04X}"
+            with open("/proc/net/tcp", "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) < 4:
+                        continue
+                    # Column 1 = local_address (hex_ip:hex_port), Column 3 = state (0A = LISTEN)
+                    local_addr = parts[1]
+                    state = parts[3]
+                    if state != "0A":  # 0A = TCP_LISTEN
+                        continue
+                    _, port_hex = local_addr.split(":")
+                    if port_hex.upper() == hex_port:
+                        # Found listening socket — inode is in column 9
+                        inode = parts[9]
+                        # Scan /proc/*/fd to find which PID owns this inode
+                        pid = self._find_pid_by_inode(inode)
+                        if pid:
+                            return pid
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _find_pid_by_inode(target_inode: str) -> Optional[int]:
+        """Find PID that owns a socket inode by scanning /proc/*/fd."""
+        proc_path = Path("/proc")
+        socket_pattern = f"socket:[{target_inode}]"
+        try:
+            for entry in proc_path.iterdir():
+                if not entry.name.isdigit():
+                    continue
+                fd_dir = entry / "fd"
+                try:
+                    for fd_link in fd_dir.iterdir():
+                        try:
+                            if os.readlink(str(fd_link)) == socket_pattern:
+                                return int(entry.name)
+                        except (OSError, ValueError):
+                            continue
+                except PermissionError:
+                    continue
+        except Exception:
+            pass
+        return None
+
     def stop(self) -> Dict[str, any]:
         """
         Stop the daemon process.
@@ -273,11 +357,16 @@ class DaemonManager:
         pid = self._read_pid()
 
         if not pid:
-            return {
-                "success": False,
-                "message": "No PID file found - daemon may not be running",
-                "profile": self.profile_name,
-            }
+            # No PID file — try to find the process by port
+            pid = self._find_pid_by_port()
+            if pid:
+                logger.info(f"No PID file, but found daemon on port {self.port} (PID {pid})")
+            else:
+                return {
+                    "success": False,
+                    "message": "No PID file found - daemon may not be running",
+                    "profile": self.profile_name,
+                }
 
         if not self._is_process_running(pid):
             self._remove_pid()

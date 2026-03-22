@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Settings2, Plug, CheckCircle2, AlertCircle, Link, Unlink } from 'lucide-react';
+import { Settings2, Plug, CheckCircle2, AlertCircle, Link, Unlink, ChevronDown, ChevronUp, Zap, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
@@ -25,8 +25,160 @@ import {
   listApps,
   connectApp,
   disconnectApp,
+  listAppActions,
+  getAuthInfo,
+  getComposioConfig,
+  saveComposioConfig,
   type ComposioApp,
+  type ComposioAction,
+  type AppAuthInfo,
+  type AuthFieldInfo,
 } from '@/services/composio-hub';
+
+// ── Action permission types ───────────────────────────────────────────────────
+
+type ActionPermission = 'off' | 'ask' | 'allow';
+
+function actionConfigKey(actionName: string): string {
+  return `__action_${actionName}`;
+}
+
+function getActionPermission(
+  config: Record<string, string>,
+  actionName: string
+): ActionPermission {
+  const val = config[actionConfigKey(actionName)];
+  if (val === 'off' || val === 'ask' || val === 'allow') return val;
+  return 'allow'; // default
+}
+
+// ── 3-way toggle ─────────────────────────────────────────────────────────────
+
+function ActionPermissionToggle({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: ActionPermission;
+  onChange: (v: ActionPermission) => void;
+  disabled?: boolean;
+}) {
+  const options: { label: string; value: ActionPermission; active: string; inactive: string }[] = [
+    {
+      label: 'Off',
+      value: 'off',
+      active: 'bg-muted text-muted-foreground border-border font-medium',
+      inactive: 'text-muted-foreground/50 border-transparent hover:border-border/50',
+    },
+    {
+      label: 'Ask',
+      value: 'ask',
+      active: 'bg-amber-900/30 text-amber-400 border-amber-700 font-medium',
+      inactive: 'text-muted-foreground/50 border-transparent hover:border-border/50',
+    },
+    {
+      label: 'Allow',
+      value: 'allow',
+      active: 'bg-green-900/30 text-green-400 border-green-700 font-medium',
+      inactive: 'text-muted-foreground/50 border-transparent hover:border-border/50',
+    },
+  ];
+
+  return (
+    <div className="flex rounded-md shrink-0" style={{ width: 120 }}>
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          onClick={(e) => { e.stopPropagation(); if (!disabled) onChange(opt.value); }}
+          disabled={disabled}
+          className={`flex-1 text-[10px] py-0.5 border rounded-sm transition-colors ${value === opt.value ? opt.active : opt.inactive} ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Action list with collapsing ───────────────────────────────────────────────
+
+const ACTIONS_VISIBLE_LIMIT = 4;
+
+interface ActionRowProps {
+  action: { name: string; description: string };
+  permission: ActionPermission;
+  onPermissionChange: (perm: ActionPermission) => void;
+  saving: boolean;
+}
+
+function ActionRow({ action, permission, onPermissionChange, saving }: ActionRowProps) {
+  return (
+    <div className="flex items-center gap-2 py-1.5 min-w-0 group/row">
+      <div className="flex-1 min-w-0">
+        <code className="text-[10px] font-mono text-foreground/80 block truncate" title={action.name}>
+          {action.name}
+        </code>
+        {action.description && (
+          <span className="text-[10px] text-muted-foreground/60 block truncate leading-tight" title={action.description}>
+            {action.description}
+          </span>
+        )}
+      </div>
+      <ActionPermissionToggle
+        value={permission}
+        onChange={onPermissionChange}
+        disabled={saving}
+      />
+    </div>
+  );
+}
+
+interface ActionListProps {
+  actions: Array<{ name: string; description: string }>;
+  config: Record<string, string>;
+  onPermissionChange: (actionName: string, perm: ActionPermission) => void;
+  savingAction: string | null;
+}
+
+function ActionList({ actions, config, onPermissionChange, savingAction }: ActionListProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (actions.length === 0) return null;
+
+  const visible = expanded ? actions : actions.slice(0, ACTIONS_VISIBLE_LIMIT);
+  const hiddenCount = actions.length - ACTIONS_VISIBLE_LIMIT;
+
+  return (
+    <div className="mt-2 border-t border-border/40 pt-2 space-y-0">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-0.5">
+        Actions ({actions.length})
+      </p>
+      {visible.map((action) => (
+        <ActionRow
+          key={action.name}
+          action={action}
+          permission={getActionPermission(config, action.name)}
+          onPermissionChange={(perm) => onPermissionChange(action.name, perm)}
+          saving={savingAction === action.name}
+        />
+      ))}
+      {hiddenCount > 0 && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpanded((prev) => !prev); }}
+          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
+        >
+          {expanded ? (
+            <><ChevronUp className="h-3 w-3" /> Show less</>
+          ) : (
+            <><ChevronDown className="h-3 w-3" /> Show {hiddenCount} more</>
+          )}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Connector settings dialog ─────────────────────────────────────────────────
 
 function ConnectorSettingsDialog({
   connector,
@@ -151,6 +303,108 @@ function ConnectorSettingsDialog({
   );
 }
 
+// ── Native connector card (API key / service) ─────────────────────────────────
+
+function NativeConnectorCard({
+  connector,
+  onSettingsClick,
+  onChanged,
+}: {
+  connector: ConnectorInfo;
+  onSettingsClick: () => void;
+  onChanged: () => void;
+}) {
+  // Per-connector action permission config state
+  const [config, setConfig] = useState<Record<string, string>>({});
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [savingAction, setSavingAction] = useState<string | null>(null);
+
+  // Load config once when the card mounts
+  useEffect(() => {
+    getConnectorConfig(connector.name)
+      .then((cfg) => {
+        setConfig(cfg);
+        setConfigLoaded(true);
+      })
+      .catch(() => setConfigLoaded(true)); // silently proceed if config fetch fails
+  }, [connector.name]);
+
+  const handlePermissionChange = useCallback(async (actionName: string, perm: ActionPermission) => {
+    const key = actionConfigKey(actionName);
+    // Optimistic update
+    setConfig((prev) => ({ ...prev, [key]: perm }));
+    setSavingAction(actionName);
+    try {
+      await saveConnectorConfig(connector.name, { [key]: perm });
+      onChanged();
+    } catch {
+      // Roll back on error
+      setConfig((prev) => {
+        const reverted = { ...prev };
+        delete reverted[key];
+        return reverted;
+      });
+    } finally {
+      setSavingAction(null);
+    }
+  }, [connector.name, onChanged]);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-start justify-between">
+          <div className="space-y-1 min-w-0 flex-1">
+            <CardTitle className="text-base">{connector.display_name}</CardTitle>
+            <CardDescription className="text-xs">{connector.description}</CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-shrink-0 ml-2"
+            onClick={onSettingsClick}
+          >
+            <Settings2 className="h-4 w-4 mr-1" />
+            Settings
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          {connector.enabled && connector.configured ? (
+            <Badge variant="default" className="bg-green-600 text-xs gap-1">
+              <CheckCircle2 className="h-3 w-3" />
+              Enabled
+            </Badge>
+          ) : connector.enabled && !connector.configured ? (
+            <Badge variant="outline" className="text-amber-600 border-amber-600 text-xs gap-1">
+              <AlertCircle className="h-3 w-3" />
+              Needs config
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="text-xs">
+              Disabled
+            </Badge>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {configLoaded && connector.actions.length > 0 && (
+          <ActionList
+            actions={connector.actions}
+            config={config}
+            onPermissionChange={handlePermissionChange}
+            savingAction={savingAction}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── OAuth connector card ──────────────────────────────────────────────────────
+
 function OAuthConnectorCard({
   connector,
   onChanged,
@@ -160,9 +414,20 @@ function OAuthConnectorCard({
 }) {
   const [revoking, setRevoking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<Record<string, string>>({});
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [savingAction, setSavingAction] = useState<string | null>(null);
+
+  useEffect(() => {
+    getConnectorConfig(connector.name)
+      .then((cfg) => {
+        setConfig(cfg);
+        setConfigLoaded(true);
+      })
+      .catch(() => setConfigLoaded(true));
+  }, [connector.name]);
 
   const handleConnect = () => {
-    // Full page redirect to backend OAuth authorize endpoint
     window.location.href = `/api/connectors/${connector.name}/oauth/authorize`;
   };
 
@@ -179,11 +444,29 @@ function OAuthConnectorCard({
     }
   };
 
+  const handlePermissionChange = useCallback(async (actionName: string, perm: ActionPermission) => {
+    const key = actionConfigKey(actionName);
+    setConfig((prev) => ({ ...prev, [key]: perm }));
+    setSavingAction(actionName);
+    try {
+      await saveConnectorConfig(connector.name, { [key]: perm });
+      onChanged();
+    } catch {
+      setConfig((prev) => {
+        const reverted = { ...prev };
+        delete reverted[key];
+        return reverted;
+      });
+    } finally {
+      setSavingAction(null);
+    }
+  }, [connector.name, onChanged]);
+
   return (
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
-          <div className="space-y-1">
+          <div className="space-y-1 min-w-0 flex-1">
             <CardTitle className="text-base">{connector.display_name}</CardTitle>
             <CardDescription className="text-xs">{connector.description}</CardDescription>
           </div>
@@ -227,13 +510,21 @@ function OAuthConnectorCard({
             {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
           </span>
         </div>
+
+        {configLoaded && connector.actions.length > 0 && (
+          <ActionList
+            actions={connector.actions}
+            config={config}
+            onPermissionChange={handlePermissionChange}
+            savingAction={savingAction}
+          />
+        )}
       </CardContent>
     </Card>
   );
 }
 
-// ── App name overrides ───────────────────────────────────────────────────────
-// Composio returns lowercase/slugified names; map known apps to proper brand names.
+// ── App name overrides ────────────────────────────────────────────────────────
 const BRAND_NAMES: Record<string, string> = {
   gmail: 'Gmail', github: 'GitHub', gitlab: 'GitLab', bitbucket: 'Bitbucket',
   notion: 'Notion', slack: 'Slack', discord: 'Discord', telegram: 'Telegram',
@@ -270,52 +561,34 @@ function formatAppName(app: ComposioApp): string {
   const normalized = app.name.toLowerCase().replace(/[-_\s]/g, '');
   if (BRAND_NAMES[normalized]) return BRAND_NAMES[normalized];
   if (BRAND_NAMES[app.name.toLowerCase()]) return BRAND_NAMES[app.name.toLowerCase()];
-  // Title-case the display_name or name as fallback
   const raw = app.display_name || app.name;
   return raw.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function truncateDescription(description: string): string {
   if (!description) return '';
-  // Cut at first sentence boundary
   const sentenceEnd = description.search(/[.!?](\s|$)/);
   const first = sentenceEnd >= 0 ? description.slice(0, sentenceEnd + 1) : description;
   return first.length > 100 ? first.slice(0, 97) + '…' : first;
 }
 
 // ── Category normalization ────────────────────────────────────────────────────
-// Composio categories are very granular and AI-subcategory-heavy.
-// Map them to a small set of human-readable buckets.
 const CATEGORY_RULES: Array<{ match: RegExp | string; bucket: string }> = [
-  // Communication
   { match: /^(email|messaging|chat|communication|sms|phone|video.?call|voip)/i, bucket: 'Communication' },
   { match: 'social media', bucket: 'Social Media' },
-  // Productivity
   { match: /^(productivity|notes?|task|calendar|scheduling|time.?tracking|to.?do)/i, bucket: 'Productivity' },
   { match: /^project.?management/i, bucket: 'Productivity' },
-  // Developer Tools
   { match: /^(developer|devops|code|version.?control|ci.?cd|monitoring|logging|testing|api)/i, bucket: 'Developer Tools' },
-  // Data & Analytics
   { match: /^(data|analytics|bi|reporting|database|spreadsheet|etl)/i, bucket: 'Data & Analytics' },
-  // Sales & CRM
   { match: /^(crm|sales|lead|revenue)/i, bucket: 'Sales & CRM' },
-  // Marketing
   { match: /^(marketing|ads?|advertising|seo|email.?marketing|growth)/i, bucket: 'Marketing' },
-  // Finance
   { match: /^(finance|accounting|payments?|invoic|billing|payroll|tax|bookkeeping)/i, bucket: 'Finance' },
-  // Files & Storage
   { match: /^(file|storage|document|cloud.?storage)/i, bucket: 'Files & Storage' },
-  // E-commerce
   { match: /^(e.?commerce|shopping|retail|inventory)/i, bucket: 'E-commerce' },
-  // HR
   { match: /^(hr|human.?resources|recruiting|hiring|payroll|employee)/i, bucket: 'HR & Recruiting' },
-  // Support
   { match: /^(support|customer.?service|helpdesk|ticketing)/i, bucket: 'Customer Support' },
-  // Design
   { match: /^(design|creative|media|video|audio|photo)/i, bucket: 'Design & Media' },
-  // Automation
   { match: /^(automation|workflow|integration|webhook|trigger)/i, bucket: 'Automation' },
-  // Catch-all: any "ai *" subcategory that didn't match above → AI & Automation
   { match: /^ai\b/i, bucket: 'AI & Automation' },
 ];
 
@@ -325,11 +598,9 @@ function normalizeCategory(raw: string): string {
       return rule.bucket;
     }
   }
-  // Title-case anything that fell through
   return raw.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// Returns the primary normalized bucket for an app (first matching category)
 function appBucket(app: ComposioApp): string {
   for (const cat of app.categories) {
     const bucket = normalizeCategory(cat);
@@ -338,7 +609,7 @@ function appBucket(app: ComposioApp): string {
   return 'Other';
 }
 
-// ── Deterministic color avatar for apps without logos ────────────────────────
+// ── Deterministic color avatar ────────────────────────────────────────────────
 const AVATAR_COLORS = [
   'bg-blue-500', 'bg-violet-500', 'bg-emerald-500', 'bg-orange-500',
   'bg-pink-500', 'bg-cyan-500', 'bg-amber-500', 'bg-rose-500',
@@ -351,18 +622,22 @@ function appAvatarColor(name: string): string {
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
 
+// ── Composio app card ─────────────────────────────────────────────────────────
+
 function AppCard({
   app,
   connecting,
   disconnecting,
   onConnect,
   onDisconnect,
+  onPreview,
 }: {
   app: ComposioApp;
   connecting: string | null;
   disconnecting: string | null;
   onConnect: (app: ComposioApp) => void;
   onDisconnect: (app: ComposioApp) => void;
+  onPreview: (app: ComposioApp) => void;
 }) {
   const displayName = formatAppName(app);
   const initial = displayName[0].toUpperCase();
@@ -370,8 +645,48 @@ function AppCard({
   const description = truncateDescription(app.description);
   const bucket = appBucket(app);
 
+  // Action permissions state for connected composio apps
+  const [actions, setActions] = useState<ComposioAction[]>([]);
+  const [actionsLoaded, setActionsLoaded] = useState(false);
+  const [composioConfig, setComposioConfig] = useState<Record<string, string>>({});
+  const [savingAction, setSavingAction] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!app.connected) return;
+    Promise.all([
+      listAppActions(app.name).then((res) => setActions(res.actions)),
+      getComposioConfig(app.name).then((res) => setComposioConfig(res.config)),
+    ])
+      .catch(() => {})
+      .finally(() => setActionsLoaded(true));
+  }, [app.name, app.connected]);
+
+  const handlePermissionChange = useCallback(async (actionName: string, perm: ActionPermission) => {
+    const key = actionConfigKey(actionName);
+    const prev = composioConfig[key];
+    // Optimistic update
+    setComposioConfig((c) => ({ ...c, [key]: perm }));
+    setSavingAction(actionName);
+    try {
+      await saveComposioConfig(app.name, { [key]: perm });
+    } catch {
+      // Roll back on error
+      setComposioConfig((c) => prev ? { ...c, [key]: prev } : (() => { const r = { ...c }; delete r[key]; return r; })());
+    } finally {
+      setSavingAction(null);
+    }
+  }, [app.name, composioConfig]);
+
+  const composioActions = useMemo(
+    () => actions.map((a) => ({ name: a.name, description: a.description })),
+    [actions]
+  );
+
   return (
-    <Card className={`flex flex-col ${app.connected ? 'ring-1 ring-green-400' : ''}`}>
+    <Card
+      className={`flex flex-col cursor-pointer hover:border-border transition-colors ${app.connected ? 'ring-1 ring-emerald-500/30 border-emerald-500/20' : ''}`}
+      onClick={() => onPreview(app)}
+    >
       <CardHeader className="pb-2 flex-1">
         <div className="flex items-start gap-3">
           <div className={`shrink-0 w-9 h-9 rounded-lg ${avatarColor} flex items-center justify-center text-white font-bold text-sm`}>
@@ -381,41 +696,385 @@ function AppCard({
             <div className="flex items-start justify-between gap-1">
               <CardTitle className="text-sm leading-tight truncate">{displayName}</CardTitle>
               {app.connected && (
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500 mt-0.5" />
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400 mt-0.5" />
               )}
             </div>
-            <CardDescription className="text-xs mt-0.5">
+            <CardDescription className="text-xs mt-0.5 line-clamp-2">
               {description || <span className="italic text-muted-foreground/60">{bucket}</span>}
             </CardDescription>
           </div>
         </div>
       </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent className="pt-0 space-y-2">
         {app.connected ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full text-red-600 border-red-300 hover:bg-red-50 text-xs h-7"
-            onClick={() => onDisconnect(app)}
-            disabled={disconnecting === app.name}
-          >
-            {disconnecting === app.name ? 'Disconnecting…' : 'Disconnect'}
-          </Button>
+          <div className="flex gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 text-xs h-7 text-red-400 border-red-500/30 hover:bg-red-500/10 hover:text-red-300"
+              onClick={(e) => { e.stopPropagation(); onDisconnect(app); }}
+              disabled={disconnecting === app.name}
+            >
+              {disconnecting === app.name ? (
+                'Disconnecting…'
+              ) : (
+                <><Unlink className="h-3 w-3 mr-1.5" />Disconnect</>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7 px-2"
+              onClick={(e) => { e.stopPropagation(); onConnect(app); }}
+              title="Add another connection"
+            >
+              <Plus className="h-3 w-3" />
+            </Button>
+          </div>
         ) : (
           <Button
             variant="outline"
             size="sm"
             className="w-full text-xs h-7"
-            onClick={() => onConnect(app)}
+            onClick={(e) => { e.stopPropagation(); onConnect(app); }}
             disabled={connecting === app.name}
           >
-            {connecting === app.name ? 'Opening…' : 'Connect'}
+            {connecting === app.name ? (
+              'Opening…'
+            ) : (
+              <><Link className="h-3 w-3 mr-1.5" />Connect</>
+            )}
           </Button>
+        )}
+
+        {app.connected && actionsLoaded && composioActions.length > 0 && (
+          <ActionList
+            actions={composioActions}
+            config={composioConfig}
+            onPermissionChange={handlePermissionChange}
+            savingAction={savingAction}
+          />
         )}
       </CardContent>
     </Card>
   );
 }
+
+// ── App actions preview dialog ────────────────────────────────────────────────
+
+function AppActionsPreviewDialog({
+  app,
+  open,
+  onClose,
+  onConnect,
+  connecting,
+}: {
+  app: ComposioApp | null;
+  open: boolean;
+  onClose: () => void;
+  onConnect: (app: ComposioApp) => void;
+  connecting: string | null;
+}) {
+  const [actions, setActions] = useState<ComposioAction[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadingActions, setLoadingActions] = useState(false);
+
+  useEffect(() => {
+    if (!open || !app) return;
+    setActions([]);
+    setTotal(0);
+    setLoadingActions(true);
+    listAppActions(app.name)
+      .then((res) => {
+        setActions(res.actions);
+        setTotal(res.total);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingActions(false));
+  }, [open, app]);
+
+  if (!app) return null;
+
+  const displayName = formatAppName(app);
+  const initial = displayName[0].toUpperCase();
+  const avatarColor = appAvatarColor(app.name);
+  const bucket = appBucket(app);
+
+  const actionCount = total > 0 ? total : actions.length;
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg max-h-[85vh] flex flex-col gap-0 p-0">
+        {/* Fixed header */}
+        <div className="px-6 pt-6 pb-3 shrink-0">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className={`shrink-0 w-10 h-10 rounded-lg ${avatarColor} flex items-center justify-center text-white font-bold text-sm`}>
+                {initial}
+              </div>
+              <div className="min-w-0 flex-1">
+                <DialogTitle className="text-base leading-tight">{displayName}</DialogTitle>
+                <div className="flex items-center gap-2 mt-1">
+                  <Badge variant="secondary" className="text-[10px]">{bucket}</Badge>
+                  {app.connected && (
+                    <Badge variant="default" className="bg-emerald-600 text-[10px] gap-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Connected
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            </div>
+          </DialogHeader>
+
+          {app.description && (
+            <p className="text-sm text-muted-foreground leading-relaxed mt-3 line-clamp-3">{app.description}</p>
+          )}
+
+          <p className="text-xs text-muted-foreground mt-3 pt-3 border-t border-border">
+            {actionCount} action{actionCount !== 1 ? 's' : ''} available
+          </p>
+        </div>
+
+        {/* Scrollable action list */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6">
+          {loadingActions ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">Loading actions…</p>
+          ) : actions.length > 0 ? (
+            <div className="divide-y divide-border/40">
+              {actions.map((action) => (
+                <div key={action.name} className="py-2.5">
+                  <p className="font-mono text-xs text-foreground/90 truncate" title={action.name}>
+                    {action.display_name || action.name}
+                  </p>
+                  {action.description && (
+                    <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-snug line-clamp-2" title={action.description}>
+                      {action.description}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground py-2 text-center">No actions found.</p>
+          )}
+        </div>
+
+        {/* Fixed footer */}
+        <div className="px-6 py-4 border-t border-border shrink-0 flex items-center justify-between">
+          {app.connected ? (
+            <div className="flex items-center gap-1.5 text-sm text-emerald-400">
+              <CheckCircle2 className="h-4 w-4" />
+              <span>Connected</span>
+            </div>
+          ) : (
+            <Button
+              size="sm"
+              onClick={() => { onConnect(app); onClose(); }}
+              disabled={connecting === app.name}
+            >
+              <Link className="h-3.5 w-3.5 mr-1.5" />
+              {connecting === app.name ? 'Opening…' : 'Connect'}
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Connect dialog (adaptive auth form) ──────────────────────────────────────
+
+function ComposioConnectDialog({
+  app,
+  open,
+  onClose,
+  onConnected,
+}: {
+  app: ComposioApp | null;
+  open: boolean;
+  onClose: () => void;
+  onConnected: () => void;
+}) {
+  const [authInfo, setAuthInfo] = useState<AppAuthInfo | null>(null);
+  const [loadingAuth, setLoadingAuth] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [label, setLabel] = useState('');
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!open || !app) return;
+    setAuthInfo(null);
+    setError(null);
+    setLabel('');
+    setFieldValues({});
+    setLoadingAuth(true);
+    getAuthInfo(app.name)
+      .then(setAuthInfo)
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load auth info'))
+      .finally(() => setLoadingAuth(false));
+  }, [open, app]);
+
+  if (!app) return null;
+
+  // Determine which fields to show based on auth info
+  const scheme = authInfo?.auth_schemes?.[0];
+  const integrationFields: AuthFieldInfo[] = scheme?.integration_fields ?? [];
+  const userFields: AuthFieldInfo[] = scheme?.user_fields ?? [];
+  const needsCredentials = authInfo && !authInfo.has_managed_auth && integrationFields.length > 0;
+  const needsUserParams = userFields.length > 0;
+  const allFields = [...integrationFields, ...userFields];
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      // Build auth_config from integration fields (client_id, client_secret)
+      const authConfig: Record<string, string> = {};
+      for (const f of integrationFields) {
+        if (fieldValues[f.name]) authConfig[f.name] = fieldValues[f.name];
+      }
+      // Build connected_account_params from user fields (api_key, etc.)
+      const accountParams: Record<string, string> = {};
+      for (const f of userFields) {
+        if (fieldValues[f.name]) accountParams[f.name] = fieldValues[f.name];
+      }
+
+      const result = await connectApp(app.name, {
+        label: label.trim(),
+        auth_mode: scheme?.auth_mode,
+        auth_config: Object.keys(authConfig).length > 0 ? authConfig : undefined,
+        connected_account_params: Object.keys(accountParams).length > 0 ? accountParams : undefined,
+      });
+
+      if (result.redirect_url) {
+        window.open(result.redirect_url, '_blank', 'noopener,noreferrer');
+      }
+      onClose();
+      // Reload after a delay to let OAuth complete
+      setTimeout(onConnected, result.redirect_url ? 3000 : 500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Connection failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const displayName = formatAppName(app);
+
+  // Check required fields are filled
+  const requiredMissing = allFields.some(
+    (f) => f.required && !fieldValues[f.name]?.trim()
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Connect {displayName}</DialogTitle>
+        </DialogHeader>
+
+        {loadingAuth ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">Checking auth requirements…</p>
+        ) : error ? (
+          <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>
+        ) : authInfo ? (
+          <div className="space-y-4">
+            {authInfo.has_managed_auth && !needsUserParams && (
+              <p className="text-sm text-muted-foreground">
+                This app uses Composio-managed OAuth. Click Connect to authorize.
+              </p>
+            )}
+
+            {needsCredentials && (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  This app requires your own OAuth credentials.
+                </p>
+                {integrationFields.map((f) => (
+                  <div key={f.name} className="space-y-1">
+                    <Label className="text-xs">
+                      {f.display_name}
+                      {f.required && <span className="text-red-400 ml-0.5">*</span>}
+                    </Label>
+                    {f.description && (
+                      <p className="text-[11px] text-muted-foreground/70">{f.description}</p>
+                    )}
+                    <Input
+                      type={f.name.includes('secret') || f.name.includes('password') ? 'password' : 'text'}
+                      placeholder={f.display_name}
+                      value={fieldValues[f.name] ?? ''}
+                      onChange={(e) => setFieldValues((prev) => ({ ...prev, [f.name]: e.target.value }))}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {needsUserParams && (
+              <div className="space-y-3">
+                {!needsCredentials && (
+                  <p className="text-sm text-muted-foreground">
+                    Enter your credentials for this app.
+                  </p>
+                )}
+                {userFields.map((f) => (
+                  <div key={f.name} className="space-y-1">
+                    <Label className="text-xs">
+                      {f.display_name}
+                      {f.required && <span className="text-red-400 ml-0.5">*</span>}
+                    </Label>
+                    {f.description && (
+                      <p className="text-[11px] text-muted-foreground/70">{f.description}</p>
+                    )}
+                    <Input
+                      type={f.name.includes('key') || f.name.includes('secret') || f.name.includes('token') || f.name.includes('password') ? 'password' : 'text'}
+                      placeholder={f.display_name}
+                      value={fieldValues[f.name] ?? ''}
+                      onChange={(e) => setFieldValues((prev) => ({ ...prev, [f.name]: e.target.value }))}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="space-y-1">
+              <Label className="text-xs">Label (optional)</Label>
+              <Input
+                placeholder={`e.g. "Work ${displayName}"`}
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                maxLength={100}
+              />
+            </div>
+
+            <Badge variant="secondary" className="text-[10px]">
+              {authInfo.primary_auth_mode}
+            </Badge>
+          </div>
+        ) : null}
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+          <Button
+            size="sm"
+            onClick={handleSubmit}
+            disabled={submitting || loadingAuth || !authInfo || (needsCredentials && requiredMissing)}
+          >
+            <Link className="h-3.5 w-3.5 mr-1.5" />
+            {submitting ? 'Connecting…' : 'Connect'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Hub tab ───────────────────────────────────────────────────────────────────
 
 function HubTab() {
   const [apps, setApps] = useState<ComposioApp[]>([]);
@@ -426,6 +1085,8 @@ function HubTab() {
   const [connecting, setConnecting] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [previewApp, setPreviewApp] = useState<ComposioApp | null>(null);
+  const [connectDialogApp, setConnectDialogApp] = useState<ComposioApp | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -447,17 +1108,8 @@ function HubTab() {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleConnect = async (app: ComposioApp) => {
-    setConnecting(app.name);
-    try {
-      const res = await connectApp(app.name);
-      window.open(res.redirect_url, '_blank', 'noopener,noreferrer');
-      setTimeout(load, 3000);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Connect failed');
-    } finally {
-      setConnecting(null);
-    }
+  const handleConnect = (app: ComposioApp) => {
+    setConnectDialogApp(app);
   };
 
   const handleDisconnect = async (app: ComposioApp) => {
@@ -472,7 +1124,6 @@ function HubTab() {
     }
   };
 
-  // Build normalized category list with counts
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const app of apps) {
@@ -489,7 +1140,6 @@ function HubTab() {
 
   const connectedCount = apps.filter((a) => a.connected).length;
 
-  // Filter by search + active category
   const searchLower = search.toLowerCase();
   const filtered = useMemo(() => {
     return apps.filter((a) => {
@@ -509,7 +1159,6 @@ function HubTab() {
     });
   }, [apps, search, searchLower, activeCategory]);
 
-  // When showing "all", pin connected apps to the top
   const { connectedApps, otherApps } = useMemo(() => {
     if (activeCategory !== 'all') return { connectedApps: [], otherApps: filtered };
     return {
@@ -542,7 +1191,7 @@ function HubTab() {
     <div className="flex gap-4">
       {/* Category sidebar */}
       <div className="w-44 shrink-0">
-        <nav className="space-y-0.5 sticky top-0">
+        <nav className="space-y-0.5 sticky top-0 max-h-screen overflow-y-auto pb-6">
           {[
             { key: 'all', label: 'All Apps', count: apps.length },
             { key: 'connected', label: 'Connected', count: connectedCount },
@@ -597,16 +1246,28 @@ function HubTab() {
           </Alert>
         )}
 
-        <div className="flex items-center gap-2">
-          <Input
-            placeholder="Search apps…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="max-w-xs"
-          />
-          <span className="text-xs text-muted-foreground">
-            {filtered.length} app{filtered.length !== 1 ? 's' : ''}
-          </span>
+        {/* Composio attribution + search bar */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="Search apps…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="max-w-xs"
+            />
+            <span className="text-xs text-muted-foreground">
+              {filtered.length} app{filtered.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+          <a
+            href="https://composio.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex items-center gap-1.5 rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1 text-xs font-medium text-purple-400 transition-all hover:border-purple-500/50 hover:bg-purple-500/20 hover:text-purple-300 shrink-0"
+          >
+            <Zap className="h-3 w-3 text-purple-400 group-hover:text-purple-300 transition-colors" />
+            Powered by Composio
+          </a>
         </div>
 
         {loading ? (
@@ -632,6 +1293,7 @@ function HubTab() {
                       disconnecting={disconnecting}
                       onConnect={handleConnect}
                       onDisconnect={handleDisconnect}
+                      onPreview={setPreviewApp}
                     />
                   ))}
                 </div>
@@ -654,6 +1316,7 @@ function HubTab() {
                       disconnecting={disconnecting}
                       onConnect={handleConnect}
                       onDisconnect={handleDisconnect}
+                      onPreview={setPreviewApp}
                     />
                   ))}
                 </div>
@@ -662,9 +1325,26 @@ function HubTab() {
           </div>
         )}
       </div>
+
+      <AppActionsPreviewDialog
+        app={previewApp}
+        open={previewApp !== null}
+        onClose={() => setPreviewApp(null)}
+        onConnect={handleConnect}
+        connecting={connecting}
+      />
+
+      <ComposioConnectDialog
+        app={connectDialogApp}
+        open={connectDialogApp !== null}
+        onClose={() => setConnectDialogApp(null)}
+        onConnected={load}
+      />
     </div>
   );
 }
+
+// ── ConnectorsPage ────────────────────────────────────────────────────────────
 
 export function ConnectorsPage() {
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
@@ -745,47 +1425,12 @@ export function ConnectorsPage() {
                     onChanged={load}
                   />
                 ) : (
-                  <Card key={connector.name}>
-                    <CardHeader className="pb-2">
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-1">
-                          <CardTitle className="text-base">{connector.display_name}</CardTitle>
-                          <CardDescription className="text-xs">{connector.description}</CardDescription>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex-shrink-0 ml-2"
-                          onClick={() => setSettingsFor(connector)}
-                        >
-                          <Settings2 className="h-4 w-4 mr-1" />
-                          Settings
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="pt-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {connector.enabled && connector.configured ? (
-                          <Badge variant="default" className="bg-green-600 text-xs gap-1">
-                            <CheckCircle2 className="h-3 w-3" />
-                            Enabled
-                          </Badge>
-                        ) : connector.enabled && !connector.configured ? (
-                          <Badge variant="outline" className="text-amber-600 border-amber-600 text-xs gap-1">
-                            <AlertCircle className="h-3 w-3" />
-                            Needs config
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary" className="text-xs">
-                            Disabled
-                          </Badge>
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          {connector.actions.length} action{connector.actions.length !== 1 ? 's' : ''}
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <NativeConnectorCard
+                    key={connector.name}
+                    connector={connector}
+                    onSettingsClick={() => setSettingsFor(connector)}
+                    onChanged={load}
+                  />
                 )
               )}
             </div>

@@ -327,18 +327,32 @@ DDL_STATEMENTS: tuple[str, ...] = (
         tokenize='porter unicode61'
     )
     """,
-    # Connector configs (023-connectors)
+    # Connector configs (023-connectors, multi-instance: 025-artifact-sandbox)
     """
     CREATE TABLE IF NOT EXISTS connector_configs (
         user_id        TEXT NOT NULL,
         connector_name TEXT NOT NULL,
+        instance_id    TEXT NOT NULL DEFAULT 'default',
         config_key     TEXT NOT NULL,
         config_value   TEXT,
         updated_at     TEXT,
-        PRIMARY KEY (user_id, connector_name, config_key)
+        PRIMARY KEY (user_id, connector_name, instance_id, config_key)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_connector_configs_user ON connector_configs(user_id, connector_name)",
+    # Proxy profiles (025-artifact-sandbox)
+    """
+    CREATE TABLE IF NOT EXISTS proxy_profiles (
+        user_id          TEXT NOT NULL,
+        name             TEXT NOT NULL,
+        proxy_url        TEXT NOT NULL,
+        proxy_username   TEXT,
+        proxy_password   TEXT,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (user_id, name)
+    )
+    """,
     # OAuth2 CSRF state table (023-connectors Phase 3)
     """
     CREATE TABLE IF NOT EXISTS oauth_states (
@@ -351,6 +365,31 @@ DDL_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_oauth_states_user ON oauth_states(user_id, connector_name)",
+    # Oracle V2 thread listing index (023-oracle-codeact-rework)
+    """
+    CREATE TABLE IF NOT EXISTS oracle_threads (
+        thread_id       TEXT PRIMARY KEY,
+        user_id         TEXT NOT NULL,
+        project_id      TEXT NOT NULL,
+        title           TEXT,
+        created_at      TEXT NOT NULL,
+        last_active_at  TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_oracle_threads_user ON oracle_threads(user_id, last_active_at DESC)",
+    # Users table (auth-multitenancy)
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        display_name TEXT,
+        avatar_url TEXT,
+        role TEXT NOT NULL DEFAULT 'pending' CHECK(role IN ('admin', 'user', 'pending', 'blocked')),
+        approved_by TEXT,
+        created_at TEXT NOT NULL,
+        last_login_at TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
 )
 
 # Migration statements for existing databases
@@ -413,6 +452,43 @@ MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE oauth_states ADD COLUMN pkce_verifier TEXT",
     # Add is_favorite column to projects table (server-side favorites)
     "ALTER TABLE projects ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
+    # Oracle V2 thread listing index (023-oracle-codeact-rework)
+    """CREATE TABLE IF NOT EXISTS oracle_threads (
+        thread_id       TEXT PRIMARY KEY,
+        user_id         TEXT NOT NULL,
+        project_id      TEXT NOT NULL,
+        title           TEXT,
+        created_at      TEXT NOT NULL,
+        last_active_at  TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_oracle_threads_user ON oracle_threads(user_id, last_active_at DESC)",
+    # Users table migration (auth-multitenancy)
+    """CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        display_name TEXT,
+        avatar_url TEXT,
+        role TEXT NOT NULL DEFAULT 'pending' CHECK(role IN ('admin', 'user', 'pending', 'blocked')),
+        approved_by TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_login_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
+    # Add vision model settings to user_settings (025-artifact-sandbox)
+    "ALTER TABLE user_settings ADD COLUMN vision_model TEXT",
+    "ALTER TABLE user_settings ADD COLUMN vision_provider TEXT",
+    # Add instance_id for multi-instance connector support (025-artifact-sandbox)
+    "ALTER TABLE connector_configs ADD COLUMN instance_id TEXT NOT NULL DEFAULT 'default'",
+    # proxy_profiles table (025-artifact-sandbox)
+    """CREATE TABLE IF NOT EXISTS proxy_profiles (
+        user_id          TEXT NOT NULL,
+        name             TEXT NOT NULL,
+        proxy_url        TEXT NOT NULL,
+        proxy_username   TEXT,
+        proxy_password   TEXT,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (user_id, name)
+    )""",
 )
 
 

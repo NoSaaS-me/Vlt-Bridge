@@ -21,7 +21,7 @@ export interface SessionPollingState {
   refresh: () => void;
 }
 
-export function useSessionPolling(projectId?: string | null): SessionPollingState {
+export function useSessionPolling(projectId?: string | null, enabled = true): SessionPollingState {
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [events, setEvents] = useState<HookEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -59,15 +59,21 @@ export function useSessionPolling(projectId?: string | null): SessionPollingStat
   }, [fetchSessions, fetchEvents]);
 
   useEffect(() => {
+    if (!enabled) {
+      // Stop polling when not active (e.g., user on Artifacts/Cronban tab)
+      clearInterval(pollRef.current);
+      clearInterval(eventPollRef.current);
+      return;
+    }
     fetchSessions();
     fetchEvents();
-    pollRef.current = setInterval(fetchSessions, 5000);
-    eventPollRef.current = setInterval(fetchEvents, 3000);
+    pollRef.current = setInterval(fetchSessions, 15000);
+    eventPollRef.current = setInterval(fetchEvents, 10000);
     return () => {
       clearInterval(pollRef.current);
       clearInterval(eventPollRef.current);
     };
-  }, [fetchSessions, fetchEvents]);
+  }, [fetchSessions, fetchEvents, enabled]);
 
   return { sessions, events, isLoading, daemonOnline, lastRefresh, refresh };
 }

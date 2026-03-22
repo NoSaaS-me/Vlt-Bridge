@@ -1,0 +1,248 @@
+# Composio Connection Vault — API Contracts
+# All routes under /api/composio, require Authorization: Bearer <jwt>
+
+openapi: "3.0.3"
+info:
+  title: Composio Connection Vault
+  version: "1.0.0"
+
+paths:
+  # ── New endpoints ──────────────────────────────────────────────────────
+
+  /api/composio/{app_name}/auth-info:
+    get:
+      summary: Get auth requirements for connecting an app
+      description: |
+        Returns what credentials are needed to connect this app.
+        Call this before POST /connect/{app_name} to determine if
+        custom credentials are required.
+      parameters:
+        - name: app_name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Auth info for the app
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  has_managed_auth:
+                    type: boolean
+                    description: True if Composio provides OAuth credentials
+                  primary_auth_mode:
+                    type: string
+                    enum: [OAUTH2, OAUTH1, API_KEY, BASIC, BEARER_TOKEN]
+                  auth_schemes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        auth_mode: { type: string }
+                        integration_fields:
+                          type: array
+                          items:
+                            $ref: "#/components/schemas/AuthField"
+                        user_fields:
+                          type: array
+                          items:
+                            $ref: "#/components/schemas/AuthField"
+        "502":
+          description: Composio API error
+
+  /api/composio/connections/{connection_id}:
+    delete:
+      summary: Disconnect a specific connection by ID
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connection_id: { type: string }
+                  disconnected: { type: boolean }
+        "404":
+          description: Connection not found
+
+  # ── Updated endpoints ──────────────────────────────────────────────────
+
+  /api/composio/connect/{app_name}:
+    post:
+      summary: Initiate connection (updated — accepts body)
+      parameters:
+        - name: app_name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label:
+                  type: string
+                  description: User-given name for this connection
+                  maxLength: 100
+                  default: ""
+                auth_mode:
+                  type: string
+                  description: Override auth scheme (e.g. "OAUTH2", "API_KEY")
+                auth_config:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Custom OAuth credentials {client_id, client_secret}
+                connected_account_params:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: User credentials {api_key, token}
+                redirect_url:
+                  type: string
+                  description: Override OAuth redirect URL
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  app: { type: string }
+                  connection_id: { type: string, format: uuid }
+                  label: { type: string }
+                  redirect_url: { type: string, nullable: true }
+                  status:
+                    type: string
+                    enum: [initiated, active]
+
+  /api/composio/connected:
+    get:
+      summary: List user connections (updated — includes labels + connection_id)
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connections:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        connection_id: { type: string, format: uuid }
+                        app_name: { type: string }
+                        label: { type: string }
+                        auth_mode: { type: string }
+                        status: { type: string }
+                        created_at: { type: string, format: date-time }
+                  total: { type: integer }
+
+  /api/composio/{app_name}/invoke:
+    post:
+      summary: Execute action (updated — accepts connection_id)
+      parameters:
+        - name: app_name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string }
+                params:
+                  type: object
+                  additionalProperties: true
+                connection_id:
+                  type: string
+                  format: uuid
+                  description: |
+                    Specific connection to use. Required if user has >1
+                    connection for this app. Auto-selected when exactly 1.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { type: object }
+        "400":
+          description: Multiple connections exist, connection_id required
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail: { type: string }
+                  connections:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        connection_id: { type: string }
+                        label: { type: string }
+
+  /api/composio/{app_name}:
+    delete:
+      summary: Disconnect ALL connections for an app (convenience)
+      description: Disconnects every connection for this app. Use DELETE /connections/{id} for specific.
+      parameters:
+        - name: app_name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  app: { type: string }
+                  disconnected_count: { type: integer }
+
+  # ── Unchanged endpoints ────────────────────────────────────────────────
+
+  /api/composio/status:
+    get:
+      summary: Check if Composio is configured (unchanged)
+
+  /api/composio/apps:
+    get:
+      summary: List catalog with connected status (unchanged)
+
+  /api/composio/{app_name}/actions:
+    get:
+      summary: List actions for an app (unchanged)
+
+  /api/composio/{app_name}/config:
+    get:
+      summary: Get action permissions (unchanged)
+    put:
+      summary: Save action permissions (unchanged)
+
+components:
+  schemas:
+    AuthField:
+      type: object
+      properties:
+        name: { type: string }
+        display_name: { type: string }
+        description: { type: string }
+        type: { type: string }
+        required: { type: boolean }
+        expected_from_customer: { type: boolean }

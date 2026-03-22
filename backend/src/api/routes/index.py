@@ -16,26 +16,7 @@ from ...models.project import DEFAULT_PROJECT_ID
 from ...services.database import DatabaseService
 from ...services.indexer import IndexerService
 from ...services.vault import VaultService
-from ...services.config import get_config
 from ..middleware import AuthContext, get_auth_context, require_auth_context
-
-DEMO_USER_ID = "demo-user"
-
-
-def _ensure_index_mutation_allowed(user_id: str) -> None:
-    # Allow index operations in local development mode
-    config = get_config()
-    if config.enable_local_mode:
-        return
-
-    if user_id == DEMO_USER_ID:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "demo_read_only",
-                "message": "Demo mode does not allow index rebuilds. Sign in to manage the index.",
-            },
-        )
 
 router = APIRouter()
 
@@ -108,7 +89,6 @@ async def rebuild_index(
     """Rebuild the entire index from scratch for a project."""
     start_time = time.time()
     user_id = auth.user_id
-    _ensure_index_mutation_allowed(user_id)
     vault_service = VaultService()
     indexer_service = IndexerService()
 

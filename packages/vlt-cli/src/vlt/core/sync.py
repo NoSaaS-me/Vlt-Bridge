@@ -96,7 +96,7 @@ class ThreadSyncClient:
         """
         if not self.sync_token:
             logger.warning("No sync token configured, skipping sync")
-            raise ValueError("No sync token configured. Run 'vlt config set sync.token <token>'")
+            raise ValueError("No sync token configured. Run 'vlt login' to authenticate")
 
         url = f"{self.vault_url}/api/threads/sync"
 
@@ -160,7 +160,7 @@ class ThreadSyncClient:
                 synced_count=0,
                 last_synced_sequence=-1,
                 success=False,
-                error="No sync token configured. Run: vlt config set-key <token>",
+                error="No sync token configured. Run: vlt login",
             )
 
         # Import here to avoid circular imports
@@ -241,7 +241,7 @@ class ThreadSyncClient:
                 thread_id=thread_id,
                 summary="",
                 success=False,
-                error="No sync token configured. Run: vlt config set-key <token>",
+                error="No sync token configured. Run: vlt login",
             )
 
         url = f"{self.vault_url}/api/threads/{thread_id}/summarize"
@@ -465,7 +465,7 @@ async def sync_all_threads(db: Session, project_id: Optional[str] = None) -> Dic
             "threads_synced": 0,
             "threads_failed": 0,
             "total_entries": 0,
-            "errors": ["No sync token configured. Run: vlt config set-key <token>"],
+            "errors": ["No sync token configured. Run: vlt login"],
             "project_id": project_id,
         }
 

@@ -61,10 +61,15 @@ def register_vault_tools(mcp) -> None:
     ) -> dict:
         """Create or update a Markdown note in the vault.
 
+        Creates intermediate folders automatically if they don't exist.
+        If the note already exists, overwrites it (last-write-wins, no version conflicts).
+        If the note doesn't exist, creates it.
+
         Args:
-            path: Note path relative to vault root (e.g. "docs/api-design.md").
+            path: Note path relative to vault root. Must include .md extension.
+                  Example: "docs/api-design.md", "meeting-notes/2026-03-14.md".
             content: Full Markdown content to write.
-            project_id: Project identifier (optional, uses default if omitted).
+            project_id: Project identifier (optional). Omit to use user's default vault.
 
         Returns:
             {status, path, version, size_bytes}
@@ -276,14 +281,14 @@ def register_vault_tools(mcp) -> None:
         path: str,
         project_id: Optional[str] = None,
     ) -> dict:
-        """Find all notes that contain a wikilink pointing to the given note.
+        """Find all notes that contain a wikilink ([[...]]) pointing to the given note.
 
         Args:
-            path: Target note path.
+            path: Target note path (e.g. "docs/api-design.md").
             project_id: Project identifier (optional).
 
         Returns:
-            {status, path, backlinks: [{source_path, link_text, is_resolved}], total}
+            {status, path, backlinks: [{source_path, title}], total}
         """
         from vlt.mcp import _ok, _err
 

@@ -28,7 +28,7 @@ class AppConfig(BaseModel):
     )
     local_dev_token: Optional[str] = Field(
         default="local-dev-token",
-        description="Static token accepted in local mode (maps to 'demo-user')",
+        description="Static token accepted in local mode (maps to 'local-dev' user_id)",
     )
     chatgpt_service_token: Optional[str] = Field(
         default=None,
@@ -40,7 +40,7 @@ class AppConfig(BaseModel):
     )
     enable_noauth_mcp: bool = Field(
         default=False,
-        description="DANGEROUS: Allow unauthenticated MCP access as demo-user (for hackathon)",
+        description="DANGEROUS: Allow unauthenticated MCP access as local-dev (for hackathon)",
     )
     google_api_key: Optional[str] = Field(
         default=None,
@@ -81,12 +81,27 @@ class AppConfig(BaseModel):
         description="Base URL for the application (used for widget asset URLs, OAuth redirects in production)"
     )
 
+    require_user_approval: bool = Field(
+        default=False,
+        description="Require admin approval for new users (REQUIRE_USER_APPROVAL). When False, all GitHub users are auto-approved.",
+    )
+
     connector_encryption_key: Optional[str] = Field(
         default=None,
         description=(
             "Fernet key for encrypting connector credentials at rest (CONNECTOR_ENCRYPTION_KEY). "
             "If unset, derived from JWT_SECRET_KEY via HKDF."
         ),
+    )
+
+    # Oracle V2 configuration (023-oracle-codeact-rework)
+    oracle_checkpoint_db: str = Field(
+        default="data/checkpoints.db",
+        description="Path to LangGraph AsyncSqliteSaver checkpoint database (ORACLE_CHECKPOINT_DB)"
+    )
+    falkordb_url: str = Field(
+        default="bolt://localhost:6379",
+        description="FalkorDB connection URL for Graphiti memory graph (FALKORDB_URL)"
     )
 
     # BT Oracle Configuration (020-bt-oracle-agent)
@@ -159,8 +174,15 @@ def get_config() -> AppConfig:
     # Base URL for application (for widget URLs, etc.)
     base_url = _read_env("BASE_URL", "http://localhost:8000")
 
+    # User approval (auth-multitenancy)
+    require_user_approval = _read_env("REQUIRE_USER_APPROVAL", "false").lower() in {"true", "1", "yes"}
+
     # Connector encryption key (Phase 2)
     connector_encryption_key = _read_env("CONNECTOR_ENCRYPTION_KEY")
+
+    # Oracle V2 (023-oracle-codeact-rework)
+    oracle_checkpoint_db = _read_env("ORACLE_CHECKPOINT_DB", "data/checkpoints.db")
+    falkordb_url = _read_env("FALKORDB_URL", "bolt://localhost:6379")
 
     # BT Oracle configuration (020-bt-oracle-agent)
     oracle_prompt_budget_str = _read_env("ORACLE_PROMPT_BUDGET", "8000")
@@ -184,10 +206,15 @@ def get_config() -> AppConfig:
         frame_options=frame_options,
         admin_user_ids=admin_user_ids,
         base_url=base_url,
+        # Auth multitenancy
+        require_user_approval=require_user_approval,
         # Connector encryption (Phase 2)
         connector_encryption_key=connector_encryption_key,
         # BT Oracle (020-bt-oracle-agent)
         oracle_prompt_budget=oracle_prompt_budget,
+        # Oracle V2 (023-oracle-codeact-rework)
+        oracle_checkpoint_db=oracle_checkpoint_db,
+        falkordb_url=falkordb_url,
     )
     # Ensure vault base directory and index persist directory exist for downstream services.
     config.vault_base_path.mkdir(parents=True, exist_ok=True)

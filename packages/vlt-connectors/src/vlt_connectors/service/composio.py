@@ -68,6 +68,44 @@ class ComposioService(ServiceConnector):
         """True if COMPOSIO_API_KEY is set."""
         return bool(os.environ.get("COMPOSIO_API_KEY", "").strip())
 
+    def app_auth_info(self, app_name: str) -> dict:
+        """Query auth requirements for connecting an app.
+
+        Returns {has_managed_auth, primary_auth_mode, auth_schemes} where each scheme
+        contains integration_fields (operator-level) and user_fields (user-level).
+        """
+        toolset = self._toolset()
+        app = toolset.client.apps.get(name=app_name.lower())
+        has_managed = bool(app.testConnectors)
+        schemes = []
+        for scheme in (app.auth_schemes or []):
+            integration_fields = []
+            user_fields = []
+            for f in scheme.fields:
+                entry = {
+                    "name": f.name,
+                    "display_name": getattr(f, "display_name", None) or f.name,
+                    "description": getattr(f, "description", ""),
+                    "type": getattr(f, "type", "string"),
+                    "required": f.required,
+                    "expected_from_customer": f.expected_from_customer,
+                }
+                if f.expected_from_customer:
+                    user_fields.append(entry)
+                else:
+                    integration_fields.append(entry)
+            schemes.append({
+                "auth_mode": scheme.auth_mode,
+                "integration_fields": integration_fields,
+                "user_fields": user_fields,
+            })
+        primary = schemes[0]["auth_mode"] if schemes else "OAUTH2"
+        return {
+            "has_managed_auth": has_managed,
+            "primary_auth_mode": primary,
+            "auth_schemes": schemes,
+        }
+
     def catalog(self) -> list[dict]:
         """List all available apps in the Composio catalog.
 
@@ -84,7 +122,7 @@ class ComposioService(ServiceConnector):
                     "categories": list(getattr(a, "categories", []) or []),
                 }
                 for a in apps
-                if getattr(a, "name", "")
+                if getattr(a, "name", "") and not getattr(a, "no_auth", False)
             ]
         except Exception as exc:
             logger.exception("Composio catalog() failed")
@@ -111,44 +149,88 @@ class ComposioService(ServiceConnector):
             logger.exception("Composio connected(%s) failed", entity_id)
             raise RuntimeError(f"Failed to fetch connected apps for user: {exc}") from exc
 
-    def initiate_connection(self, app_name: str, entity_id: str) -> str:
-        """Start OAuth flow for an app. Returns the redirect URL to send the user to."""
+    def initiate_connection(
+        self,
+        app_name: str,
+        entity_id: str,
+        label: str = "",
+        auth_mode: str | None = None,
+        auth_config: dict[str, str] | None = None,
+        connected_account_params: dict[str, str] | None = None,
+        redirect_url: str | None = None,
+    ) -> dict:
+        """Start connection flow for an app.
+
+        Returns dict with {connection_id, redirect_url, status}.
+        For OAuth apps, redirect_url points to the auth provider.
+        For API_KEY apps, status is 'active' immediately (no redirect needed).
+        """
         toolset = self._toolset()
         try:
+            app = toolset.client.apps.get(name=app_name.lower())
+            has_managed = bool(app.testConnectors)
+
+            # Auto-detect auth mode from app's first scheme if not provided
+            if not auth_mode:
+                for scheme in (app.auth_schemes or []):
+                    auth_mode = scheme.auth_mode
+                    break
+
             entity = toolset.get_entity(id=entity_id)
-            request = entity.initiate_connection(app_name=app_name)
-            redirect_url: str = (
-                getattr(request, "redirectUrl", None)
-                or getattr(request, "redirect_url", None)
-                or ""
+            use_composio = has_managed and not auth_config
+
+            request = entity.initiate_connection(
+                app_name=app_name,
+                auth_mode=auth_mode,
+                auth_config=auth_config or {},
+                use_composio_auth=use_composio,
+                force_new_integration=bool(auth_config),
+                connected_account_params=connected_account_params or {},
+                redirect_url=redirect_url,
+                labels=[label] if label else None,
             )
-            if not redirect_url:
-                raise RuntimeError("Composio returned no redirect URL")
-            return redirect_url
+
+            return {
+                "connection_id": getattr(request, "connectedAccountId", ""),
+                "redirect_url": getattr(request, "redirectUrl", None) or "",
+                "status": getattr(request, "connectionStatus", "initiated"),
+            }
         except Exception as exc:
             logger.exception("Composio initiate_connection(%s, %s) failed", app_name, entity_id)
             raise RuntimeError(f"Failed to initiate connection: {exc}") from exc
 
-    def disconnect(self, app_name: str, entity_id: str) -> None:
-        """Disconnect an app for a user."""
+    def disconnect_by_id(self, connection_id: str) -> None:
+        """Disconnect a specific connection by its Composio ID using raw HTTP DELETE."""
+        from composio.client.endpoints import v1
+
+        toolset = self._toolset()
+        try:
+            toolset.client.http.delete(url=str(v1 / "connectedAccounts" / connection_id))
+        except Exception as exc:
+            logger.exception("Composio disconnect_by_id(%s) failed", connection_id)
+            raise RuntimeError(f"Failed to disconnect connection: {exc}") from exc
+
+    def disconnect(self, app_name: str, entity_id: str) -> int:
+        """Disconnect all connections for an app for a user. Returns count disconnected."""
         toolset = self._toolset()
         try:
             entity = toolset.get_entity(id=entity_id)
             connections = entity.get_connections()
+            count = 0
             for conn in connections:
                 name = getattr(conn, "appName", "") or getattr(conn, "app_name", "")
                 if name.lower() == app_name.lower():
                     conn_id = getattr(conn, "id", "")
                     if conn_id:
-                        toolset.client.connected_accounts.delete(connection_id=conn_id)
-                        return
-            # No connection found — silently succeed (already disconnected)
-            logger.debug(
-                "Composio disconnect: no active connection for app=%s entity=%s (already disconnected)",
-                app_name,
-                entity_id,
-            )
-            return
+                        self.disconnect_by_id(conn_id)
+                        count += 1
+            if count == 0:
+                logger.debug(
+                    "Composio disconnect: no active connection for app=%s entity=%s (already disconnected)",
+                    app_name,
+                    entity_id,
+                )
+            return count
         except Exception as exc:
             logger.exception("Composio disconnect(%s, %s) failed", app_name, entity_id)
             raise RuntimeError(f"Failed to disconnect app: {exc}") from exc
@@ -181,21 +263,25 @@ class ComposioService(ServiceConnector):
         action_name: str,
         params: dict[str, Any],
         entity_id: str,
+        connected_account_id: str | None = None,
     ) -> dict:
         """Execute a Composio action on behalf of a user.
 
-        Returns dict with keys: success (bool), data (dict), error (str|None).
+        If connected_account_id is provided, routes to that specific connection.
+        Otherwise the SDK picks the default connection for the entity.
 
-        Note: Unlike other methods, this never raises — exceptions are caught and
-        returned as {"success": False, "data": {}, "error": str(exc)}.
+        Returns dict with keys: success (bool), data (dict), error (str|None).
         """
         toolset = self._toolset()
         try:
-            result = toolset.execute_action(
-                action=action_name.upper(),  # Composio uses UPPER_SNAKE_CASE action names
-                params=params,
-                entity_id=entity_id,
-            )
+            kwargs: dict[str, Any] = {
+                "action": action_name.upper(),
+                "params": params,
+                "entity_id": entity_id,
+            }
+            if connected_account_id:
+                kwargs["connected_account_id"] = connected_account_id
+            result = toolset.execute_action(**kwargs)
             # Composio result has "successfull" (sic) key in some versions
             success = result.get("successfull", result.get("successful", True))
             data = result.get("data", result)

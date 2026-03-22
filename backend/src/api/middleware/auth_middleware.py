@@ -34,8 +34,8 @@ class AuthMode(Enum):
     """
     Authentication mode for API routes.
 
-    - OPTIONAL: Authentication is optional; falls back to demo-user if ENABLE_NOAUTH_MCP=true
-    - STRICT: Authentication is required; never falls back to demo-user
+    - OPTIONAL: Authentication is optional; falls back to local-dev if ENABLE_NOAUTH_MCP=true
+    - STRICT: Authentication is required
     - ADMIN: Authentication is required AND user must have admin privileges
     """
     OPTIONAL = "optional"
@@ -61,17 +61,16 @@ def get_auth_context(
     Raises HTTPException if the header is missing/invalid.
     """
     if not authorization:
-        # Check for No-Auth mode (Hackathon/Demo)
+        # Check for No-Auth mode (local/dev environments only)
         config = get_config()
         if config.enable_noauth_mcp:
-            # Create a dummy payload for demo user
             payload = JWTPayload(
-                sub="demo-user",
+                sub="local-dev",
                 iat=int(datetime.now(timezone.utc).timestamp()),
                 exp=int(datetime.now(timezone.utc).timestamp()) + 3600
             )
-            return AuthContext(user_id="demo-user", token="no-auth", payload=payload)
-            
+            return AuthContext(user_id="local-dev", token="no-auth", payload=payload)
+
         raise _unauthorized("Authorization header required")
 
     scheme, _, token = authorization.partition(" ")
@@ -95,7 +94,7 @@ def require_auth_context(
     """
     Extract and validate the user_id from a Bearer token.
 
-    This dependency NEVER falls back to demo-user, regardless of ENABLE_NOAUTH_MCP.
+    This dependency always requires a valid Bearer token, regardless of ENABLE_NOAUTH_MCP.
     Use this for routes that must enforce strict authentication (sensitive data,
     paid APIs, administrative functions).
 
@@ -116,7 +115,33 @@ def require_auth_context(
             detail={"error": exc.error, "message": exc.message, "detail": exc.detail},
         ) from exc
 
-    return AuthContext(user_id=payload.sub, token=token, payload=payload)
+    auth_context = AuthContext(user_id=payload.sub, token=token, payload=payload)
+
+    # Role-based access control (only when user approval is required)
+    config = get_config()
+    if config.require_user_approval and not config.enable_local_mode:
+        from ...services.user_service import UserService
+
+        user_svc = UserService()
+        user = user_svc.get_user(auth_context.user_id)
+        if user is None:
+            # Unknown user when approval is required — treat as pending
+            raise _forbidden(
+                "Your account is pending admin approval",
+                "account_pending",
+            )
+        if user.role == "blocked":
+            raise _forbidden(
+                "Your account has been blocked by an administrator",
+                "account_blocked",
+            )
+        if user.role == "pending":
+            raise _forbidden(
+                "Your account is pending admin approval",
+                "account_pending",
+            )
+
+    return auth_context
 
 
 def require_admin_context(
@@ -125,7 +150,7 @@ def require_admin_context(
     """
     Extract and validate the user_id from a Bearer token, then verify admin privileges.
 
-    This dependency enforces strict authentication (no demo-user fallback) and then
+    This dependency enforces strict authentication and then
     checks if the authenticated user has admin privileges.
 
     Use this for administrative routes like system logs, user management, etc.
@@ -136,12 +161,20 @@ def require_admin_context(
     # First, enforce strict authentication
     auth_context = require_auth_context(authorization)
 
-    # Then, check if the user is an admin
+    # Check admin from env var OR users table
     config = get_config()
-    if auth_context.user_id not in config.admin_user_ids:
+    is_admin = auth_context.user_id in config.admin_user_ids
+    if not is_admin:
+        from ...services.user_service import UserService
+
+        user_svc = UserService()
+        user = user_svc.get_user(auth_context.user_id)
+        is_admin = user is not None and user.role == "admin"
+
+    if not is_admin:
         raise _forbidden(
             "Admin privileges required",
-            error="insufficient_permissions"
+            error="insufficient_permissions",
         )
 
     return auth_context

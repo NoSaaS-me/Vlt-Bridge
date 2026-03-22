@@ -409,6 +409,65 @@ class AgentSession(Base):
 # Cronban — Cron + Kanban + Calendar job scheduling
 # ============================================================================
 
+# ============================================================================
+# Artifact Sandbox — Plugin system for executable code bundles
+# ============================================================================
+
+class ArtifactState(enum.Enum):
+    DRAFT = "draft"
+    BUILDING = "building"
+    TESTING = "testing"
+    REVIEWING = "reviewing"
+    APPROVED = "approved"
+    DEPLOYED = "deployed"
+    ERROR = "error"
+    UPDATE_PENDING = "update_pending"
+
+
+# Valid state transitions: {from_state: [to_states]}
+ARTIFACT_STATE_TRANSITIONS = {
+    ArtifactState.DRAFT: [ArtifactState.BUILDING],
+    ArtifactState.BUILDING: [ArtifactState.TESTING, ArtifactState.ERROR],
+    ArtifactState.TESTING: [ArtifactState.REVIEWING, ArtifactState.APPROVED, ArtifactState.BUILDING, ArtifactState.ERROR],
+    ArtifactState.REVIEWING: [ArtifactState.APPROVED, ArtifactState.BUILDING, ArtifactState.ERROR],
+    ArtifactState.APPROVED: [ArtifactState.TESTING, ArtifactState.DEPLOYED, ArtifactState.BUILDING],
+    ArtifactState.DEPLOYED: [ArtifactState.UPDATE_PENDING, ArtifactState.BUILDING, ArtifactState.ERROR],
+    ArtifactState.UPDATE_PENDING: [ArtifactState.TESTING, ArtifactState.BUILDING],
+    ArtifactState.ERROR: [ArtifactState.BUILDING, ArtifactState.DRAFT],
+}
+
+
+class Artifact(Base):
+    """Executable plugin bundle with frontend (iframe) + optional backend (Python process).
+
+    Artifacts are sandboxed code bundles that render in the agent UI and can
+    interact with the platform via VltBridge API. They progress through a
+    state machine from draft to deployed.
+    """
+    __tablename__ = "artifacts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # UUID
+    user_id: Mapped[str] = mapped_column(String)
+    project_id: Mapped[str] = mapped_column(String)
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    type: Mapped[str] = mapped_column(String, default="ephemeral")  # ephemeral | persistent
+    state: Mapped[ArtifactState] = mapped_column(
+        SQLAEnum(ArtifactState), default=ArtifactState.DRAFT
+    )
+    state_history_json: Mapped[str] = mapped_column(Text, default="[]")
+    manifest_json: Mapped[str] = mapped_column(Text, default="{}")
+    thread_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    disk_path: Mapped[str] = mapped_column(String(512))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[str] = mapped_column(
+        String, default=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    updated_at: Mapped[str] = mapped_column(
+        String, default=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
 class CronbanEntryType(enum.Enum):
     CRON    = "cron"     # DEPRECATED — use CronTrigger
     GATE    = "gate"     # DEPRECATED — use PipelineCard
@@ -693,6 +752,7 @@ class CronTrigger(Base):
     target_cwd: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     create_new_session: Mapped[bool] = mapped_column(Boolean, default=False)
     fire_once: Mapped[bool] = mapped_column(Boolean, default=False)   # one-shot: completed after first fire
+    max_fires: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # auto-complete after N fires (None=unlimited)
     # Stats
     fire_count: Mapped[int] = mapped_column(Integer, default=0)
     last_fired_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)

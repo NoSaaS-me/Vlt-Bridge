@@ -616,7 +616,12 @@ function StageColumn({
         e.dataTransfer.dropEffect = 'move';
         setDragOver(true);
       }}
-      onDragLeave={() => setDragOver(false)}
+      onDragLeave={(e) => {
+        // Only clear when leaving the column entirely, not when entering child elements
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          setDragOver(false);
+        }
+      }}
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);

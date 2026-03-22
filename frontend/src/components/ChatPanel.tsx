@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Send, Loader2, Info, Square, GitBranch } from 'lucide-react';
+import { Send, Loader2, Info, Square, GitBranch, Globe } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -54,6 +54,7 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
   const [showThinking, setShowThinking] = useState(true);
   const [showSources, setShowSources] = useState(true);
+  const [deepResearch, setDeepResearch] = useState(false);
   const [activeSources, _setActiveSources] = useState<SourceType[]>(['vault', 'code', 'threads']);
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [commandFilter, setCommandFilter] = useState('');
@@ -559,8 +560,9 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
           max_results: 10,
           model: modelSettings?.oracle_model,
           thinking: modelSettings?.thinking_enabled,
-          context_id: currentContextId ?? undefined, // Pass current context for conversation continuity
-          project_id: projectId || undefined, // Scope to current project
+          context_id: currentContextId ?? undefined,
+          project_id: projectId || undefined,
+          deep_research: deepResearch || undefined,
         },
         (chunk: OracleStreamChunk) => {
           chunkProcessedCount++;
@@ -861,6 +863,15 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
               </Badge>
             )}
             <Button
+              variant={deepResearch ? "secondary" : "ghost"}
+              size="icon"
+              className={`h-8 w-8 ${deepResearch ? 'text-blue-400' : ''}`}
+              onClick={() => setDeepResearch((v) => !v)}
+              title={deepResearch ? "Deep Research ON — click to disable" : "Enable Deep Research (multi-step web search)"}
+            >
+              <Globe className="h-4 w-4" />
+            </Button>
+            <Button
               variant={showContextTree ? "secondary" : "ghost"}
               size="icon"
               className="h-8 w-8"
@@ -880,14 +891,23 @@ export function ChatPanel({ onNavigateToNote, onNotesChanged: _onNotesChanged, p
             </Button>
           </div>
         </div>
-        {activeSources.length < 3 && (
-          <div className="mt-2 flex gap-1">
-            <span className="text-xs text-muted-foreground">Active sources:</span>
-            {activeSources.map((source) => (
-              <Badge key={source} variant="secondary" className="text-xs">
-                {source}
+        {(deepResearch || activeSources.length < 3) && (
+          <div className="mt-2 flex gap-1 flex-wrap">
+            {deepResearch && (
+              <Badge variant="outline" className="text-xs text-blue-400 border-blue-400/40 bg-blue-400/10">
+                🌐 Deep Research
               </Badge>
-            ))}
+            )}
+            {activeSources.length < 3 && (
+              <>
+                <span className="text-xs text-muted-foreground">Active sources:</span>
+                {activeSources.map((source) => (
+                  <Badge key={source} variant="secondary" className="text-xs">
+                    {source}
+                  </Badge>
+                ))}
+              </>
+            )}
           </div>
         )}
       </div>

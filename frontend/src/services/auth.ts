@@ -3,15 +3,10 @@
  */
 import type { User } from '@/types/user';
 import type { TokenResponse } from '@/types/auth';
-import type { DemoTokenResponse } from '@/services/api';
-import { getDemoToken, registerTokenRefresher } from '@/services/api';
 
 const AUTH_TOKEN_KEY = 'auth_token';
-const AUTH_TOKEN_SOURCE_KEY = 'auth_token_source';
 const AUTH_TOKEN_EXPIRES_KEY = 'auth_token_expires_at';
 export const AUTH_TOKEN_CHANGED_EVENT = 'auth-token-changed';
-
-type TokenSource = 'user' | 'demo';
 
 const API_BASE = '';
 
@@ -21,9 +16,8 @@ function notifyTokenChange(): void {
   }
 }
 
-function storeAuthToken(token: string, source: TokenSource, expiresAt?: string): void {
+function storeAuthToken(token: string, expiresAt?: string): void {
   localStorage.setItem(AUTH_TOKEN_KEY, token);
-  localStorage.setItem(AUTH_TOKEN_SOURCE_KEY, source);
   if (expiresAt) {
     localStorage.setItem(AUTH_TOKEN_EXPIRES_KEY, expiresAt);
   } else {
@@ -34,8 +28,9 @@ function storeAuthToken(token: string, source: TokenSource, expiresAt?: string):
 
 function clearStoredAuthToken(): void {
   localStorage.removeItem(AUTH_TOKEN_KEY);
-  localStorage.removeItem(AUTH_TOKEN_SOURCE_KEY);
   localStorage.removeItem(AUTH_TOKEN_EXPIRES_KEY);
+  // Clean up legacy keys
+  localStorage.removeItem('auth_token_source');
   notifyTokenChange();
 }
 
@@ -58,20 +53,8 @@ export function logout(): void {
  * Get current authenticated user
  */
 export async function getCurrentUser(): Promise<User> {
-  const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  
-  const response = await fetch(`${API_BASE}/api/me`, {
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to get current user');
-  }
-
-  return response.json();
+  const { apiFetch } = await import('@/services/api');
+  return apiFetch<User>('/api/me');
 }
 
 /**
@@ -79,7 +62,7 @@ export async function getCurrentUser(): Promise<User> {
  */
 export async function getToken(): Promise<TokenResponse> {
   const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  
+
   const response = await fetch(`${API_BASE}/api/tokens`, {
     method: 'POST',
     headers: {
@@ -93,10 +76,10 @@ export async function getToken(): Promise<TokenResponse> {
   }
 
   const tokenResponse: TokenResponse = await response.json();
-  
+
   // Store the new token
-  storeAuthToken(tokenResponse.token, 'user', tokenResponse.expires_at);
-  
+  storeAuthToken(tokenResponse.token, tokenResponse.expires_at);
+
   return tokenResponse;
 }
 
@@ -104,14 +87,7 @@ export async function getToken(): Promise<TokenResponse> {
  * Check if user is authenticated
  */
 export function isAuthenticated(): boolean {
-  const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  if (!token) {
-    return false;
-  }
-  if (isDemoSession()) {
-    return !demoTokenExpired();
-  }
-  return true;
+  return !!localStorage.getItem(AUTH_TOKEN_KEY);
 }
 
 /**
@@ -119,10 +95,6 @@ export function isAuthenticated(): boolean {
  */
 export function getStoredToken(): string | null {
   return localStorage.getItem(AUTH_TOKEN_KEY);
-}
-
-export function isDemoSession(): boolean {
-  return localStorage.getItem(AUTH_TOKEN_SOURCE_KEY) === 'demo';
 }
 
 /**
@@ -135,7 +107,7 @@ export function setAuthTokenFromHash(): boolean {
   if (hash.startsWith('#token=')) {
     const token = hash.substring(7); // Remove '#token='
     if (token) {
-      storeAuthToken(token, 'user');
+      storeAuthToken(token);
       // Clean up the URL
       window.history.replaceState(null, '', window.location.pathname);
       return true;
@@ -143,71 +115,3 @@ export function setAuthTokenFromHash(): boolean {
   }
   return false;
 }
-
-function demoTokenExpired(): boolean {
-  const expiresAt = localStorage.getItem(AUTH_TOKEN_EXPIRES_KEY);
-  if (!expiresAt) {
-    return false;
-  }
-  const now = Date.now();
-  return new Date(expiresAt).getTime() <= now;
-}
-
-async function requestDemoToken(): Promise<DemoTokenResponse> {
-  return getDemoToken();
-}
-
-export async function ensureDemoToken(): Promise<boolean> {
-  // If we already have a user token, nothing to do
-  if (isAuthenticated() && !isDemoSession()) {
-    return true;
-  }
-
-  // If we have a demo token that hasn't locally expired, validate it
-  // against the backend. The token may be stale (e.g. backend restarted
-  // with a new JWT secret) even though the local expiry hasn't passed.
-  if (isAuthenticated() && isDemoSession() && !demoTokenExpired()) {
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    try {
-      const res = await fetch('/api/me', {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      if (res.ok) return true;
-      // Token rejected — fall through to get a fresh one
-      console.warn('Stored demo token rejected by backend, refreshing');
-    } catch {
-      // Network error — fall through to try refreshing
-    }
-  }
-
-  try {
-    const demoResponse = await requestDemoToken();
-    storeAuthToken(demoResponse.token, 'demo', demoResponse.expires_at);
-    return true;
-  } catch (error) {
-    console.warn('Failed to obtain demo token', error);
-    clearStoredAuthToken();
-    return false;
-  }
-}
-
-/**
- * Force-refresh the demo token. Called by apiFetch on 401 responses
- * so that stale tokens self-heal without a page reload.
- * Returns the new token string or null on failure.
- */
-export async function refreshDemoToken(): Promise<string | null> {
-  if (!isDemoSession()) return null;
-  try {
-    const demoResponse = await requestDemoToken();
-    storeAuthToken(demoResponse.token, 'demo', demoResponse.expires_at);
-    return demoResponse.token;
-  } catch {
-    clearStoredAuthToken();
-    return null;
-  }
-}
-
-// Wire up the 401 auto-retry in apiFetch (breaks circular import)
-registerTokenRefresher(refreshDemoToken, isDemoSession);
-

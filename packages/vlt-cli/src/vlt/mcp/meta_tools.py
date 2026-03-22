@@ -23,13 +23,18 @@ def register_meta_tools(mcp) -> None:
 
     @mcp.tool()
     def vlt_status() -> dict:
-        """Return vlt system health and a summary of all projects and threads.
+        """Return vlt system health and a summary of all projects.
 
-        Checks: database connectivity, project/thread counts, daemon status,
-        backend configuration, and oracle toggle state.
+        Call this first to orient yourself. Shows what projects exist,
+        whether the daemon and backend are running, and if oracle is enabled.
 
         Returns:
-            {status, projects, daemon_running, backend_configured, oracle_enabled, db_path}
+            {status,
+             projects: [{id, name, thread_count, node_count}, ...],
+             daemon_running: bool,
+             backend_configured: bool,
+             oracle_enabled: bool,
+             db_path: str}
         """
         from vlt.mcp import _ok, _err
         from vlt.config import get_settings
@@ -93,7 +98,11 @@ def register_meta_tools(mcp) -> None:
     def vlt_project_detect(
         path: Optional[str] = None,
     ) -> dict:
-        """Detect vlt project context from a directory path.
+        """Detect the current project_id from the working directory.
+
+        CALL THIS FIRST before using any tool that takes a project_id
+        (vlt_thread_create, vlt_thread_list, vlt_thread_seek, vlt_code_*,
+        vlt_oracle_query, etc.).
 
         Walks up the directory tree from ``path`` (defaults to cwd) looking
         for a ``vlt.toml`` file. If found, reads the project_id and checks

@@ -152,6 +152,7 @@ def _cron_to_dict(c: CronTrigger) -> dict:
         "target_cwd": c.target_cwd,
         "create_new_session": bool(c.create_new_session),
         "fire_once": bool(c.fire_once),
+        "max_fires": getattr(c, "max_fires", None),
         "fire_count": c.fire_count,
         "last_fired_at": c.last_fired_at,
         "created_at": c.created_at,
@@ -223,15 +224,22 @@ async def _dispatch_to_session(
     target_session_id: Optional[str],
     target_cwd: Optional[str],
     create_new: bool,
+    prefer_relay: bool = False,
 ) -> Optional[str]:
     """
     Send a prompt to a session.
 
-    Routing:
+    Routing (when prefer_relay=False — legacy SDK mode):
       0. Relay session active → inject via _session_inject_queues (PTY stdin).
       1. SDK session already running → write to stdin directly.
       2. Session exists in DB → spawn SDK session with --resume.
-      3. create_new=True → spawn fresh session via /api/sessions/spawn.
+      3. create_new=True → spawn fresh relay session.
+
+    When prefer_relay=True (cronban default):
+      0. Relay session active → inject via _session_inject_queues (PTY stdin).
+      1. SDK session running → terminate it, respawn as relay with --resume.
+      2. Session exists in DB → spawn relay session with --resume.
+      3. create_new=True → spawn fresh relay session.
     """
     try:
         import sys as _sys
@@ -244,56 +252,123 @@ async def _dispatch_to_session(
         _srv = _sys.modules['__main__']
         _sdk_sessions = _srv._sdk_sessions
         _spawn_sdk_session = _srv._spawn_sdk_session
+        _spawn_relay = getattr(_srv, '_spawn_relay_session', None)
 
         if target_session_id:
             # 0. Relay session — inject text into the PTY queue
+            # Only use this path if the relay process is actually alive.
+            # Orphaned queues (from zombie relay processes) silently eat prompts.
             _relay_queues = getattr(_srv, '_session_inject_queues', {})
+            _relay_sessions = getattr(_srv, '_relay_sessions', {})
             if target_session_id in _relay_queues:
-                await _relay_queues[target_session_id].put((prompt + "\n").encode())
-                logger.info(f"_dispatch: relay inject for {target_session_id}")
-                return target_session_id
+                relay_info = _relay_sessions.get(target_session_id)
+                relay_alive = (
+                    relay_info
+                    and relay_info.get("proc")
+                    and relay_info["proc"].returncode is None
+                )
+                if relay_alive:
+                    await _relay_queues[target_session_id].put((prompt + "\r").encode())
+                    logger.info(f"_dispatch: relay inject for {target_session_id}")
+                    return target_session_id
+                else:
+                    # Orphaned queue — clean it up and fall through to other paths
+                    logger.warning(
+                        f"_dispatch: relay queue exists for {target_session_id} but "
+                        f"relay process is dead — cleaning up orphaned queue"
+                    )
+                    _relay_queues.pop(target_session_id, None)
+                    _relay_sessions.pop(target_session_id, None)
+                    # Also clean up stream/scrollback
+                    _streams = getattr(_srv, '_session_streams', {})
+                    _scrollback = getattr(_srv, '_session_scrollback', {})
+                    _streams.pop(target_session_id, None)
+                    _scrollback.pop(target_session_id, None)
 
-            # 1. Already running — write to stdin directly
+            # 1. SDK session already running
             sdk = _sdk_sessions.get(target_session_id)
             if sdk and sdk["proc"].returncode is None:
-                user_msg = json.dumps({
-                    "type": "user",
-                    "message": {"role": "user", "content": prompt},
-                    "session_id": "default",
-                }) + "\n"
-                sdk["proc"].stdin.write(user_msg.encode())
-                asyncio.create_task(sdk["proc"].stdin.drain())
-                logger.info(f"_dispatch: SDK write for {target_session_id}")
-                return target_session_id
-
-            # 2. Session not running — look up DB and spawn with --resume (persistent)
-            from vlt.db import engine as _engine  # lazy: avoids stale module-cache issues
-            with Session(_engine) as db:
-                sess = db.get(AgentSession, target_session_id)
-
-            if sess and sess.cwd:
-                cwd_key = str(_Path(sess.cwd).resolve())
-                ok = await _spawn_sdk_session(target_session_id, cwd_key, is_new=False)
-                if ok:
-                    sdk = _sdk_sessions[target_session_id]
+                if prefer_relay and _spawn_relay:
+                    # Terminate SDK process and respawn as relay with TUI
+                    logger.info(f"_dispatch: terminating SDK session {target_session_id} → relay")
+                    sdk["proc"].terminate()
+                    try:
+                        await asyncio.wait_for(sdk["proc"].wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        sdk["proc"].kill()
+                    _sdk_sessions.pop(target_session_id, None)
+                    cwd_key = sdk.get("cwd", target_cwd or ".")
+                    ok = await _spawn_relay(target_session_id, cwd_key, prompt=prompt, resume=True)
+                    if ok:
+                        logger.info(f"_dispatch: SDK→relay upgrade for {target_session_id}")
+                        return target_session_id
+                else:
                     user_msg = json.dumps({
                         "type": "user",
                         "message": {"role": "user", "content": prompt},
                         "session_id": "default",
                     }) + "\n"
                     sdk["proc"].stdin.write(user_msg.encode())
-                    await sdk["proc"].stdin.drain()
-                    logger.info(f"_dispatch: SDK resume for {target_session_id} (status={sess.status})")
+                    asyncio.create_task(sdk["proc"].stdin.drain())
+                    logger.info(f"_dispatch: SDK write for {target_session_id}")
                     return target_session_id
 
-        if create_new and target_cwd:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    "http://127.0.0.1:8765/api/sessions/spawn",
-                    json={"cwd": target_cwd, "prompt": prompt},
+            # 2. Session not running — look up DB and spawn
+            from vlt.db import engine as _engine  # lazy: avoids stale module-cache issues
+            with Session(_engine) as db:
+                sess = db.get(AgentSession, target_session_id)
+
+            if sess and sess.cwd:
+                # Guard: if session is running externally (hook-based Claude Code
+                # process), we cannot --resume it — that would spawn a conflicting
+                # process. Detect this via status=executing/thinking + not in our
+                # managed dicts (relay or SDK).
+                _is_externally_active = (
+                    sess.status in ("executing", "thinking")
+                    and target_session_id not in _sdk_sessions
+                    and target_session_id not in getattr(_srv, '_relay_sessions', {})
                 )
-                resp.raise_for_status()
-                return resp.json().get("session_id")
+                if _is_externally_active:
+                    logger.error(
+                        f"_dispatch: session {target_session_id} is running externally "
+                        f"(status={sess.status}, source={sess.source}) — cannot inject. "
+                        f"Session must be idle or managed by daemon."
+                    )
+                    return None
+
+                cwd_key = str(_Path(sess.cwd).resolve())
+
+                if prefer_relay and _spawn_relay:
+                    # Spawn as relay with --resume for TUI visibility
+                    ok = await _spawn_relay(target_session_id, cwd_key, prompt=prompt, resume=True)
+                    if ok:
+                        logger.info(f"_dispatch: relay resume for {target_session_id}")
+                        return target_session_id
+                else:
+                    ok = await _spawn_sdk_session(target_session_id, cwd_key, is_new=False)
+                    if ok:
+                        sdk = _sdk_sessions[target_session_id]
+                        user_msg = json.dumps({
+                            "type": "user",
+                            "message": {"role": "user", "content": prompt},
+                            "session_id": "default",
+                        }) + "\n"
+                        sdk["proc"].stdin.write(user_msg.encode())
+                        await sdk["proc"].stdin.drain()
+                        logger.info(f"_dispatch: SDK resume for {target_session_id} (status={sess.status})")
+                        return target_session_id
+
+        if create_new and target_cwd:
+            # Spawn as relay session (full PTY) via direct call — avoids self-HTTP
+            # roundtrip and works regardless of daemon port.
+            if _spawn_relay is None:
+                logger.error("_spawn_relay_session not found on __main__")
+                return None
+            new_sid = str(uuid.uuid4())
+            ok = await _spawn_relay(new_sid, target_cwd, prompt=prompt)
+            if ok:
+                return new_sid
+            return None
 
     except Exception as exc:
         logger.error(f"_dispatch_to_session error: {exc}")
@@ -383,7 +458,8 @@ async def fire_cron_trigger(trigger_id: str, trigger_type: str = "cron") -> dict
             stage_prompt = await _resolve_prompt(first_stage.skill_id, first_stage.prompt_text)
             if stage_prompt:
                 used_session_id = await _dispatch_to_session(
-                    stage_prompt, target_sid, target_cwd, create_new
+                    stage_prompt, target_sid, target_cwd, create_new,
+                    prefer_relay=True,
                 )
                 if used_session_id:
                     with Session(engine) as db:
@@ -399,7 +475,10 @@ async def fire_cron_trigger(trigger_id: str, trigger_type: str = "cron") -> dict
             prompt = await _resolve_prompt(skill_id, prompt_text)
             if not prompt:
                 raise RuntimeError("No prompt resolved for standalone fire")
-            used_session_id = await _dispatch_to_session(prompt, target_sid, target_cwd, create_new)
+            used_session_id = await _dispatch_to_session(
+                prompt, target_sid, target_cwd, create_new,
+                prefer_relay=True,
+            )
             if not used_session_id:
                 raise RuntimeError("No session available")
 
@@ -424,7 +503,8 @@ async def fire_cron_trigger(trigger_id: str, trigger_type: str = "cron") -> dict
             trigger.fire_count = (trigger.fire_count or 0) + 1
             trigger.last_fired_at = now_iso
             trigger.updated_at = now_iso
-            if getattr(trigger, 'fire_once', False):
+            max_fires = getattr(trigger, 'max_fires', None)
+            if getattr(trigger, 'fire_once', False) or (max_fires and trigger.fire_count >= max_fires):
                 trigger.next_fire_at = None
                 trigger.status = "completed"
             elif trigger.cron_expression or trigger.rrule_str:
@@ -498,13 +578,17 @@ async def fire_webhook_listener(
             )
             if stage_prompt:
                 used_session_id = await _dispatch_to_session(
-                    stage_prompt, target_sid, target_cwd, create_new
+                    stage_prompt, target_sid, target_cwd, create_new,
+                    prefer_relay=True,
                 )
         else:
             prompt = await _resolve_prompt(skill_id, prompt_text, append_message)
             if not prompt:
                 raise RuntimeError("No prompt resolved")
-            used_session_id = await _dispatch_to_session(prompt, target_sid, target_cwd, create_new)
+            used_session_id = await _dispatch_to_session(
+                prompt, target_sid, target_cwd, create_new,
+                prefer_relay=True,
+            )
             if not used_session_id:
                 raise RuntimeError("No session available")
 
@@ -994,7 +1078,15 @@ async def fire_card(card_id: str):
             if not success:
                 raise RuntimeError("Helper session dispatch failed")
         else:
-            used_session_id = await _dispatch_to_session(prompt, target_sid, target_cwd, bool(target_cwd))
+            # If no target_session_id and no target_cwd, default CWD to ~ so
+            # a new session can be spawned (create_new requires a truthy cwd).
+            import os
+            effective_cwd = target_cwd or (os.path.expanduser("~") if not target_sid else None)
+            create_new = bool(effective_cwd) and not target_sid
+            used_session_id = await _dispatch_to_session(
+                prompt, target_sid, effective_cwd, create_new,
+                prefer_relay=True,
+            )
             if not used_session_id:
                 raise RuntimeError("No session available")
 
@@ -1140,6 +1232,7 @@ async def create_cron(request: Request):
             target_cwd=body.get("target_cwd"),
             create_new_session=bool(body.get("create_new_session", False)),
             fire_once=fire_once,
+            max_fires=body.get("max_fires"),
         )
         db.add(t)
         db.commit()
@@ -1172,6 +1265,8 @@ async def update_cron(cron_id: str, request: Request):
             t.create_new_session = bool(body["create_new_session"])
         if "fire_once" in body:
             t.fire_once = bool(body["fire_once"])
+        if "max_fires" in body:
+            t.max_fires = body["max_fires"]  # int or None to clear
         # One-shot: fire_at or fire_in override cron recalculation
         fire_at = body.get("fire_at")
         fire_in = body.get("fire_in")
