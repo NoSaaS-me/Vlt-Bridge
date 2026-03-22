@@ -1,257 +1,204 @@
 # Vlt-Bridge
-Work in Progress
 
-Agent memory and vault bridge in one repo: the **vlt** CLI (threads, CodeRAG, Oracle) and the **Document-MCP** web app (Obsidian-style vault + MCP server). They share the vault concept — markdown on disk — and that’s it. No runtime dependency: agents shell out to `vlt` or talk to the MCP server over HTTP; the CLI does not route through the backend.
+Persistent memory, code intelligence, and documentation platform for AI agents.
 
-This is a RAG for any document. A memory system for agents. And a web chat provider to give agents a phone a friend feature.
+## What it does
 
-**Audience:** Developers and MCP integrators wiring agents to memory/vault; CLI users; anyone running the web UI.
+**Memory & Retrieval**
+- **Threads** — append-only reasoning logs per project. Librarian compresses nodes into semantic state. `push` is <50ms.
+- **CodeRAG** — hybrid code index (vector + BM25 + ctags call-graph). Python, TypeScript, JavaScript, Go, Rust.
+- **Oracle** — multi-source Q&A over threads, code, and vault. RLM REPL harness: LLM gets a Python sandbox, writes code to explore, sets `Final` to answer.
 
-## Quick start by goal
+**Vault & Web UI**
+- Markdown notes with wikilinks, FTS5 search (BM25, title 3x weight), backlinks, graph view.
+- Split-pane editor with live preview. AI chat (RAG + Gemini). TTS (ElevenLabs).
+- Optimistic concurrency on saves. HF OAuth or local single-user mode.
 
-| Goal | Action |
-|------|--------|
-| **Use the web UI** | Backend: `cd backend && uv run uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000`. Frontend: `cd frontend && npm install && npm run dev`. UI at http://localhost:5173, API at :8000. |
-| **Use vlt CLI** (threads, CodeRAG, Oracle) | `cd packages/vlt-cli && pip install -e ".[oracle]"`, then `vlt profile init` and `vlt config set-key <OPENROUTER_KEY>`. |
-| **Connect an MCP client** | Prefer **vlt-mcp** (threads + code + oracle + vault in one server): `claude mcp add --scope user vlt vlt-mcp`. For vault-only: Document-MCP STDIO/HTTP (see MCP Client Configuration). |
+**Daemon (port 8765)**
+- Central hub. Agent session management (Claude Code hooks + SDK subprocess control).
+- Artifact sandbox lifecycle. Connector routing. Cronban scheduling. CodeRAG job queue.
+
+**Artifact Sandboxes**
+- Sandboxed apps: frontend (HTML/JS) + backend (Python) with bidirectional harness protocol.
+- Multi-stage pipelines. Configurable outputs (vault notes, files, connector publish).
+- Templates (e.g. `text_factory`: content generation + review + cleanup).
+
+**Connectors**
+- Pluggable AI model connectors: OpenRouter, z.ai, z.ai Vision, custom OpenAI-compatible endpoints.
+- Composio integrations for external services (Gmail, GitHub, etc).
+
+**Cronban**
+- Schedule recurring prompts into live Claude sessions. 5-field cron expressions.
+
+**MCP**
+- Unified `vlt-mcp` server: threads + code + oracle + vault + connectors + cronban + artifacts as tools.
+
+## Quick start
+
+```bash
+# Web UI + backend
+./start-dev.sh                    # backend :8000, frontend :5173
+
+# CLI
+cd packages/vlt-cli
+pip install -e ".[oracle]"
+vlt profile init
+vlt config set-key <OPENROUTER_KEY>
+
+# MCP (Claude Desktop/Code)
+claude mcp add --scope user vlt vlt-mcp
+
+# Daemon
+vlt daemon start
+```
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-  subgraph CLI ["vlt CLI"]
-    threads[threads]
-    coderag[CodeRAG]
-    oracle[Oracle]
+flowchart TB
+  CLI[vlt CLI]
+  MCP[vlt-mcp]
+  WebUI[Web UI :5173]
+
+  subgraph Daemon ["Daemon :8765"]
+    Sessions[Session Manager]
+    Artifacts[Artifact Sandboxes]
+    Cronban[Cronban Scheduler]
+    CRAGd[CodeRAG Jobs]
   end
-  subgraph Backend ["Backend"]
-    FastAPI[FastAPI]
-    MCP[MCP vault tools]
-  end
-  subgraph Frontend ["Frontend"]
-    React[React UI]
-  end
-  Vault[("Vault (markdown on disk)")]
-  CLI --> Vault
+
+  Backend["Backend :8000\n(FastAPI)"]
+  Connectors[Connectors]
+  Vault[("Vault\n(markdown + SQLite FTS)")]
+  ThreadDB[("Thread DB\n(SQLite)")]
+
+  CLI --> ThreadDB
+  CLI --> Daemon
+  CLI --> Backend
+  MCP --> ThreadDB
+  MCP --> Daemon
+  MCP --> Backend
+  WebUI --> Backend
+  WebUI --> Daemon
   Backend --> Vault
-  Frontend --> FastAPI
-  FastAPI --> MCP
+  Daemon --> Connectors
+  Daemon --> Artifacts
 ```
 
-CLI and backend both read/write the vault independently. Oracle can run locally (CLI) or in thin-client mode against the backend when it’s running.
-
-## Monorepo layout
+## Project structure
 
 ```
 Vlt-Bridge/
-├── backend/              # FastAPI (Document-MCP) + FastMCP STDIO/HTTP
+├── backend/                # FastAPI — vault CRUD, search, auth, Oracle, RAG, TTS
 │   └── src/
-│       ├── api/          # REST: notes, search, graph, RAG, TTS, auth, oracle
-│       ├── mcp/          # MCP server (vault tools only)
-│       ├── models/       # Pydantic schemas
-│       ├── prompts/      # Oracle prompts
-│       └── services/    # vault, indexer, auth, database, rlm_oracle, repl_executor,
-│                        # project_context, ans, openrouter_client, ...
-├── frontend/             # React 19 + Vite 7 + shadcn/ui
+│       ├── api/            # REST routes + middleware
+│       ├── mcp/            # MCP server (vault tools, STDIO/HTTP)
+│       ├── models/         # Pydantic schemas
+│       └── services/       # vault, indexer, database, rlm_oracle, ans, ...
+├── frontend/               # React 19, Vite 7, shadcn/ui
 ├── packages/
-│   └── vlt-cli/          # vlt CLI + vlt-mcp (threads, coderag, oracle, vault)
-├── specs/                # SpecKit feature specs
-├── data/                 # Runtime data (vaults/, index.db) — gitignored
-└── desktop-app/          # Optional Tauri desktop wrapper
+│   ├── vlt-cli/            # CLI + daemon + vlt-mcp server
+│   │   └── src/vlt/daemon/ # Daemon: sessions, artifacts, cronban, harness
+│   └── vlt-connectors/     # Pluggable model connectors (OpenRouter, z.ai, custom)
+├── specs/                  # SpecKit feature specs
+├── data/                   # Runtime: vaults/, index.db (gitignored)
+└── desktop-app/            # Optional Tauri wrapper
 ```
 
-## vlt CLI
+## CLI reference
 
-Installed from `packages/vlt-cli`; primary interface for agent memory and Oracle. **Requirements:** Python 3.11+, [OpenRouter](https://openrouter.ai/) API key, `universal-ctags` for Oracle (`apt install universal-ctags`).
+### Threads
 
-**Install:**
-
-```bash
-cd packages/vlt-cli
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[oracle]"
-vlt profile init
-vlt config set-key <YOUR_OPENROUTER_KEY>
-```
-
-### Thread memory
-
-Threads: per-project, append-only logs. Librarian daemon compresses nodes into semantic state (LLM). `thread push` is tuned for &lt;50ms so agents can log without blocking.
-
-```bash
-vlt overview
-vlt thread new <project> <thread-id> "goal"
-vlt thread push <thread-id> "insight or decision"
-vlt thread read <thread-id>
-vlt thread read <thread-id> --search "jwt"
-vlt thread seek "concept or question"
-vlt tag <node-id> "#bug"
-vlt link <node-id> <thread-id>
-```
+| Command | Description |
+|---------|-------------|
+| `vlt overview` | Active projects and thread states |
+| `vlt thread new <project> <id> "goal"` | Create a thread |
+| `vlt thread push <id> "thought"` | Append a node (<50ms) |
+| `vlt thread read <id>` | Read thread state |
+| `vlt thread read <id> --search "jwt"` | Filtered read |
+| `vlt thread seek "query"` | Semantic search across all threads |
+| `vlt thread list --project <id>` | List threads in a project |
+| `vlt tag <node-id> "#bug"` | Tag a node |
+| `vlt link <node-id> <thread-id>` | Cross-link nodes |
 
 Use `--author "AgentName"` on `push` for multi-agent attribution.
 
 ### CodeRAG
 
-Hybrid indexing: vector + BM25 + ctags call-graph. Languages: Python, TypeScript, TSX, JavaScript, Go, Rust.
-
-```bash
-vlt coderag init --project <id> --path /path/to/repo
-vlt coderag init --project <id> --foreground
-vlt coderag init --project <id> --force
-vlt coderag status --project <id>
-vlt coderag search "authentication flow" --project <id>
-vlt coderag map --project <id>
-vlt coderag map --project <id> --scope src/api/
-```
-
-Status: `pending`, `running`, `completed`, `failed`, `cancelled`. Indexing uses the background daemon by default; if the daemon isn’t running, you’re prompted for foreground. Configure with `coderag.toml` in project root (e.g. `include`/`exclude`).
+| Command | Description |
+|---------|-------------|
+| `vlt coderag init --project <id> --path <dir>` | Index a codebase |
+| `vlt coderag status --project <id>` | Check indexing progress |
+| `vlt coderag search "query" --project <id>` | Hybrid search |
+| `vlt coderag map --project <id>` | Repo structure overview |
+| `vlt coderag map --project <id> --scope src/api/` | Scoped map |
 
 ### Oracle
 
-Multi-source query over code index, vault notes, and thread history. **RLM Oracle:** REPL-centric harness. The LLM gets a Python sandbox where the project is exposed as `project`, `sub_oracle`, and `Final`; it writes code to explore and synthesize answers. Loop ends when it sets `Final`. Sandbox: RestrictedPython, 30s timeout, approved stdlib only. No Behavior Tree or XML signals.
+| Command | Description |
+|---------|-------------|
+| `vlt oracle "question"` | Query (uses backend if available) |
+| `vlt oracle "question" --local` | Force local execution |
+| `vlt oracle "question" --source code` | Restrict to code index |
+| `vlt oracle "question" --thinking` | Show retrieval traces |
 
-```bash
-vlt oracle "How does authentication work?"
-vlt oracle "Where is UserService defined?" --source code
-vlt oracle "Why did we choose SQLite?" --source threads
-vlt oracle "Explain the architecture" --local
-vlt oracle "Hard question" --thinking --model anthropic/claude-sonnet-4
-```
+### Artifacts
 
-Default: Oracle tries the backend (thin-client, shared with web UI). `--local` forces local. `--explain` shows retrieval traces. `--source` can be `code`, `vault`, or `threads` (repeatable). See [specs/022-rlm-oracle/quickstart.md](specs/022-rlm-oracle/quickstart.md) for backend-side testing.
+| Command | Description |
+|---------|-------------|
+| `vlt artifact list` | List all artifacts |
+| `vlt artifact create <name> --template text_factory` | Create from template |
+| `vlt artifact get <id>` | Inspect artifact details |
+| `vlt artifact sync <id> <folder>` | Push local folder to artifact |
+| `vlt artifact pull <id> <folder>` | Download artifact to local |
+| `vlt artifact call <id> <action> [params_json]` | Run backend action |
+| `vlt artifact start/stop <id>` | Control backend process |
+| `vlt artifact state <id> <state>` | Transition state |
+| `vlt artifact templates` | List available templates |
 
-### Daemon management
+### Connectors & Cronban
 
-```bash
-vlt daemon start
-vlt daemon stop
-vlt daemon status
-vlt librarian start
-```
+| Command | Description |
+|---------|-------------|
+| `vlt connectors list` | Available connectors |
+| `vlt connectors actions <name>` | Connector action schemas |
+| `vlt cron sessions` | List live Claude sessions |
+| `vlt cron add <title> <expr> <prompt> --session <id>` | Schedule a prompt |
+| `vlt cron list` | Show active schedules |
+| `vlt cron pause/resume/delete <id>` | Manage schedules |
 
-### vlt-mcp (unified MCP server)
+### System
 
-One server for threads, code, oracle, and vault. No separate daemon/ports for core use. Setup: `claude mcp add --scope user vlt vlt-mcp`. Cold-start ~164ms. Full setup (Claude Desktop, per-project override, oracle toggle): [specs/018-vlt-mcp-server/quickstart.md](specs/018-vlt-mcp-server/quickstart.md).
-
-## Document-MCP
-
-### Web UI
-
-Browser vault viewer/editor; talks to FastAPI on port 8000.
-
-- Wikilinks `[[Note Name]]` via SQLite slug matching (same folder preferred, then lexicographic).
-- Full-text search: FTS5, BM25, title 3× weight, recency bonus.
-- Backlinks and graph view (force-directed).
-- Split-pane editor with live preview; AI chat (RAG + Gemini); TTS (ElevenLabs).
-- Optimistic concurrency: `if_version` on save, 409 on conflict.
-- Auth: HF OAuth in `space` mode, or local with `LOCAL_USER_ID`.
-
-### MCP server
-
-Seven tools, STDIO or HTTP+JWT: `list_notes`, `read_note`, `write_note`, `delete_note`, `search_notes`, `get_backlinks`, `get_tags`. Vault only; for threads/CodeRAG/Oracle use the CLI or vlt-mcp.
-
-### Running locally
-
-Use the working manual commands (start-dev.sh may need adjustment for your env):
-
-```bash
-# Backend
-cd backend
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
-uv run uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
-
-# MCP STDIO (Claude Desktop/Code)
-uv run python src/mcp/server.py
-
-# MCP HTTP (JWT)
-uv run python src/mcp/server.py --http --port 8001
-
-# Frontend
-cd frontend
-npm install
-npm run dev   # http://localhost:5173
-```
-
-**Tests:** Backend: `cd backend && uv run pytest` (or `tests/unit`, `tests/integration`, `-k test_vault_write`). Frontend: `cd frontend && npm run lint` (and `npm run build` if you want a production check).
-
-## MCP client configuration
-
-### vlt-mcp (recommended)
-
-```bash
-cd packages/vlt-cli && pip install -e ".[oracle]"
-claude mcp add --scope user vlt vlt-mcp
-```
-
-### Document-MCP backend (vault-only, legacy)
-
-**STDIO:**
-
-```json
-{
-  "mcpServers": {
-    "document-mcp": {
-      "command": "uv",
-      "args": ["run", "python", "src/mcp/server.py"],
-      "cwd": "/absolute/path/to/Vlt-Bridge/backend"
-    }
-  }
-}
-```
-
-**HTTP (HF Space + JWT):**
-
-```json
-{
-  "mcpServers": {
-    "document-mcp": {
-      "transport": "http",
-      "url": "https://YOUR_USERNAME-Document-MCP.hf.space/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_JWT_TOKEN"
-      }
-    }
-  }
-}
-```
-
-JWT: from the web UI Settings after HF OAuth login.
+| Command | Description |
+|---------|-------------|
+| `vlt daemon start/stop/status` | Daemon lifecycle |
+| `vlt profile init` | Initialize storage profile |
+| `vlt config set-key <key>` | Set OpenRouter API key |
 
 ## Environment variables
 
-Backend and local dev. Source of truth: [backend/src/services/config.py](backend/src/services/config.py) and [backend/.env.example](backend/.env.example).
+Source of truth: [backend/src/services/config.py](backend/src/services/config.py).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `JWT_SECRET_KEY` | yes | — | Min 16 chars. `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `JWT_SECRET_KEY` | yes | -- | `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `VAULT_BASE_PATH` | no | `./data/vaults` | Per-user vault root |
-| `ENABLE_LOCAL_MODE` | no | `true` | When true, single-user local mode |
-| `LOCAL_USER_ID` | no | `local-dev` | User in local mode |
-| `HF_OAUTH_CLIENT_ID` | space | — | HF OAuth client ID |
-| `HF_OAUTH_CLIENT_SECRET` | space | — | HF OAuth client secret |
-| `GOOGLE_API_KEY` | optional | — | Gemini (RAG / AI chat) |
-| `ELEVENLABS_API_KEY` | optional | — | TTS |
-| `ELEVENLABS_VOICE_ID` | optional | — | ElevenLabs voice |
-| `ORACLE_MAX_TURNS` | no | `30` | Max agent turns per Oracle query |
+| `ENABLE_LOCAL_MODE` | no | `true` | Single-user local mode |
+| `LOCAL_USER_ID` | no | `local-dev` | User ID in local mode |
+| `HF_OAUTH_CLIENT_ID` | space | -- | HF OAuth client ID |
+| `HF_OAUTH_CLIENT_SECRET` | space | -- | HF OAuth client secret |
+| `GOOGLE_API_KEY` | no | -- | Gemini for RAG / AI chat |
+| `ELEVENLABS_API_KEY` | no | -- | TTS |
+| `ELEVENLABS_VOICE_ID` | no | -- | ElevenLabs voice |
+| `ORACLE_MAX_TURNS` | no | `30` | Max REPL iterations per Oracle query |
 | `ORACLE_PROMPT_BUDGET` | no | `8000` | Token budget for Oracle system prompt |
-| `BASE_URL` | no | `http://localhost:8000` | For widget/assets in production |
-
-SQLite index path defaults to `./data/index.db` (not overridden by env in current code). For full list and security notes (e.g. `ENABLE_NOAUTH_MCP`), see backend `.env.example`.
+| `BASE_URL` | no | `http://localhost:8000` | Production base URL |
 
 ## Deployment
-
-Backend + frontend are packaged as one Docker image for Hugging Face Spaces. See [DEPLOYMENT.md](DEPLOYMENT.md) for HF Space creation, OAuth, secrets, and push.
 
 ```bash
 docker build -t vlt-bridge .
 docker run -p 7860:7860 -e JWT_SECRET_KEY="dev-secret" vlt-bridge
 ```
 
-## Extras
-
-- **ANS:** Backend has an Agent Notification System (tool/budget alerts into the Oracle UI). See [CLAUDE.md](CLAUDE.md).
-- **ChatGPT widget:** Served at `/widget.html` for embedding in ChatGPT; MCP remains available for other agents.
-- **desktop-app:** Optional Tauri app in `desktop-app/`.
-- **Specs:** Feature specs live under `specs/` (SpecKit). Deep architecture and implementation notes: [CLAUDE.md](CLAUDE.md).
+See [DEPLOYMENT.md](DEPLOYMENT.md) for HF Spaces setup, OAuth config, and secrets.
