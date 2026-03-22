@@ -7,7 +7,7 @@ __pycache__/
 env/
 venv/
 ENV/
-.venv
+.venv/
 
 # Node
 node_modules/
@@ -26,14 +26,16 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
-# Environment variables
+# Environment
 .env
 .env.local
 .env.*.local
 
-# Logs
+# Logs & PIDs
 *.log
 logs/
+.backend.pid
+.frontend.pid
 
 # Build outputs
 dist/
@@ -43,46 +45,46 @@ build/
 # Runtime data
 data/
 
-# Development script artifacts
-.backend.pid
-.frontend.pid
-
 # Testing
 .playwright-mcp/
+.pytest_cache/
 
-reproduce_auth_500.py
-debug_list_notes.py
-DEPLOY_TO_HF.md
-
-# Debug and inspection scripts
-debug_*.py
-inspect_*.py
-test_remote_mcp.py
-generate_jwt_token.py
-
-# Documentation
-docs/fastmcp/
-!docs/plugin-api/
-
-# AI notes (personal workspace)
-ai-notes/
-Ai-notes/
-docs/
-# Images (binary files not allowed in HF Spaces)
+# Screenshots & images (dev artifacts, not project assets)
+*.png
 *.jpg
 *.jpeg
 *.gif
 
-# Generated reports
+# AI tool configs (per-user, not project)
+.claude/
+.claude_settings.json
+.auto-claude/
+.auto-claude-status
+.gemini/
+GEMINI.md
+.serena/
+.planning/
+.cgcignore
+
+# Personal workspace
+Ai-notes/
+ai-notes/
+docs/
+reference/
+
+# Debug scripts
+debug_*.py
+inspect_*.py
+reproduce_*.py
+test_remote_mcp.py
+test_elevenlabs_key.py
+generate_jwt_token.py
+test-results-summary.txt
+mcp_init_request.json
+
+# Stale docs
+DEPLOY_TO_HF.md
 AUDIT_REPORT.md
 BACKEND_AUDIT_REPORT.md
-
-# Auto Claude data directory
-.auto-claude/
-
-# Reference implementations (not part of project)
-reference/
-live-session-final.png
-live-session-roundtrip-working.png
-live-session-test.png
-live-session-top.png
+spaces_README.md
+QUICKSTART.md
