@@ -49,6 +49,8 @@ from sqlalchemy.orm import Session
 
 from vlt.config import Settings
 from vlt.core.sync import ThreadSyncClient, SyncQueueItem
+from vlt.daemon.sdk_manager import SDKSessionManager, AgentSDKSession
+from vlt.daemon.sdk_event_bridge import SDKEventBridge
 
 logger = logging.getLogger(__name__)
 
@@ -904,11 +906,82 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"VLT Daemon started (backend: {state.vault_url}, connected: {state.backend_connected})")
 
+    # Initialize Agent SDK session manager (027-agent-sdk-sessions)
+    global _agent_sdk_manager, _agent_sdk_bridge
+
+    sdk_api_key = os.environ.get("VLT_SDK_API_KEY", "")
+
+    async def _sdk_status_callback(session_id: str, status: str):
+        """Push Agent SDK status changes to live stream clients."""
+        _push_status_to_live(session_id, status, f"agent-sdk:{status}")
+        # Update DB
+        from vlt.db import engine as _sdk_engine
+        from vlt.core.models import AgentSession as _AgentSess
+        with Session(_sdk_engine) as db:
+            sess = db.get(_AgentSess, session_id)
+            if sess:
+                sess.status = status
+                sess.last_activity = datetime.now(timezone.utc).isoformat()
+                db.commit()
+
+    async def _sdk_message_callback(session_id: str, message):
+        """Forward Agent SDK messages through the event bridge."""
+        if _agent_sdk_bridge:
+            from claude_agent_sdk import AssistantMessage, SystemMessage, UserMessage
+            if isinstance(message, AssistantMessage):
+                await _agent_sdk_bridge.on_assistant_message(session_id, message)
+            elif isinstance(message, UserMessage):
+                await _agent_sdk_bridge.on_user_message(session_id, message)
+            elif isinstance(message, SystemMessage):
+                await _agent_sdk_bridge.on_system_message(session_id, message)
+
+    async def _sdk_result_callback(session_id: str, result):
+        """Handle Agent SDK result (turn complete)."""
+        if _agent_sdk_bridge:
+            await _agent_sdk_bridge.on_result(session_id, result)
+
+    async def _sdk_update_session(session_id: str, **kwargs):
+        """Update AgentSession in DB from event bridge."""
+        from vlt.db import engine as _sdk_engine
+        from vlt.core.models import AgentSession as _AgentSess
+        with Session(_sdk_engine) as db:
+            sess = db.get(_AgentSess, session_id)
+            if sess:
+                for k, v in kwargs.items():
+                    if hasattr(sess, k) and v is not None:
+                        setattr(sess, k, v)
+                sess.last_activity = datetime.now(timezone.utc).isoformat()
+                db.commit()
+
+    _agent_sdk_manager = SDKSessionManager(
+        api_key=sdk_api_key,
+        on_status_change=_sdk_status_callback,
+        on_message=_sdk_message_callback,
+        on_result=_sdk_result_callback,
+    )
+
+    async def _async_push_status(session_id: str, status: str, event: str) -> None:
+        """Async wrapper for the sync _push_status_to_live (bridge expects awaitable)."""
+        _push_status_to_live(session_id, status, event)
+
+    transcript_dir = Path.home() / ".claude" / "vlt-sdk-transcripts"
+    _agent_sdk_bridge = SDKEventBridge(
+        live_stream_queues=_live_stream_queues,
+        push_status_fn=_async_push_status,
+        update_session_fn=_sdk_update_session,
+        transcript_dir=transcript_dir,
+    )
+    logger.info("Agent SDK session manager initialized")
+
     yield
 
     # Shutdown
     logger.info("VLT Daemon shutting down...")
     state._shutdown_event.set()
+
+    # Shutdown Agent SDK sessions
+    if _agent_sdk_manager:
+        await _agent_sdk_manager.shutdown_all()
 
     # Stop artifact watchers and backend processes
     try:
@@ -1774,6 +1847,10 @@ async def dismiss_session(session_id: str):
         session.status = "dead"
         db.add(session)
         db.commit()
+    # Agent SDK cleanup
+    if _agent_sdk_manager and session_id in _agent_sdk_manager.sessions:
+        await _agent_sdk_manager.dismiss(session_id)
+
     # Clean up in-memory relay state and persisted scrollback
     _session_streams.pop(session_id, None)
     _session_inject_queues.pop(session_id, None)
@@ -2148,6 +2225,14 @@ async def session_live_ws(websocket: WebSocket, session_id: str):
 
                     logger.info(f"WS recv: session={session_id} type={msg_type} text_len={len(text)}")
 
+                    # 0. Agent SDK session — use SDK manager
+                    if _agent_sdk_manager and session_id in _agent_sdk_manager.sessions:
+                        logger.info(f"WS route: AGENT-SDK for {session_id}")
+                        ok = await _agent_sdk_manager.send_message(session_id, text)
+                        if ok:
+                            await websocket.send_json({"type": "input_sent", "text": text})
+                        continue
+
                     # 1. Relay session — direct PTY stdin write (legacy path)
                     if session_id in _session_inject_queues:
                         logger.info(f"WS route: RELAY for {session_id}")
@@ -2255,6 +2340,10 @@ _sdk_sessions: Dict[str, dict] = {}  # session_id → {proc, cwd, is_new}
 # Completion events for helper sessions — set by _sdk_stdout_reader when "result" arrives.
 # cronban_evaluator awaits these to know when the helper's turn is done.
 _helper_completion_events: Dict[str, asyncio.Event] = {}
+
+# Agent SDK session management (027-agent-sdk-sessions)
+_agent_sdk_manager: Optional[SDKSessionManager] = None
+_agent_sdk_bridge: Optional[SDKEventBridge] = None
 
 
 async def _spawn_sdk_session(
@@ -2468,6 +2557,74 @@ async def spawn_managed_session(request: Request):
         "queued": 1,
         "session_id": sid,
     }
+
+
+@app.post("/api/sessions/spawn/agent-sdk")
+async def spawn_agent_sdk_session(request: Request):
+    """Spawn a new Agent SDK session with environment isolation."""
+    body = await request.json()
+    cwd = body.get("cwd", "")
+    prompt = body.get("prompt", "Hello! Ready for instructions.")
+    session_id = body.get("session_id") or str(uuid.uuid4())
+    model = body.get("model")
+    resume_session_id = body.get("resume_session_id")
+
+    if not _agent_sdk_manager:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": "Agent SDK not initialized"}, status_code=503)
+
+    if not cwd or not os.path.isdir(cwd):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": f"Invalid cwd: {cwd}"}, status_code=400)
+
+    # Create DB record (only for new sessions, not resume)
+    from vlt.db import engine as _sdk_engine
+    from vlt.core.models import AgentSession as _AgentSess
+    if not resume_session_id:
+        proj_id = _infer_project_id(cwd)
+        with Session(_sdk_engine) as db:
+            existing = db.get(_AgentSess, session_id)
+            if not existing:
+                sess = _AgentSess(
+                    id=session_id,
+                    cwd=cwd,
+                    status="idle",
+                    source="agent-sdk",
+                    name=Path(cwd).name,
+                    model=model,
+                    project_id=proj_id,
+                )
+                db.add(sess)
+                db.commit()
+
+    try:
+        if resume_session_id:
+            await _agent_sdk_manager.resume(
+                session_id=resume_session_id,
+                cwd=cwd,
+                prompt=prompt,
+                model=model,
+            )
+            session_id = resume_session_id
+        else:
+            await _agent_sdk_manager.spawn(
+                session_id=session_id,
+                cwd=cwd,
+                prompt=prompt,
+                model=model,
+            )
+
+        from fastapi.responses import JSONResponse
+        return JSONResponse({
+            "ok": True,
+            "session_id": session_id,
+            "mode": "agent-sdk",
+            "cwd": cwd,
+        })
+    except Exception as e:
+        logger.error(f"Agent SDK spawn failed: {e}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 # =============================================================================

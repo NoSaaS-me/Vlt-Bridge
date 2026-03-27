@@ -73,7 +73,7 @@ function AgentsCompositorView({
   onSelectDiscoveredSession: (session: AgentSession) => void;
   onDismissSession: (id: string) => void;
   onCloseLiveSession: () => void;
-  onStartFresh: (prompt: string) => void;
+  onStartFresh: (prompt: string, mode?: 'relay' | 'agent-sdk') => void;
   onResumeSession: (session: AgentSession) => void;
   onRenameSession: (id: string, name: string) => void;
 }) {
@@ -152,12 +152,17 @@ export function AgentsPage() {
   }, [polling]);
 
   const handleStartFresh = useCallback(
-    (prompt: string) => {
-      spawnSession(spawnCwd, { prompt, mode: 'relay' })
+    (prompt: string, mode: 'relay' | 'agent-sdk' = 'relay') => {
+      spawnSession(spawnCwd, { prompt, mode })
         .then((result) => {
           setTimeout(() => polling.refresh(), 2000);
           if (result.session_id) {
-            setFocusedSessionId(result.session_id);
+            if (mode === 'agent-sdk') {
+              // Agent SDK sessions open in LiveSessionPanel
+              setLiveSession({ id: result.session_id, source: 'agent-sdk', status: 'thinking', cwd: spawnCwd, name: spawnCwd.split('/').pop() ?? 'session' } as unknown as AgentSession);
+            } else {
+              setFocusedSessionId(result.session_id);
+            }
           }
         })
         .catch((err) => console.error('Spawn failed:', err));

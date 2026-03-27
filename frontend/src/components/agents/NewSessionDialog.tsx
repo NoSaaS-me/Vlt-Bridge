@@ -24,6 +24,7 @@ export function NewSessionDialog({
   onOpenChange,
   projectId,
   spawnCwd,
+  mode,
   onStartFresh,
   onResume,
 }: {
@@ -31,8 +32,9 @@ export function NewSessionDialog({
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
   spawnCwd: string;
-  /** Called with user prompt when "Start Fresh" is clicked. */
-  onStartFresh: (prompt: string) => void;
+  mode?: 'relay' | 'agent-sdk';
+  /** Called with user prompt and mode when "Start Fresh" is clicked. */
+  onStartFresh: (prompt: string, mode?: 'relay' | 'agent-sdk') => void;
   /** Called when user picks a session to resume. */
   onResume: (session: AgentSession) => void;
 }) {
@@ -62,9 +64,9 @@ export function NewSessionDialog({
 
   const handleFresh = useCallback(() => {
     const text = prompt.trim() || 'Hello! Ready for instructions.';
-    onStartFresh(text);
+    onStartFresh(text, mode);
     onOpenChange(false);
-  }, [prompt, onStartFresh, onOpenChange]);
+  }, [prompt, mode, onStartFresh, onOpenChange]);
 
   const handleResume = useCallback(
     (session: AgentSession) => {
@@ -86,6 +88,9 @@ export function NewSessionDialog({
           <div className="flex items-center gap-2 mb-2">
             <Play className="h-3.5 w-3.5 text-emerald-400" />
             <span className="text-xs font-medium">Start Fresh</span>
+            <span className="text-[9px] px-1 rounded bg-muted text-muted-foreground">
+              {mode === 'agent-sdk' ? 'SDK' : 'Relay'}
+            </span>
           </div>
           <div className="flex gap-2">
             <input

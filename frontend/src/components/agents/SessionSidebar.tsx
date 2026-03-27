@@ -6,10 +6,11 @@
  * or spawn a new one.
  */
 import { useState, useEffect } from 'react';
-import { Bot, Plus, WifiOff, Search, Sparkles } from 'lucide-react';
+import { Bot, Plus, WifiOff, Search, Sparkles, Terminal, Cpu } from 'lucide-react';
 import { type AgentSession } from '@/services/daemon-api';
 import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import {
   Popover,
   PopoverContent,
@@ -43,7 +44,7 @@ export function SessionSidebar({
   onSelectSession: (id: string) => void;
   onSelectDiscoveredSession?: (session: AgentSession) => void;
   onDismissSession?: (id: string) => void;
-  onStartFresh?: (prompt: string) => void;
+  onStartFresh?: (prompt: string, mode: 'relay' | 'agent-sdk') => void;
   onResumeSession?: (session: AgentSession) => void;
   onRenameSession?: (id: string, name: string) => void;
   onRefresh?: () => void;
@@ -53,6 +54,9 @@ export function SessionSidebar({
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [showHistory, setShowHistory] = useState(() => {
     try { return localStorage.getItem('vlt:livechat:showHistory') === 'true'; } catch { return false; }
+  });
+  const [sessionMode, setSessionMode] = useState<'relay' | 'agent-sdk'>(() => {
+    try { return (localStorage.getItem('vlt:session-mode') as 'relay' | 'agent-sdk') || 'relay'; } catch { return 'relay'; }
   });
 
   // Sync with Settings page changes via storage event
@@ -64,15 +68,23 @@ export function SessionSidebar({
     return () => window.removeEventListener('storage', handler);
   }, []);
 
+  // Persist session mode
+  useEffect(() => {
+    localStorage.setItem('vlt:session-mode', sessionMode);
+  }, [sessionMode]);
+
   // All non-dead sessions sorted by activity.
   const allSessions = sessions
     .filter((s) => s.status !== 'dead')
     .sort((a, b) => new Date(b.last_activity).getTime() - new Date(a.last_activity).getTime());
 
-  // When history is hidden, show actively running sessions + all relay sessions (always visible).
+  // When history is hidden, show actively running sessions + relay/sdk sessions (always visible).
   const liveSessions = showHistory
     ? allSessions
-    : allSessions.filter((s) => s.status === 'thinking' || s.status === 'executing' || s.source === 'relay');
+    : allSessions.filter((s) =>
+        s.status === 'thinking' || s.status === 'executing' ||
+        s.source === 'relay' || s.source === 'agent-sdk'
+      );
 
   return (
     <div className="h-full flex flex-col bg-background/50 border-r border-border">
@@ -83,6 +95,34 @@ export function SessionSidebar({
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Sessions
           </span>
+        </div>
+        <div className="flex items-center rounded-md border border-border overflow-hidden">
+          <button
+            onClick={() => setSessionMode('relay')}
+            className={cn(
+              'px-1.5 py-0.5 text-[9px] flex items-center gap-1 transition-colors',
+              sessionMode === 'relay'
+                ? 'bg-muted text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            title="Relay mode (PTY terminal)"
+          >
+            <Terminal className="h-2.5 w-2.5" />
+            Relay
+          </button>
+          <button
+            onClick={() => setSessionMode('agent-sdk')}
+            className={cn(
+              'px-1.5 py-0.5 text-[9px] flex items-center gap-1 transition-colors',
+              sessionMode === 'agent-sdk'
+                ? 'bg-muted text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            title="SDK mode (Agent SDK)"
+          >
+            <Cpu className="h-2.5 w-2.5" />
+            SDK
+          </button>
         </div>
         <div className="flex items-center gap-1.5">
           {onStartFresh && daemonOnline && currentProjectId && (
@@ -214,7 +254,8 @@ export function SessionSidebar({
           onOpenChange={setNewSessionOpen}
           projectId={currentProjectId}
           spawnCwd={spawnCwd}
-          onStartFresh={onStartFresh}
+          mode={sessionMode}
+          onStartFresh={(prompt, mode) => onStartFresh(prompt, mode ?? sessionMode)}
           onResume={onResumeSession}
         />
       )}

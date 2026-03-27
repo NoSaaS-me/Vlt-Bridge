@@ -17,6 +17,9 @@ export interface AgentSession {
   is_cronban_helper: boolean;
   created_at: string;
   last_activity: string;
+  engine?: 'relay' | 'subprocess-sdk' | 'agent-sdk';
+  cost_usd?: number;
+  turn_count?: number;
 }
 
 export interface DaemonHealth {
@@ -269,10 +272,14 @@ export async function injectContext(
  */
 export async function spawnSession(
   cwd: string,
-  options?: { model?: string; prompt?: string; resume_session_id?: string; mode?: 'sdk' | 'relay' },
+  options?: { model?: string; prompt?: string; resume_session_id?: string; mode?: 'sdk' | 'relay' | 'agent-sdk' },
 ): Promise<{ ok: boolean; cwd: string; queued?: number; session_id?: string; mode?: string }> {
   const { mode = 'relay', ...rest } = options ?? {};
-  const endpoint = mode === 'relay' ? '/vlt/api/sessions/spawn/relay' : '/vlt/api/sessions/spawn';
+  const endpoint = mode === 'relay'
+    ? '/vlt/api/sessions/spawn/relay'
+    : mode === 'agent-sdk'
+      ? '/vlt/api/sessions/spawn/agent-sdk'
+      : '/vlt/api/sessions/spawn';
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

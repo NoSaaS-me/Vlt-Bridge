@@ -378,13 +378,15 @@ class CodeRAGIndexJob(Base):
 class AgentSession(Base):
     """Live Claude Code agent session tracked by the daemon.
 
-    Sessions are discovered via three sources:
+    Sessions are discovered via four sources:
     - "relay": The `vlt relay` command wraps claude in a PTY and registers
       the session directly (full terminal stream relay).
     - "hook": Claude Code lifecycle hooks POST to /api/hooks as events fire
       (status updates only, no PTY stream).
     - "discovery": The daemon's background ~/.claude/history.jsonl watcher
       finds sessions that were never explicitly registered.
+    - "agent-sdk": Sessions spawned via the Claude Agent SDK as persistent
+      subprocesses managed by the daemon (sdk_routes.py).
     """
     __tablename__ = "agent_sessions"
 
@@ -401,6 +403,9 @@ class AgentSession(Base):
     source: Mapped[str] = mapped_column(String, default="relay")  # relay/discovery/hook
     transcript_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # path from hook payload
     is_cronban_helper: Mapped[bool] = mapped_column(Boolean, default=False)  # project-level helper evaluator session
+    engine: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # relay/subprocess-sdk/agent-sdk
+    cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # accumulated API cost
+    turn_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # total turns
     created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
     last_activity: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
 

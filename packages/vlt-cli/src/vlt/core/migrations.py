@@ -223,6 +223,26 @@ def apply_oracle_migrations():
         except Exception:
             pass  # Column already exists
 
+        # Add agent-sdk support columns (idempotent)
+        try:
+            conn.execute(text(
+                "ALTER TABLE agent_sessions ADD COLUMN engine TEXT"
+            ))
+        except Exception:
+            pass  # Column already exists
+        try:
+            conn.execute(text(
+                "ALTER TABLE agent_sessions ADD COLUMN cost_usd REAL"
+            ))
+        except Exception:
+            pass  # Column already exists
+        try:
+            conn.execute(text(
+                "ALTER TABLE agent_sessions ADD COLUMN turn_count INTEGER"
+            ))
+        except Exception:
+            pass  # Column already exists
+
         conn.commit()
 
 
