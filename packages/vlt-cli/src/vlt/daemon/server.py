@@ -953,8 +953,10 @@ async def lifespan(app: FastAPI):
                 sess.last_activity = datetime.now(timezone.utc).isoformat()
                 db.commit()
 
+    sdk_home = os.environ.get("VLT_SDK_HOME", "")
     _agent_sdk_manager = SDKSessionManager(
         api_key=sdk_api_key,
+        sdk_home=sdk_home,
         on_status_change=_sdk_status_callback,
         on_message=_sdk_message_callback,
         on_result=_sdk_result_callback,

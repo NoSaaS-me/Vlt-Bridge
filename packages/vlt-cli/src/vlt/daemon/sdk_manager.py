@@ -51,6 +51,7 @@ class SDKSessionManager:
     def __init__(
         self,
         api_key: str | None = None,
+        sdk_home: str | None = None,
         default_model: str | None = None,
         mcp_config: dict[str, Any] | None = None,
         on_status_change: Any = None,  # callback(session_id, status)
@@ -58,6 +59,7 @@ class SDKSessionManager:
         on_result: Any = None,  # callback(session_id, result_message)
     ):
         self.api_key = api_key or os.environ.get("VLT_SDK_API_KEY", "")
+        self.sdk_home = sdk_home or os.environ.get("VLT_SDK_HOME", "")
         self.default_model = default_model
         self.mcp_config = mcp_config or {}
         self.sessions: dict[str, AgentSDKSession] = {}
@@ -76,9 +78,9 @@ class SDKSessionManager:
         env = {}
         if self.api_key:
             env["ANTHROPIC_API_KEY"] = self.api_key
-        # Strip vars that cause nested session errors
-        for var in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
-            env.pop(var, None)
+        # Isolate to a separate Claude Code account via HOME override
+        if self.sdk_home:
+            env["HOME"] = self.sdk_home
 
         opts = ClaudeAgentOptions(
             env=env,
